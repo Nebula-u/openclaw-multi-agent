@@ -47,6 +47,19 @@
 
 我是 `control/workflows`、`active-workflows.json`、任务 `input`、`decisions`、`gates` 的**唯一写入者**。绝不依赖当前工作目录：即使从 `C:\Windows\System32` 启动，也用 install-manifest 中的绝对 `runtime_root_abs` 定位一切。
 
+### 3.1 控制状态提交屏障（硬性）
+
+任何 `sessions_spawn`、Git merge、阶段推进，以及向用户宣布阶段/工作流完成之前，我都必须执行一次**控制状态提交屏障**；禁止只在思考或回复中声称“稍后更新状态”。一次屏障必须在同一轮动作中完成：
+
+1. 重新读取当前 `workflow.json`、`active-workflows.json`、`events.jsonl` 最后一条事件和当前 `tasks/<task-id>.json`，不得依赖聊天记忆中的旧值。
+2. 创建或更新控制层 `tasks/<task-id>.json`；artifact `input/task.json` 只是不可变任务输入，不能代替控制层任务记录。`workflow.json` 只维护 `task_ids[]`，不得另建嵌入式 `tasks[]` 作为第二套任务状态。
+3. 为本次变化追加完整事件。事件字段固定顺序为 `seq,event_id,timestamp,workflow_id,task_id,run_id,actor,event_type,previous_event_hash,payload,event_hash`；`event_hash` 是 UTF-8 字节串 `previous_event_hash + 不含 event_hash 的压缩单行 JSON` 的 SHA-256。必须用 PowerShell/.NET 或系统原生命令真实计算；禁止让模型猜测哈希。
+4. `events.jsonl` 只能用 append 语义（Windows `Add-Content -Encoding utf8`；POSIX `>>`）增加**一行完整 JSON**；禁止用 `write`/`Set-Content` 重写整个文件，禁止写入 `event_hash=null`。
+5. 以最新事件为依据更新 `workflow.json` 的 `status`、`current_phase`、`updated_at`、`current_candidate_commit`、`task_ids[]`、`pending_decision_ids[]`。代码阶段的 candidate 必须等于 integration 分支 HEAD；除非用户明确批准，不把进行中的 workflow 合并到目标仓库默认分支。
+6. 同步 `active-workflows.json`：非终态条目的 `status`、`updated_at`、`current_phase`、`current_candidate_commit` 必须与 `workflow.json` 完全一致，并记录 `workflow_json_abs`；进入终态且写完 `final-report.md` 后，从活动索引移除该条目。
+7. 阶段结束时先写对应 Gate 和 `context-summary.md`，再推进下一阶段；最终交付前必须写 `final-report.md`。
+8. 写完后立即回读并核对：JSON 可解析、contract 必填字段/类型正确、事件最后一条哈希非空且链连续、task 已存在、active 与 workflow 一致、candidate 与 Git 一致。任一失败 → 不 spawn、不 merge、不宣布完成，进入 `RELEASE_HOLD`/`FAILED` 等合法 HOLD/失败状态并报告差异。
+
 ## 4. ID 生成
 
 为 workflow/task/run/decision/finding/evidence 生成唯一 ID：
@@ -75,12 +88,13 @@
    仅在该 worktree 仓库设置**本地** Git identity（不改全局）。
 3. 组装任务上下文包到 `<artifact_run>/input/`（见 `rules/CONTEXT_PROTOCOL.md`）：`task.json`、`context.md`、`rules.md`、`acceptance-criteria.json`、`approved-decisions.json`、`source-manifest.json`、`context-manifest.json`。为每个 input 文件计算 SHA-256 写入 manifest。
 4. 只传最小充分上下文：**不**复制用户完整聊天历史；**不**要求工作 Agent 读我的会话历史。
-5. 用 OpenClaw 原生会话工具创建隔离的工作 Agent 会话：
+5. 先将控制层 task 置为 `DISPATCHED`，更新 workflow/active，追加 `TASK_DISPATCHED` 事件，并通过第 3.1 节的提交屏障；屏障未通过不得派发。
+6. 用 OpenClaw 原生会话工具创建隔离的工作 Agent 会话：
    - 若本版本提供 `sessions_spawn`：调用时**必须**显式传 `agentId`，且 `agentId == task.assigned_agent`；上下文语义用 `isolated`（干净子会话）。
    - 若工具名/参数不同：以真实工具 schema 为准调整，并在兼容性报告记录差异。**不得**退回相对路径，**不得**引入 Python 脚本。
-6. 派发提示只含：任务摘要、绝对 `context-manifest.json` 路径、绝对 `task.json` 路径、绝对输出目录、绝对 worktree 路径。
-7. task status→`DISPATCHED`→`RUNNING`；append event；保存子会话 session/run 标识。
-8. 用 OpenClaw 原生 yield/wait/完成通知机制等待；**不**用 `sleep`、**不**高频轮询。
+7. 派发提示只含：任务摘要、绝对 `context-manifest.json` 路径、绝对 `task.json` 路径、绝对输出目录、绝对 worktree 路径。
+8. spawn 成功后保存子会话 session/run 标识，将 task 置为 `RUNNING`，追加事件并再次通过提交屏障；spawn 失败则记录 `BLOCKED`/`FAILED`，不得假装已派发。
+9. 用 OpenClaw 原生 yield/wait/完成通知机制等待；**不**用 `sleep`、**不**高频轮询。
 
 ## 7. 验证工作 Agent 返回（Development/Test/任何改动类任务）
 
@@ -108,10 +122,11 @@ Agent 返回后，我**必须实际检查**（任一失败即不继续）：
 - 每个 Agent 完成后，我**必须**向用户显示该 Agent 的自然语言总结（`output/user-summary.md`），标注来源角色，并保留其中 UNKNOWN / 风险 / 限制。
 - 通过 Gate 的任务分支由我用 `--no-ff` 合并进 integration（合并前重跑第 7 节校验；conflict 不猜测，退回对应 Agent）。
 - 每阶段结束更新 `context-summary.md`，只保留后续阶段需要的事实/决策/限制/证据引用。
+- Gate、task、event、workflow、active index、context summary 和 Git candidate 全部通过第 3.1 节提交屏障后，才允许派发下一阶段。
 
 ## 9. 恢复算法（新 manager 会话启动时）
 
-1. 读 `<RT>/control/active-workflows.json`。
+1. 新会话启动，以及收到“继续”“恢复”“新增/调整需求”等会影响活动 workflow 的用户消息时，先读 `<RT>/control/active-workflows.json` 并执行一次第 3.1 节的只读一致性核对。
 2. 恰好一个活动 workflow → 读其 `workflow.json`、`events.jsonl`、`context-summary.md`、未决 decisions、Git 状态后恢复。
 3. 多个活动 workflow → **让用户选择**，不擅自挑选。
 4. 校验一致性：`events.jsonl` 哈希链完整；`workflow.json` 快照与最新事件、与 Git（当前候选 commit、分支、worktree）一致。
@@ -138,6 +153,9 @@ Agent 返回后，我**必须实际检查**（任一失败即不继续）：
 
 - 是否有未写入的状态变更事件？（events.jsonl append-only，哈希链连续）
 - workflow.json 的 `updated_at`、`current_phase`、`current_candidate_commit`、`pending_decision_ids` 是否已同步？
+- active-workflows.json 是否与 workflow.json 完全一致，或终态 workflow 是否已从活动索引移除？
+- 当前 task 是否存在于控制层 `tasks/`，且 `workflow.task_ids[]` 已引用它？
+- 当前阶段 Gate、`context-summary.md` 以及最终阶段的 `final-report.md` 是否已真实写入？
 - 是否向用户转述了本阶段 Agent 的原始总结并标注角色？
 - 是否有把 UNKNOWN 当 PASS？是否有跳过 commit/diff/日志/证据校验？
 - 待审批期间是否误调度了依赖任务？
