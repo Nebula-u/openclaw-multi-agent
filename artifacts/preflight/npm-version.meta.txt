@@ -1,0 +1,9 @@
+slug=npm-version
+command=npm --version
+executable=npm
+cwd=/d/MicroConnect/project/openclaw-multi-agent
+exit_code=0
+started_at=2026-07-23T08:33:34Z
+finished_at=2026-07-23T08:33:34Z
+stdout_file=/d/MicroConnect/project/openclaw-multi-agent/artifacts/preflight/npm-version.stdout.txt
+stderr_file=/d/MicroConnect/project/openclaw-multi-agent/artifacts/preflight/npm-version.stderr.txt

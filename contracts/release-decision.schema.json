@@ -1,0 +1,38 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://openclaw-sdlc-multi-agent/contracts/release-decision.schema.json",
+  "title": "ReleaseDecision",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["schema_version", "workflow_id", "candidate_commit", "verdict", "evaluated_at", "checks"],
+  "properties": {
+    "schema_version": { "type": "integer", "minimum": 1 },
+    "workflow_id": { "type": "string", "pattern": "^WF-" },
+    "candidate_commit": { "type": "string", "minLength": 1 },
+    "verdict": { "type": "string", "enum": ["GO", "NO_GO", "HOLD"] },
+    "verdict_meaning": {
+      "type": "string",
+      "description": "GO 仅表示 READY_FOR_OPERATIONS_HANDOFF，非已部署",
+      "default": "GO == READY_FOR_OPERATIONS_HANDOFF (not deployed)"
+    },
+    "evaluated_at": { "type": "string", "format": "date-time" },
+    "commit_matches_review_and_test": { "type": "boolean" },
+    "checks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "status"],
+        "properties": {
+          "name": { "type": "string" },
+          "status": { "type": "string", "enum": ["PASS", "FAIL", "HOLD", "UNKNOWN", "NOT_APPLICABLE"] },
+          "evidence_refs": { "type": "array", "items": { "type": "string" } },
+          "notes": { "type": "string" }
+        }
+      }
+    },
+    "known_issues": { "type": "array", "items": { "type": "string" } },
+    "rollback_plan_present": { "type": "boolean" },
+    "ops_handoff_present": { "type": "boolean" },
+    "isolation_mode": { "type": "string", "enum": ["UNSANDBOXED_LOCAL"] }
+  }
+}

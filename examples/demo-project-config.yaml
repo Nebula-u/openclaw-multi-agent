@@ -1,0 +1,56 @@
+# demo-project-config.yaml — 示例目标项目配置（演示用）
+# 结构与 config/project-config.example.yaml 一致。实际使用请复制为本地
+# project-config.yaml（不提交）并按目标业务项目填写。
+# 所有路径必须是规范化【绝对路径】占位；禁止相对运行时路径（如 ./repo、../worktree）。
+# 键用英文，注释用中文。
+
+schema_version: 1
+
+# ---- 目标业务项目 ----
+target_project:
+  # 目标业务项目根目录的【绝对路径】占位。请替换为真实绝对路径。
+  # Windows 示例: "D:\\work\\mycli"
+  # POSIX   示例: "/home/user/work/mycli"
+  root_abs: "D:\\work\\mycli"
+
+  # 目标项目主语言（仅提示用途；实际以仓库真实配置文件为准，不据此猜测命令）。
+  # 可选值: python | java | javascript | typescript | c | cpp | go | rust | dotnet | mixed
+  primary_language: "javascript"
+
+# ---- 运行时根目录（【绝对路径】，安装脚本创建）----
+# 禁止相对路径；即使从 C:\Windows\System32 启动也用此绝对路径解析一切。
+runtime_root_abs: "D:\\MicroConnect\\project\\openclaw-multi-agent\\runtime"
+
+# ---- Git（本地 only）----
+git:
+  # integration 分支命名（见 agents/common/GIT_RULES.md 第 3 节）：
+  # 实际由 manager-agent 按 workflow-id 生成，此处仅记录命名规则。
+  integration_branch_pattern: "sdlc/<workflow-id>/integration"
+  allow_remote: false          # 禁止远程 Git
+
+# ---- 覆盖默认策略（可选）----
+policy_overrides:
+  rework:
+    max_attempts: 3
+  gates:
+    review:
+      medium_blocks: false
+
+# ---- 测试命令来源（只允许以下来源；不得凭语言猜测）----
+test_command_sources:
+  - user_configured        # 用户在本文件显式配置（见下方 explicit_test_commands）
+  - project_build_config   # 项目自带 package/build 文件（如 package.json scripts）
+  - approved_test_strategy # architect-agent 已批准的测试策略
+
+# 若在此显式配置测试命令，必须逐条给出（在目标项目 / 分配的绝对 worktree 内执行）。
+# 下例为 user_configured 来源的演示；请替换为目标项目真实命令，工具缺失时标 BLOCKED/UNKNOWN。
+explicit_test_commands:
+  - name: "unit"
+    argv: ["npm", "test"]
+  - name: "build"
+    argv: ["npm", "run", "build"]
+
+# ---- 测试隔离（本阶段无沙箱）----
+testing:
+  isolation_mode: UNSANDBOXED_LOCAL   # 本阶段固定值；测试直接在分配的绝对 worktree 内执行
+  require_isolation_disclosure: true  # 必须披露无沙箱风险，不得声称“已完全隔离”

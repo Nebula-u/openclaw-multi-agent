@@ -1,0 +1,77 @@
+{
+  "schema_version": 1,
+  "workflow_id": "WF-00000000-0000-0000-0000-000000000000",
+  "task_id": "TASK-00000000-0000-0000-0000-000000000000",
+  "run_id": "RUN-00000000-0000-0000-0000-000000000000",
+  "agent_id": "developer-agent",
+  "role": "developer",
+  "attempt": 1,
+  "started_at": "2026-01-01T00:00:00Z",
+  "finished_at": "2026-01-01T00:00:00Z",
+  "result_status": "COMPLETED",
+  "summary_for_user": "<PLACEHOLDER: 面向用户的简洁总结（中文）>",
+  "summary_for_manager": "<PLACEHOLDER: 面向 manager 的结构化总结，含关键事实、证据引用与未决项>",
+  "input_commit": "PLACEHOLDER_INPUT_COMMIT_SHA",
+  "output_commit": "PLACEHOLDER_OUTPUT_COMMIT_SHA",
+  "branch": "sdlc/task/TASK-00000000-0000-0000-0000-000000000000",
+  "worktree_path_abs": "C:\\path\\to\\openclaw-runtime\\worktrees\\developer-agent",
+  "artifact_root_abs": "C:\\path\\to\\openclaw-runtime\\artifacts\\TASK-00000000-0000-0000-0000-000000000000\\RUN-00000000-0000-0000-0000-000000000000",
+  "modified_files": [
+    "C:\\path\\to\\openclaw-runtime\\worktrees\\developer-agent\\src\\example.ts"
+  ],
+  "created_files": [],
+  "deleted_files": [],
+  "report_files": [
+    "C:\\path\\to\\openclaw-runtime\\artifacts\\TASK-00000000-0000-0000-0000-000000000000\\RUN-00000000-0000-0000-0000-000000000000\\development-report.md"
+  ],
+  "command_record_refs": [
+    "CMD-0001"
+  ],
+  "evidence_refs": [
+    "EVD-00000000-0000-0000-0000-000000000000"
+  ],
+  "claims": [
+    {
+      "claim_id": "CLAIM-001",
+      "statement": "<PLACEHOLDER: 一条可核验的陈述>",
+      "classification": "OBSERVED",
+      "evidence_refs": [
+        "EVD-00000000-0000-0000-0000-000000000000"
+      ],
+      "limitations": "<PLACEHOLDER: 该结论的边界与限制>",
+      "observed_at": "2026-01-01T00:00:00Z"
+    }
+  ],
+  "findings": [],
+  "unresolved_issues": [
+    "<PLACEHOLDER: 未解决问题>"
+  ],
+  "known_limitations": [
+    "<PLACEHOLDER: 已知限制>"
+  ],
+  "decisions_required": [],
+  "recommended_next_action": "<PLACEHOLDER: 建议的下一步动作>",
+  "git_status_after_completion": "<PLACEHOLDER: 完成后 git status 摘要>",
+  "isolation_mode": "UNSANDBOXED_LOCAL",
+  "self_validation": {
+    "preflight_passed": true,
+    "checks": [
+      {
+        "name": "expected_outputs_present",
+        "status": "PASS",
+        "detail": "<PLACEHOLDER: 期望输出文件是否全部生成>"
+      },
+      {
+        "name": "no_forbidden_path_writes",
+        "status": "PASS",
+        "detail": "<PLACEHOLDER: 是否仅写入 allowed_write_paths_abs>"
+      },
+      {
+        "name": "static_analysis_executed",
+        "status": "UNKNOWN",
+        "detail": "<PLACEHOLDER: 若未执行静态工具则标 UNKNOWN，禁止编造>"
+      }
+    ]
+  },
+  "artifact_manifest_hash": null
+}

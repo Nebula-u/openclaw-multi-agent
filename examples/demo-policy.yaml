@@ -1,0 +1,65 @@
+# demo-policy.yaml — 示例工作流策略（演示用）
+# 结构与 config/default-policy.yaml 一致，可作为策略覆盖的示例。
+# 该文件是数据，不是可执行脚本；manager-agent 读取它以确定 Gate 严格度、
+# 重做上限、审批触发与命令边界。键用英文，注释用中文。
+
+schema_version: 1
+policy_id: demo-policy
+
+# ---- 重做与尝试 ----
+rework:
+  max_attempts: 3            # 每个任务最大尝试次数（即 max rework attempts）；超过必须 WAITING_HUMAN
+  on_exceed: WAITING_HUMAN   # 超过上限的处置：暂停并请求人工审批（trigger=MAX_REWORK_EXCEEDED）
+
+# ---- Gate 严重度阈值 ----
+gates:
+  requirement:
+    fail_on_blocking_ambiguity: true     # 存在阻断级歧义则不通过
+    require_acceptance_criteria: true     # 必须有可测的验收标准
+  architecture:
+    require_ac_to_component_mapping: true # 验收标准需映射到组件
+    require_test_strategy: true           # 必须有测试策略
+  development:
+    require_real_commit: true             # 必须有真实本地 commit
+    forbid_placeholder_impl: true         # TODO / pass / 空 handler / 假成功 视为 FAIL
+  review:
+    block_on: [BLOCKER, CRITICAL, HIGH]   # 这些严重度阻断发布
+    medium_blocks: false                  # MEDIUM 是否阻断（此示例：不阻断）
+    hold_when_no_evidence: true           # 无证据的评审结论置 HOLD
+  test:
+    require_actual_execution: true        # 测试必须真实执行
+    mandatory_exit_code_zero: true        # 关键测试退出码必须为 0
+    forbid_hidden_first_failure: true     # 禁止隐藏第一次失败（保留失败日志，标 flaky）
+    require_test_code_review: true         # 测试代码需经评审
+  security:
+    unknown_when_tool_missing: true       # 安全工具缺失时记 UNKNOWN，不当 PASS
+  release:
+    require_candidate_commit_match: true  # 候选 commit 与 review/test 所用一致
+    require_rollback_plan: true           # 必须有回滚计划
+    require_ops_handoff: true             # 必须有运维交接说明（GO==READY_FOR_OPERATIONS_HANDOFF）
+
+# ---- 命令边界（默认全部关闭；放开须人工审批）----
+command_boundaries:
+  allow_network: false                    # 网络：默认禁止
+  allow_dependency_install: false         # 依赖安装：默认禁止
+  allow_destructive: false                # 破坏性命令：默认禁止
+  allow_service_control: false            # 服务启停：默认禁止
+  allow_registry_or_scheduled_tasks: false # 注册表 / 计划任务：默认禁止
+
+# ---- 测试隔离（本阶段无沙箱）----
+testing:
+  isolation_mode: UNSANDBOXED_LOCAL       # 本阶段固定值；不启用 sandbox
+  require_sandbox: false                  # 不以 sandbox 为前置
+  require_isolation_disclosure: true      # 必须披露无沙箱风险，不得声称“已完全隔离”
+
+# ---- Git（本地 only）----
+git:
+  allow_remote: false                     # 禁止远程 Git（push/pull/fetch/remote）
+  allow_git_init_without_approval: false  # 非 Git 仓库不擅自 init，需审批
+  merge_strategy: no-ff                   # 合并用非 fast-forward
+  preserve_dirty_worktree: true           # 保留脏 / 未合并 / 待审批的 worktree
+
+# ---- 审批（不设自动超时同意）----
+approval:
+  auto_timeout_approve: false             # 无自动超时同意
+  silence_means_approval: false           # 用户沉默 != 批准

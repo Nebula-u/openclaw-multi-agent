@@ -1,0 +1,49 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://openclaw-sdlc-multi-agent/contracts/approval-request.schema.json",
+  "title": "ApprovalRequest",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["decision_id", "workflow_id", "trigger", "summary", "options", "created_at", "status"],
+  "properties": {
+    "decision_id": { "type": "string", "pattern": "^DEC-" },
+    "workflow_id": { "type": "string", "pattern": "^WF-" },
+    "task_id": { "type": ["string", "null"], "pattern": "^TASK-" },
+    "trigger": {
+      "type": "string",
+      "description": "APPROVAL_RULES.md 第 1 节的 15 类触发之一",
+      "enum": [
+        "REQUIREMENT_AMBIGUITY", "IMPLEMENTATION_TRADEOFF", "PUBLIC_API_BREAKING_CHANGE",
+        "IRREVERSIBLE_DATA_OP", "NEEDS_INSTALL_OR_NETWORK", "NEEDS_CREDENTIALS",
+        "INPUT_NOT_GIT_REPO", "INPUT_DIRTY_WORKTREE", "CHANGE_APPROVED_REQ_OR_ARCH",
+        "THIRDPARTY_LICENSE_UNCLEAR", "SECURITY_RISK_ACCEPTANCE", "TEST_OR_SECURITY_EXCEPTION",
+        "RELEASE_HOLD_OVERRIDE", "MAX_REWORK_EXCEEDED", "DESTRUCTIVE_OR_CROSS_PROJECT"
+      ]
+    },
+    "summary": { "type": "string", "minLength": 1 },
+    "options": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["option_id", "description"],
+        "properties": {
+          "option_id": { "type": "string" },
+          "description": { "type": "string" },
+          "impact": { "type": "string" },
+          "reversibility": { "type": "string", "enum": ["reversible", "hard_to_reverse", "irreversible", "unknown"] }
+        }
+      }
+    },
+    "recommended_option": {
+      "type": ["object", "null"],
+      "properties": {
+        "option_id": { "type": "string" },
+        "rationale": { "type": "string" }
+      }
+    },
+    "evidence_refs": { "type": "array", "items": { "type": "string" } },
+    "created_at": { "type": "string", "format": "date-time" },
+    "status": { "type": "string", "enum": ["PENDING", "RESOLVED", "CANCELLED"] }
+  }
+}

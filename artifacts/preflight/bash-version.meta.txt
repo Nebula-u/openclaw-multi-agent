@@ -1,0 +1,9 @@
+slug=bash-version
+command=bash --version
+executable=bash
+cwd=/d/MicroConnect/project/openclaw-multi-agent
+exit_code=0
+started_at=2026-07-23T08:33:33Z
+finished_at=2026-07-23T08:33:34Z
+stdout_file=/d/MicroConnect/project/openclaw-multi-agent/artifacts/preflight/bash-version.stdout.txt
+stderr_file=/d/MicroConnect/project/openclaw-multi-agent/artifacts/preflight/bash-version.stderr.txt

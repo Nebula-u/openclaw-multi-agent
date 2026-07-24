@@ -1,0 +1,11 @@
+
+OpenClaw 2026.7.1-2 (0790d9f) — All your chats, one OpenClaw.
+
+Usage: openclaw agents list [options]
+
+List configured agents
+
+Options:
+  --bindings  Include routing bindings (default: false)
+  -h, --help  Display help for command
+  --json      Output JSON instead of text (default: false)

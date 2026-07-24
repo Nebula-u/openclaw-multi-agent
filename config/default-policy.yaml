@@ -1,0 +1,65 @@
+# default-policy.yaml
+# openclaw-sdlc-multi-agent 默认工作流策略（保守、可恢复）。
+# 该文件是数据，不是可执行脚本。manager-agent 读取它以确定 Gate 严格度、
+# 重做上限、审批触发条件与命令边界。项目可用 project-config 覆盖。
+
+schema_version: 1
+policy_id: default-policy
+
+# ---- 重做与尝试 ----
+rework:
+  max_attempts: 3            # 每个任务最大尝试次数；超过必须 WAITING_HUMAN
+  on_exceed: WAITING_HUMAN
+
+# ---- Gate 严格度 ----
+gates:
+  requirement:
+    fail_on_blocking_ambiguity: true
+    require_acceptance_criteria: true
+  architecture:
+    require_ac_to_component_mapping: true
+    require_test_strategy: true
+  development:
+    require_real_commit: true
+    forbid_placeholder_impl: true     # TODO / pass / 空 handler / 假成功 视为 FAIL
+  review:
+    block_on: [BLOCKER, CRITICAL, HIGH]
+    medium_blocks: false              # MEDIUM 是否阻断
+    hold_when_no_evidence: true
+  test:
+    require_actual_execution: true
+    mandatory_exit_code_zero: true
+    forbid_hidden_first_failure: true
+    require_test_code_review: true
+  security:
+    unknown_when_tool_missing: true
+  release:
+    require_candidate_commit_match: true
+    require_rollback_plan: true
+    require_ops_handoff: true
+
+# ---- 命令边界（默认全部关闭，需人工审批放开）----
+command_boundaries:
+  allow_network: false
+  allow_dependency_install: false
+  allow_destructive: false
+  allow_service_control: false
+  allow_registry_or_scheduled_tasks: false
+
+# ---- 测试隔离 ----
+testing:
+  isolation_mode: UNSANDBOXED_LOCAL   # 本阶段固定值；不启用 sandbox
+  require_sandbox: false
+  require_isolation_disclosure: true
+
+# ---- Git ----
+git:
+  allow_remote: false
+  allow_git_init_without_approval: false
+  merge_strategy: no-ff
+  preserve_dirty_worktree: true
+
+# ---- 审批（不设自动超时同意）----
+approval:
+  auto_timeout_approve: false
+  silence_means_approval: false

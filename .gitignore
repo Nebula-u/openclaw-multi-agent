@@ -1,0 +1,38 @@
+# ---- Runtime & artifacts (generated at install / run time) ----
+/runtime/
+runtime/
+*.local.yaml
+*.local.json
+
+# ---- OpenClaw config snapshots (may contain environment specifics) ----
+control/config-snapshots/
+
+# ---- Preflight raw logs are kept intentionally as environment evidence; ignore only ad-hoc temp ----
+artifacts/preflight/*.tmp
+
+# ---- Regenerable run outputs (reproduce by re-running scripts/validate-install.* or install.* dry-run) ----
+artifacts/validation/
+artifacts/install-dryrun/
+
+# ---- OS / editor noise ----
+.DS_Store
+Thumbs.db
+desktop.ini
+*.swp
+*~
+.idea/
+.vscode/
+
+# ---- Node (only if a demo/business project is nested; not this system's runtime) ----
+node_modules/
+
+# ---- Never commit secrets ----
+*.pem
+*.key
+*.p12
+.env
+.env.*
+secrets.json
+
+# ---- Logs ----
+*.log

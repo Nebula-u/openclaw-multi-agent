@@ -1,0 +1,9 @@
+slug=node-version
+command=node --version
+executable=node
+cwd=/d/MicroConnect/project/openclaw-multi-agent
+exit_code=0
+started_at=2026-07-23T08:33:34Z
+finished_at=2026-07-23T08:33:34Z
+stdout_file=/d/MicroConnect/project/openclaw-multi-agent/artifacts/preflight/node-version.stdout.txt
+stderr_file=/d/MicroConnect/project/openclaw-multi-agent/artifacts/preflight/node-version.stderr.txt

@@ -1,0 +1,47 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://openclaw-sdlc-multi-agent/contracts/workflow.schema.json",
+  "title": "Workflow",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "schema_version",
+    "workflow_id",
+    "status",
+    "target_project_root_abs",
+    "runtime_root_abs",
+    "integration_branch",
+    "base_commit",
+    "current_phase",
+    "created_at",
+    "updated_at"
+  ],
+  "properties": {
+    "schema_version": { "type": "integer", "minimum": 1 },
+    "workflow_id": { "type": "string", "pattern": "^WF-" },
+    "status": {
+      "type": "string",
+      "enum": [
+        "CREATED", "ANALYZING_REQUIREMENTS", "WAITING_REQUIREMENT_APPROVAL",
+        "DESIGNING", "WAITING_ARCHITECTURE_APPROVAL", "IMPLEMENTING",
+        "REVIEWING_CODE", "TESTING", "REVIEWING_TESTS",
+        "VERIFYING_RELEASE_READINESS", "WAITING_RELEASE_APPROVAL",
+        "READY_FOR_OPERATIONS_HANDOFF", "RELEASE_NO_GO", "RELEASE_HOLD",
+        "FAILED", "CANCELLED"
+      ]
+    },
+    "status_reason": { "type": "string" },
+    "target_project_root_abs": { "type": "string", "minLength": 1 },
+    "runtime_root_abs": { "type": "string", "minLength": 1 },
+    "integration_branch": { "type": "string", "minLength": 1 },
+    "base_commit": { "type": "string", "minLength": 1 },
+    "current_candidate_commit": { "type": ["string", "null"] },
+    "current_phase": { "type": "string" },
+    "task_ids": { "type": "array", "items": { "type": "string", "pattern": "^TASK-" } },
+    "pending_decision_ids": { "type": "array", "items": { "type": "string", "pattern": "^DEC-" } },
+    "context_version": { "type": "integer", "minimum": 0 },
+    "rules_version": { "type": "string" },
+    "created_at": { "type": "string", "format": "date-time" },
+    "updated_at": { "type": "string", "format": "date-time" }
+  }
+}

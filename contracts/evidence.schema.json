@@ -1,0 +1,25 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://openclaw-sdlc-multi-agent/contracts/evidence.schema.json",
+  "title": "Evidence",
+  "description": "每行一条（evidence.jsonl）。本 schema 描述单行对象。",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["evidence_id", "source_type", "collected_at", "collector"],
+  "properties": {
+    "evidence_id": { "type": "string", "pattern": "^EVD-" },
+    "source_type": {
+      "type": "string",
+      "enum": ["file", "git", "command", "doc", "user_input", "config", "other"]
+    },
+    "locator_abs": { "type": ["string", "null"], "description": "绝对文件路径；git 来源可用 git_locator" },
+    "git_locator": { "type": ["string", "null"], "description": "如 <commit>:<path> 或 <commit>" },
+    "sha256": { "type": ["string", "null"], "pattern": "^[a-f0-9]{64}$" },
+    "line_start": { "type": ["integer", "null"], "minimum": 1 },
+    "line_end": { "type": ["integer", "null"], "minimum": 1 },
+    "collected_at": { "type": "string", "format": "date-time" },
+    "collector": { "type": "string" },
+    "command_record_id": { "type": ["string", "null"] },
+    "notes": { "type": "string" }
+  }
+}

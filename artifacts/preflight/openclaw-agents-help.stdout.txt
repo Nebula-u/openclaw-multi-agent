@@ -1,0 +1,21 @@
+
+OpenClaw 2026.7.1-2 (0790d9f) — All your chats, one OpenClaw.
+
+Usage: openclaw agents [options] [command]
+
+Manage isolated agents (workspaces + auth + routing)
+
+Options:
+  -h, --help    Display help for command
+
+Commands:
+  add           Add a new isolated agent
+  bind          Add routing bindings for an agent
+  bindings      List routing bindings
+  delete        Delete an agent and prune workspace/state
+  list          List configured agents
+  set-identity  Update an agent identity (name/theme/emoji/avatar)
+  unbind        Remove routing bindings for an agent
+
+Docs: https://docs.openclaw.ai/cli/agents
+

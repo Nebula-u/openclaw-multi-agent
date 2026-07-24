@@ -1,0 +1,84 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://openclaw-sdlc-multi-agent/contracts/result.schema.json",
+  "title": "AgentResult",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "schema_version", "workflow_id", "task_id", "run_id", "agent_id", "role",
+    "attempt", "started_at", "finished_at", "result_status",
+    "summary_for_user", "summary_for_manager", "worktree_path_abs",
+    "artifact_root_abs", "isolation_mode", "self_validation"
+  ],
+  "properties": {
+    "schema_version": { "type": "integer", "minimum": 1 },
+    "workflow_id": { "type": "string", "pattern": "^WF-" },
+    "task_id": { "type": "string", "pattern": "^TASK-" },
+    "run_id": { "type": "string", "pattern": "^RUN-" },
+    "agent_id": { "type": "string" },
+    "role": { "type": "string" },
+    "attempt": { "type": "integer", "minimum": 1 },
+    "started_at": { "type": "string", "format": "date-time" },
+    "finished_at": { "type": "string", "format": "date-time" },
+    "result_status": {
+      "type": "string",
+      "enum": ["COMPLETED", "NEEDS_REWORK", "BLOCKED", "HUMAN_DECISION_REQUIRED", "FAILED"]
+    },
+    "summary_for_user": { "type": "string" },
+    "summary_for_manager": { "type": "string" },
+    "input_commit": { "type": ["string", "null"] },
+    "output_commit": { "type": ["string", "null"] },
+    "branch": { "type": ["string", "null"] },
+    "worktree_path_abs": { "type": "string", "minLength": 1 },
+    "artifact_root_abs": { "type": "string", "minLength": 1 },
+    "modified_files": { "type": "array", "items": { "type": "string" } },
+    "created_files": { "type": "array", "items": { "type": "string" } },
+    "deleted_files": { "type": "array", "items": { "type": "string" } },
+    "report_files": { "type": "array", "items": { "type": "string" } },
+    "command_record_refs": { "type": "array", "items": { "type": "string" } },
+    "evidence_refs": { "type": "array", "items": { "type": "string" } },
+    "claims": { "type": "array", "items": { "$ref": "#/definitions/claim" } },
+    "findings": { "type": "array", "items": { "type": "object" } },
+    "unresolved_issues": { "type": "array", "items": { "type": "string" } },
+    "known_limitations": { "type": "array", "items": { "type": "string" } },
+    "decisions_required": { "type": "array", "items": { "type": "object" } },
+    "recommended_next_action": { "type": "string" },
+    "git_status_after_completion": { "type": ["string", "null"] },
+    "isolation_mode": { "type": "string", "enum": ["UNSANDBOXED_LOCAL"] },
+    "self_validation": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["preflight_passed", "checks"],
+      "properties": {
+        "preflight_passed": { "type": "boolean" },
+        "checks": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["name", "status"],
+            "properties": {
+              "name": { "type": "string" },
+              "status": { "type": "string", "enum": ["PASS", "FAIL", "UNKNOWN", "NOT_APPLICABLE"] },
+              "detail": { "type": "string" }
+            }
+          }
+        }
+      }
+    },
+    "artifact_manifest_hash": { "type": ["string", "null"] }
+  },
+  "definitions": {
+    "claim": {
+      "type": "object",
+      "required": ["claim_id", "statement", "classification"],
+      "properties": {
+        "claim_id": { "type": "string" },
+        "statement": { "type": "string" },
+        "classification": { "type": "string", "enum": ["OBSERVED", "INFERRED", "PROPOSED", "UNKNOWN"] },
+        "evidence_refs": { "type": "array", "items": { "type": "string" } },
+        "limitations": { "type": "string" },
+        "observed_at": { "type": "string" }
+      }
+    }
+  }
+}
