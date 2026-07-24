@@ -44,8 +44,7 @@ pwsh -File "d:\MicroConnect\project\openclaw-multi-agent\scripts\install.ps1" `
   -RuntimeRoot "d:\MicroConnect\project\openclaw-multi-agent\runtime"
 
 # 2) 静态验证（不改配置）
-pwsh -File "d:\MicroConnect\project\openclaw-multi-agent\scripts\validate-install.ps1" `
-  -RuntimeRoot "d:\MicroConnect\project\openclaw-multi-agent\runtime"
+pwsh -File "d:\MicroConnect\project\openclaw-multi-agent\scripts\validate-install.ps1"
 
 # 3) 真正注册 7 个 Agent（会修改 OpenClaw 配置；先自动备份，再校验）
 pwsh -File "d:\MicroConnect\project\openclaw-multi-agent\scripts\install.ps1" `
@@ -69,8 +68,7 @@ bash /abs/path/openclaw-sdlc-multi-agent/scripts/install.sh \
   --runtime-root /abs/path/openclaw-sdlc-multi-agent/runtime
 
 # 静态验证
-bash /abs/path/openclaw-sdlc-multi-agent/scripts/validate-install.sh \
-  --runtime-root /abs/path/openclaw-sdlc-multi-agent/runtime
+bash /abs/path/openclaw-sdlc-multi-agent/scripts/validate-install.sh
 
 # 真正注册（修改配置，先备份）
 bash /abs/path/openclaw-sdlc-multi-agent/scripts/install.sh \
