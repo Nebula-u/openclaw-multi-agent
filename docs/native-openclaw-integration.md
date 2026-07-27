@@ -6,7 +6,7 @@
 
 ## 1. 本文用途
 
-本文说明本项目**如何基于真实的 OpenClaw CLI 与 config schema 进行集成**：用 `agents add` 注册 7 个 Agent（绝对 `workspace` / `agentDir`），用 `config set` 的 **bracket 路径**精确修改 `subagents` 与 `sandbox`，用 `config validate` 校验，用 `agents list --json` / `config get agents.list --json` 复核。所有字段名与参数以本机实测 `--help` 与 `config schema` 为准，**不依据记忆假定**。
+本文说明本项目**如何基于真实的 OpenClaw CLI 与 config schema 进行集成**：安装脚本从 Agent package catalog 读取所有 `register=true` 的 Agent，用 `agents add` 注册绝对 `workspace` / `agentDir`，用 `config set` 的 **bracket 路径**精确修改 `subagents` 与 `sandbox`，用 `config validate` 校验，用 `agents list --json` / `config get agents.list --json` 复核。所有字段名与参数以本机实测 `--help` 与 `config schema` 为准，**不依据记忆假定**。
 
 集成分工提醒：CLI 调用发生在**安装/配置阶段**（`install.ps1` / `install.sh`）；日常工作流只依赖 OpenClaw 原生 Agent、原生工具、文件与本地 Git。
 
@@ -50,7 +50,7 @@ openclaw agents add manager-agent `
 - `--non-interactive` **需要** `--workspace`（否则报错）。
 - `--model` 可选；缺省时继承默认。
 - `--json` 输出机器可读摘要，便于安装脚本解析。
-- `--bind <channel[:accountId]>` 可重复；**只**用于 `manager-agent`（由安装参数控制），**不**给 6 个工作 Agent 配置用户渠道 binding。
+- `--bind <channel[:accountId]>` 可重复；**只**用于 `manager-agent`（由安装参数控制），工作 Agent 和生成 Agent 默认不配置用户渠道 binding。
 - 幂等：同名 Agent 已存在且兼容（`workspace` 相同）则跳过；`workspace` 不同则安装停止，**不覆盖用户已有 Agent**。
 
 ## 4. `openclaw agents` 子命令（OBSERVED）
@@ -59,7 +59,7 @@ openclaw agents add manager-agent `
 add · bind · bindings · delete · list · set-identity · unbind
 ```
 
-本项目使用：`add`（创建）、`list`（复核）、`bind`（可选，仅 manager 的用户渠道）。**不使用** `delete`（不删除用户 Agent）。安装校验读取 `agents list --json`，确认 7 个 Agent 的 `workspace` / `agentDir` 均为绝对路径。
+本项目使用：`add`（创建）、`list`（复核）、`bind`（可选，仅 manager 的用户渠道）。普通安装同步不使用 `delete`；只有生成组件删除流程在用户独立审批且通过 generated 边界校验后调用 `agents delete`。安装校验读取 `agents list --json`，确认所有 managed Agent 的 `workspace` / `agentDir` 均为绝对路径。
 
 ## 5. `openclaw config set` —— bracket 路径精确改字段
 
@@ -111,8 +111,8 @@ openclaw config set "agents.list[3].subagents" '{"delegationMode":"prefer","requ
 
 | Agent | `subagents.allowAgents` | `subagents.requireAgentId` | `subagents.delegationMode` | `sandbox.mode` |
 |-------|--------------------------|-----------------------------|------------------------------|-----------------|
-| `manager-agent` | 6 个工作 Agent | `true` | `prefer` | （不特设） |
-| 6 个工作 Agent | `[]`（禁止再派生） | — | — | — |
+| `manager-agent` | active/callable package 自动集合 | `true` | `prefer` | （不特设） |
+| 工作 Agent | `[]`（默认禁止再派生） | — | — | package 可声明 |
 | `test-agent`（额外） | `[]` | — | — | `off`（显式声明本阶段无沙箱） |
 
 > 若当前版本不支持等价的 `sandbox.mode=off`，安装**必须停止**并在 `docs/compatibility-report.md` 说明，不得静默继承可能启用 sandbox 的全局默认值。
@@ -138,7 +138,7 @@ openclaw config set "agents.list[3].subagents" '{"delegationMode":"prefer","requ
 
 | 类别 | 用途 | 边界 |
 |------|------|------|
-| 跨 Agent 会话工具 | `manager-agent` 调度 6 个工作 Agent | 仅 manager 可用；工作 Agent `allowAgents=[]` 不得再 spawn |
+| 跨 Agent 会话工具 | `manager-agent` 调度 active/callable Agent | 仅 manager 可用；工作 Agent 默认 `allowAgents=[]` 不得再 spawn |
 | 文件工具 | 读写控制层文件、任务上下文包、读工作 Agent `output/` | 路径必须绝对；工作 Agent 只写本 run `output/`、`raw-logs/` 与被分配 worktree |
 | Shell 工具 | 生成 UUID、算 SHA-256、执行 Git 校验/合并、只读探测 | 显式绝对 cwd；关键命令落盘真实日志；默认禁网络/安装/破坏性命令 |
 | Git 工具（仅本地） | 分支、绝对路径 worktree、commit/ancestry/diff 校验、`--no-ff` 合并 | 禁止 push/pull/fetch/remote；禁止 `reset --hard`/`clean -fdx`；不改全局 Git 配置 |

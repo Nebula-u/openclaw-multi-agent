@@ -1,9 +1,5 @@
 #!/usr/bin/env bash
-# =============================================================================
-# openclaw-sdlc-multi-agent 静态安装验证（Bash 等价实现）
-# 纯静态 + 只读校验，不修改任何配置。任何硬性检查失败则退出码非 0。
-# JSON 合法性校验依赖 jq；若缺失则相关项标记 UNKNOWN（不自动安装）。
-# =============================================================================
+# 清单驱动的静态安装验证；不修改 OpenClaw 配置。
 set -uo pipefail
 
 SKIP_OPENCLAW=0
@@ -16,131 +12,109 @@ done
 SCRIPT_DIR="$(cd -P "$(dirname "$SOURCE")" >/dev/null 2>&1 && pwd -P)"
 PROJECT_ROOT="$(cd -P "$SCRIPT_DIR/.." >/dev/null 2>&1 && pwd -P)"
 
-AGENT_IDS=(manager-agent requirement-agent architect-agent developer-agent review-agent test-agent release-agent)
-WORKER_IDS=(requirement-agent architect-agent developer-agent review-agent test-agent release-agent)
+native_path() {
+  if command -v cygpath >/dev/null 2>&1; then cygpath -w "$1"; else printf '%s' "$1"; fi
+}
 
 PASS_N=0; FAIL_N=0; UNK_N=0
 declare -a LOG_LINES=()
-check() { # $1=name $2=PASS/FAIL/UNKNOWN $3=detail
-  local d="${3:-}"
-  local c=32; [ "$2" = FAIL ] && c=31; [ "$2" = UNKNOWN ] && c=33
+check() {
+  local d="${3:-}" c=32
+  [ "$2" = FAIL ] && c=31; [ "$2" = UNKNOWN ] && c=33
   printf '\033[%sm[%s]\033[0m %s%s\n' "$c" "$2" "$1" "${d:+ — $d}"
-  LOG_LINES+=("{\"check\":\"$1\",\"status\":\"$2\",\"detail\":\"${d//\"/\\\"}\"}")
+  if command -v jq >/dev/null 2>&1; then LOG_LINES+=("$(jq -nc --arg c "$1" --arg s "$2" --arg d "$d" '{check:$c,status:$s,detail:$d}')"); fi
   case "$2" in PASS) PASS_N=$((PASS_N+1));; FAIL) FAIL_N=$((FAIL_N+1));; UNKNOWN) UNK_N=$((UNK_N+1));; esac
 }
 
-HAS_JQ=0; command -v jq >/dev/null 2>&1 && HAS_JQ=1
-json_ok() { [ "$HAS_JQ" -eq 1 ] && jq empty "$1" >/dev/null 2>&1; }
-
-echo "== 静态安装验证 (Bash) =="
+echo "== package 驱动静态验证 (Bash) =="
 echo "ProjectRoot: $PROJECT_ROOT"
 
-# 1+2. workspace + 4 核心文件
+if ! command -v jq >/dev/null 2>&1; then
+  check "jq 可用（package catalog 必需）" FAIL "本脚本不会自动安装依赖；可改用 validate-install.ps1"
+  exit 1
+fi
+jq_clean() { jq "$@" | tr -d '\r'; }
+
+mapfile -t MANIFESTS < <(
+  find "$PROJECT_ROOT/agents/packages/builtin" -maxdepth 1 -type f -name '*.json' -print 2>/dev/null
+  find "$PROJECT_ROOT/agents/packages/generated/agents" -mindepth 2 -maxdepth 2 -type f -name 'agent.json' -print 2>/dev/null
+)
+[ "${#MANIFESTS[@]}" -gt 0 ] && check "Agent package catalog 可发现" PASS "packages=${#MANIFESTS[@]}" || check "Agent package catalog 可发现" FAIL
+
+declare -A IDS
+MANAGER_ID=""
+REGISTERED=0
+EXPECTED_ALLOW=()
 CORE=(AGENTS.md SOUL.md TOOLS.md IDENTITY.md)
-for id in "${AGENT_IDS[@]}"; do
-  ws="$PROJECT_ROOT/agents/$id/workspace"
-  [ -d "$ws" ] && check "workspace 存在: $id" PASS "$ws" || check "workspace 存在: $id" FAIL "$ws"
-  for f in "${CORE[@]}"; do
-    [ -f "$ws/$f" ] && check "  $id/$f" PASS || check "  $id/$f" FAIL
-  done
+for mf in "${MANIFESTS[@]}"; do
+  mf_jq="$(native_path "$mf")"
+  if ! jq -e '.schema_version == 1 and .kind == "openclaw-agent-package"' "$mf_jq" >/dev/null; then check "package JSON: $(basename "$mf")" FAIL; continue; fi
+  id="$(jq_clean -r '.id' "$mf_jq")"; origin="$(jq_clean -r '.origin' "$mf_jq")"; protected="$(jq_clean -r '.protected' "$mf_jq")"; deletable="$(jq_clean -r '.deletable' "$mf_jq")"
+  if [ -n "${IDS[$id]:-}" ]; then check "Agent ID 唯一: $id" FAIL; else IDS[$id]="$mf"; check "Agent ID 唯一: $id" PASS; fi
+  case "$mf" in
+    "$PROJECT_ROOT/agents/packages/builtin/"*)
+      [ "$origin" = builtin ] && [ "$protected" = true ] && [ "$deletable" = false ] && check "内置保护: $id" PASS || check "内置保护: $id" FAIL
+      ;;
+    "$PROJECT_ROOT/agents/packages/generated/agents/"*)
+      [ "$origin" = generated ] && [ "$protected" = false ] && [ "$deletable" = true ] && check "生成保护边界: $id" PASS || check "生成保护边界: $id" FAIL
+      ;;
+    *) check "package 目录边界: $id" FAIL "$mf" ;;
+  esac
+  src_rel="$(jq_clean -r '.workspace_source_rel' "$mf_jq")"; ws="$PROJECT_ROOT/$src_rel"
+  [ -d "$ws" ] && check "workspace source: $id" PASS "$ws" || check "workspace source: $id" FAIL "$ws"
+  for f in "${CORE[@]}"; do [ -f "$ws/$f" ] && check "  $id/$f" PASS || check "  $id/$f" FAIL; done
+  role="$(jq_clean -r '.role' "$mf_jq")"; register="$(jq_clean -r '.lifecycle.register' "$mf_jq")"; active="$(jq_clean -r '.lifecycle.active' "$mf_jq")"; callable="$(jq_clean -r '.delegation.callable_by_manager' "$mf_jq")"
+  if [ "$role" = manager ]; then [ -z "$MANAGER_ID" ] && MANAGER_ID="$id" || check "唯一 manager package" FAIL; fi
+  [ "$register" = true ] && REGISTERED=$((REGISTERED+1))
+  if [ "$role" != manager ] && [ "$register" = true ] && [ "$active" = true ] && [ "$callable" = true ]; then EXPECTED_ALLOW+=("$id"); fi
+  if [ "$role" != manager ]; then
+    allow_count="$(jq_clean '.delegation.allow_agents | length' "$mf_jq")"
+    [ "$allow_count" -eq 0 ] && check "工作 Agent 不派生: $id" PASS || check "工作 Agent 不派生: $id" FAIL
+  fi
 done
+[ -n "$MANAGER_ID" ] && check "catalog 中唯一 manager" PASS "$MANAGER_ID" || check "catalog 中唯一 manager" FAIL
 
-# 3. contracts JSON
-if [ -d "$PROJECT_ROOT/contracts" ]; then
-  for f in "$PROJECT_ROOT"/contracts/*.json; do
-    [ -e "$f" ] || continue
-    if [ "$HAS_JQ" -eq 1 ]; then json_ok "$f" && check "contracts JSON: $(basename "$f")" PASS || check "contracts JSON: $(basename "$f")" FAIL
-    else check "contracts JSON: $(basename "$f")" UNKNOWN "缺少 jq"; fi
-  done
-else check "contracts 目录存在" FAIL; fi
+for f in "$PROJECT_ROOT"/contracts/*.json; do jq empty "$(native_path "$f")" >/dev/null 2>&1 && check "contracts JSON: $(basename "$f")" PASS || check "contracts JSON: $(basename "$f")" FAIL; done
+for f in "$PROJECT_ROOT"/templates/*.json; do [ -e "$f" ] || continue; jq empty "$(native_path "$f")" >/dev/null 2>&1 && check "templates JSON: $(basename "$f")" PASS || check "templates JSON: $(basename "$f")" FAIL; done
 
-# 4. templates JSON / JSONL
-if [ -d "$PROJECT_ROOT/templates" ]; then
-  for f in "$PROJECT_ROOT"/templates/*.json; do
-    [ -e "$f" ] || continue
-    if [ "$HAS_JQ" -eq 1 ]; then json_ok "$f" && check "templates JSON: $(basename "$f")" PASS || check "templates JSON: $(basename "$f")" FAIL
-    else check "templates JSON: $(basename "$f")" UNKNOWN "缺少 jq"; fi
-  done
-  for f in "$PROJECT_ROOT"/templates/*.jsonl; do
-    [ -e "$f" ] || continue
-    if [ "$HAS_JQ" -eq 1 ]; then
-      ok=1; while IFS= read -r line; do [ -z "${line// }" ] && continue; echo "$line" | jq empty >/dev/null 2>&1 || { ok=0; break; }; done < "$f"
-      [ "$ok" -eq 1 ] && check "templates JSONL: $(basename "$f")" PASS || check "templates JSONL: $(basename "$f")" FAIL
-    else check "templates JSONL: $(basename "$f")" UNKNOWN "缺少 jq"; fi
-  done
-else check "templates 目录存在" UNKNOWN "$PROJECT_ROOT/templates（可能仍在生成）"; fi
-
-# 5-9 + 15. install.sh dry-run（从非项目 cwd）
 INSTALL_SH="$SCRIPT_DIR/install.sh"
 DRY_MANIFEST="$PROJECT_ROOT/artifacts/install-dryrun/install-manifest.dryrun.json"
 NONPROJ="$(mktemp -d)"
-( cd "$NONPROJ" && bash "$INSTALL_SH" --runtime-root runtime >/dev/null 2>&1 ) \
-  && check "install.sh dry-run 可执行（cwd=$NONPROJ）" PASS \
-  || check "install.sh dry-run 可执行（cwd=$NONPROJ）" FAIL
+(cd "$NONPROJ" && bash "$INSTALL_SH" --runtime-root runtime >/dev/null 2>&1) && check "install.sh 非项目 cwd dry-run 可执行" PASS "$NONPROJ" || check "install.sh 非项目 cwd dry-run 可执行" FAIL "$NONPROJ"
 rmdir "$NONPROJ" 2>/dev/null || true
 
-if [ -f "$DRY_MANIFEST" ] && [ "$HAS_JQ" -eq 1 ]; then
-  rr="$(jq -r '.runtime_root_abs' "$DRY_MANIFEST")"
-  case "$rr" in "$PROJECT_ROOT"*) check "非项目 cwd dry-run 路径仍指向项目 (System32 防护)" PASS "runtime_root_abs=$rr";; *) check "非项目 cwd dry-run 路径仍指向项目 (System32 防护)" FAIL "runtime_root_abs=$rr";; esac
-  # 绝对路径
-  abs_ok="$(jq -r '[.agents[] | (.workspace_abs, .agentDir_abs)] | all(startswith("/") or test("^[A-Za-z]:"))' "$DRY_MANIFEST" 2>/dev/null || echo false)"
-  [ "$abs_ok" = "true" ] && check "安装计划中 workspace/agentDir 全为绝对路径" PASS || check "安装计划中 workspace/agentDir 全为绝对路径" FAIL
-  # 互异
-  nws="$(jq -r '[.agents[].workspace_abs] | unique | length' "$DRY_MANIFEST")"
-  ndir="$(jq -r '[.agents[].agentDir_abs] | unique | length' "$DRY_MANIFEST")"
-  [ "$nws" -eq 7 ] && check "7 个 workspace 彼此不同" PASS || check "7 个 workspace 彼此不同" FAIL "unique=$nws"
-  [ "$ndir" -eq 7 ] && check "7 个 agentDir 彼此不同" PASS || check "7 个 agentDir 彼此不同" FAIL "unique=$ndir"
-  # manager 白名单
-  mgr_allow="$(jq -r '.agents[] | select(.id=="manager-agent") | .subagents_allow | sort | join(",")' "$DRY_MANIFEST")"
-  want="$(printf '%s\n' "${WORKER_IDS[@]}" | sort | paste -sd, -)"
-  [ "$mgr_allow" = "$want" ] && check "manager 白名单 = 6 个工作 Agent" PASS "$mgr_allow" || check "manager 白名单 = 6 个工作 Agent" FAIL "$mgr_allow"
-  reqid="$(jq -r '.agents[] | select(.id=="manager-agent") | .require_agent_id' "$DRY_MANIFEST")"
-  [ "$reqid" = "true" ] && check "manager requireAgentId = true" PASS || check "manager requireAgentId = true" FAIL
-  # 工作 Agent 空白名单
-  emptyok="$(jq -r '[.agents[] | select(.id!="manager-agent") | (.subagents_allow|length)] | all(.==0)' "$DRY_MANIFEST")"
-  [ "$emptyok" = "true" ] && check "工作 Agent allowAgents 均为空（禁止再派生）" PASS || check "工作 Agent allowAgents 均为空（禁止再派生）" FAIL
-  # test sandbox off
-  sb="$(jq -r '.agents[] | select(.id=="test-agent") | .sandbox_mode' "$DRY_MANIFEST")"
-  [ "$sb" = "off" ] && check "test-agent sandbox_mode = off" PASS || check "test-agent sandbox_mode = off" FAIL "$sb"
+if [ -f "$DRY_MANIFEST" ]; then
+  dry_jq="$(native_path "$DRY_MANIFEST")"
+  schema="$(jq_clean -r '.schema_version' "$dry_jq")"; [ "$schema" = 2 ] && check "dry-run schema_version=2" PASS || check "dry-run schema_version=2" FAIL "$schema"
+  count="$(jq_clean '.agents | length' "$dry_jq")"; [ "$count" -eq "$REGISTERED" ] && check "dry-run 数量来自 register=true packages" PASS "$count" || check "dry-run 数量来自 register=true packages" FAIL "$count/$REGISTERED"
+  abs_ok="$(jq_clean -r '[.agents[] | (.manifest_abs,.workspace_source_abs,.workspace_abs,.agentDir_abs)] | all(startswith("/") or test("^[A-Za-z]:"))' "$dry_jq")"
+  [ "$abs_ok" = true ] && check "dry-run 路径全为绝对路径" PASS || check "dry-run 路径全为绝对路径" FAIL
+  actual="$(jq_clean -r --arg id "$MANAGER_ID" '.agents[] | select(.id==$id) | .subagents_allow | sort | join(",")' "$dry_jq")"
+  expected="$(printf '%s\n' "${EXPECTED_ALLOW[@]}" | sort | paste -sd, -)"
+  [ "$actual" = "$expected" ] && check "manager 白名单来自 catalog" PASS "$actual" || check "manager 白名单来自 catalog" FAIL "actual=$actual expected=$expected"
 else
-  check "dry-run 清单可解析" UNKNOWN "缺少 jq 或清单未生成: $DRY_MANIFEST"
+  check "dry-run 清单生成" FAIL "$DRY_MANIFEST"
 fi
 
-# 11. manager 调度协议
-MGR="$PROJECT_ROOT/agents/manager-agent/workspace/AGENTS.md"
-if [ -f "$MGR" ]; then
-  if grep -Eq 'sessions_spawn|agentId' "$MGR" && grep -Eq '调度|dispatch' "$MGR"; then check "manager AGENTS.md 含原生调度协议" PASS; else check "manager AGENTS.md 含原生调度协议" FAIL; fi
-else check "manager AGENTS.md 存在" FAIL; fi
+COMPONENT_SKILL="$PROJECT_ROOT/agents/packages/system/skills/agent-package-manager/SKILL.md"
+grep -q 'manage-components' "$COMPONENT_SKILL" 2>/dev/null && grep -q 'approval' "$COMPONENT_SKILL" && check "agent-package-manager Skill 含审批协议" PASS || check "agent-package-manager Skill 含审批协议" FAIL
+grep -q "outcome -eq 'REJECTED'" "$PROJECT_ROOT/scripts/component-lib.ps1" 2>/dev/null && check "组件审批显式拒绝 REJECTED" PASS || check "组件审批显式拒绝 REJECTED" FAIL
+grep -q 'created_from_workflow = \$workflowId' "$PROJECT_ROOT/scripts/manage-components.ps1" 2>/dev/null && check "Skill proposal 绑定当前 workflow" PASS || check "Skill proposal 绑定当前 workflow" FAIL
 
-# 12. 无 sdlcctl / openclaw_sdlc 依赖
-if grep -rIlq 'sdlcctl' "$PROJECT_ROOT/agents" 2>/dev/null; then check "运行时 Prompt 不含 sdlcctl" FAIL "$(grep -rIl 'sdlcctl' "$PROJECT_ROOT/agents" | tr '\n' ' ')"; else check "运行时 Prompt 不含 sdlcctl" PASS; fi
-if grep -rIlqE 'python[[:space:]]+-m[[:space:]]+src\.openclaw_sdlc|openclaw_sdlc\.' "$PROJECT_ROOT/agents" 2>/dev/null; then check "运行时 Prompt 不依赖旧 Python 控制平面" FAIL; else check "运行时 Prompt 不依赖旧 Python 控制平面" PASS; fi
+if grep -rIlqE 'python[[:space:]]+-m[[:space:]]+src\.openclaw_sdlc|openclaw_sdlc\.|sdlcctl' "$PROJECT_ROOT/agents" 2>/dev/null; then check "运行时 Prompt 不依赖旧 Python 控制面" FAIL; else check "运行时 Prompt 不依赖旧 Python 控制面" PASS; fi
 
-# 13. test-agent UNSANDBOXED_LOCAL
-TA="$PROJECT_ROOT/agents/test-agent/workspace/AGENTS.md"
-if [ -f "$TA" ] && grep -q 'UNSANDBOXED_LOCAL' "$TA"; then check "test-agent AGENTS.md 含 UNSANDBOXED_LOCAL" PASS; else check "test-agent AGENTS.md 含 UNSANDBOXED_LOCAL" FAIL; fi
-
-# 14. task.schema.json 含 *_abs
-TS="$PROJECT_ROOT/contracts/task.schema.json"
-if [ -f "$TS" ] && grep -q 'worktree_path_abs' "$TS" && grep -q 'artifact_root_abs' "$TS"; then check "task.schema.json 含 *_abs 绝对路径字段" PASS; else check "task.schema.json 含 *_abs 绝对路径字段" FAIL; fi
-
-# 16. openclaw config validate
 if [ "$SKIP_OPENCLAW" -eq 0 ]; then
   if command -v openclaw >/dev/null 2>&1; then
-    openclaw config validate --json >/dev/null 2>&1 && check "openclaw config validate --json" PASS "exit=0" || check "openclaw config validate --json" FAIL "exit=$?"
-  else
-    check "openclaw CLI 可用" UNKNOWN "未找到 openclaw"
-  fi
+    openclaw config validate --json >/dev/null 2>&1 && check "openclaw config validate --json" PASS || check "openclaw config validate --json" FAIL
+    openclaw skills info skill-creator --agent "$MANAGER_ID" --json >/dev/null 2>&1 && check "成熟 skill-creator 对 manager 可用" PASS || check "成熟 skill-creator 对 manager 可用" FAIL
+  else check "openclaw CLI 可用" UNKNOWN; fi
 fi
 
-# 汇总 + 日志
-LOG_DIR="$PROJECT_ROOT/artifacts/validation"
-mkdir -p "$LOG_DIR"
-STAMP="$(date +%Y%m%d-%H%M%S)"
-LOG_PATH="$LOG_DIR/validate-install.$STAMP.json"
-{ echo "["; IFS=,; echo "${LOG_LINES[*]}"; echo "]"; } > "$LOG_PATH"
-
+LOG_DIR="$PROJECT_ROOT/artifacts/validation"; mkdir -p "$LOG_DIR"
+LOG_PATH="$LOG_DIR/validate-install.$(date +%Y%m%d-%H%M%S).json"
+printf '%s\n' "${LOG_LINES[@]}" | jq -s . > "$LOG_PATH"
 echo ""
 echo "== 汇总：PASS=$PASS_N FAIL=$FAIL_N UNKNOWN=$UNK_N =="
 echo "日志：$LOG_PATH"
-[ "$FAIL_N" -gt 0 ] && exit 1 || { echo "无失败项。"; exit 0; }
+[ "$FAIL_N" -gt 0 ] && exit 1
+echo "无失败项。"

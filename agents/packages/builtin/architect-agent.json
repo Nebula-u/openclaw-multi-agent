@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "kind": "openclaw-agent-package",
+  "id": "architect-agent",
+  "display_name": "Architect Agent",
+  "description": "架构、接口、数据模型、威胁模型与测试策略。",
+  "origin": "builtin",
+  "protected": true,
+  "deletable": false,
+  "workspace_source_rel": "agents/architect-agent/workspace",
+  "runtime_subdir": "agents/architect-agent",
+  "role": "worker",
+  "capabilities": ["architecture.design", "threat.model", "test.strategy"],
+  "model": "",
+  "delegation": { "callable_by_manager": true, "allow_agents": [] },
+  "sandbox_mode": null,
+  "assembly": { "include_common_rules": true, "include_templates": false },
+  "skills": [],
+  "lifecycle": { "register": true, "active": true }
+}

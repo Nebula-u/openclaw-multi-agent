@@ -29,7 +29,7 @@
 
 1. **删除 Python control plane**：无 `sdlcctl`；无 Python orchestrator / dispatcher / state_store / gates / recovery / command_runner；无用于日常工作流的 `pyproject.toml`；不要求用户创建 Python 虚拟环境才能运行本系统。
 2. **`manager-agent` 接管状态、上下文与规则传递**：它是唯一工作流总控，也是控制层文件的唯一写入者。
-3. **OpenClaw 原生会话工具执行调度**：`manager-agent` 用原生跨 Agent 会话工具调用其余 6 个工作 Agent。
+3. **OpenClaw 原生会话工具执行调度**：`manager-agent` 用原生跨 Agent 会话工具调用 package catalog 中已注册、已激活且允许调用的工作 Agent。
 4. **安装脚本只在安装/配置阶段使用**：安装完成后，工作流只依赖 OpenClaw 原生 Agent、原生工具、文件与本地 Git。
 
 ## 3. 三层架构（文本图）
@@ -69,11 +69,11 @@
 
 **唯一事实来源（不是聊天记录）**：用户原始需求文件、`manager-agent` 管理的结构化工作流文件、任务上下文包、Agent 结构化结果与原始报告、本地 Git commit / diff / worktree、原始命令日志与哈希。`manager-agent` 或 Gateway 中断后，新的 `manager-agent` 会话必须能仅凭这些文件恢复（见 `state-and-recovery.md`）。
 
-## 4. 7 个 Agent
+## 4. 内置 Agent 与可插拔 Agent package
 
 | Agent ID | 角色 | 是否可 spawn 其他 Agent |
 |----------|------|--------------------------|
-| `manager-agent` | 唯一工作流总控；默认唯一与用户交流者 | 是，白名单为 6 个工作 Agent，`requireAgentId: true`，`delegationMode: prefer` |
+| `manager-agent` | 唯一工作流总控；默认唯一与用户交流者 | 是，白名单由 active/callable package 自动计算，`requireAgentId: true`，`delegationMode: prefer` |
 | `requirement-agent` | 需求分析、验收标准（`AC-<n>`） | 否（`subagents.allowAgents=[]`） |
 | `architect-agent` | 架构、接口、数据模型、威胁模型、测试策略 | 否 |
 | `developer-agent` | 生产代码实现（真实本地 commit） | 否 |
@@ -81,7 +81,7 @@
 | `test-agent` | 补充并执行测试（`sandbox.mode=off`，`UNSANDBOXED_LOCAL`） | 否 |
 | `release-agent` | 运维前发布候选验证（`GO`/`NO_GO`/`HOLD`） | 否 |
 
-7 个 Agent 的 workspace 与 agentDir **必须彼此不同且均为绝对路径**。详见 `agent-contracts.md`。
+所有 `register=true` Agent 的 workspace 与 agentDir **必须彼此不同且均为绝对路径**。内置 Agent 保持原 ID/路径；生成 Agent 使用 `agents/packages/generated/` 与 `runtime/agents/generated/` 隔离根。详见 `agent-contracts.md` 与 `component-management.md`。
 
 ## 5. 源项目目录说明
 
@@ -124,7 +124,7 @@ D:\MicroConnect\project\openclaw-multi-agent\runtime\
 │   ├── workflows\<workflow-id>\{workflow.json,user-request.md,context-summary.md,
 │   │                            rules-snapshot.md,events.jsonl,tasks\,decisions\,gates\,final-report.md}
 │   ├── active-workflows.json
-│   ├── install-manifest.json      # 记录 runtime_root_abs、7 个 Agent 绝对路径、配置变更、校验结果
+│   ├── install-manifest.json      # 记录 runtime_root_abs、package/Agent 绝对路径、配置变更、校验结果
 │   └── config-snapshots\
 ├── worktrees\<workflow-id>\<task-id>\<run-id>\repo\
 └── artifacts\<workflow-id>\<task-id>\<run-id>\{input,output,raw-logs,checksums.sha256}
@@ -149,6 +149,7 @@ D:\MicroConnect\project\openclaw-multi-agent\runtime\
 - `manager-orchestration.md`：`manager-agent` 原生调度算法。
 - `context-and-rule-passing.md`：上下文与规则传递协议。
 - `workflow.md`：13 阶段主流程与状态机。
-- `agent-contracts.md`：7 个 Agent 的输入校验与强制产物。
+- `agent-contracts.md`：内置角色的输入校验与强制产物。
+- `component-management.md`：Agent package、生成 Agent/Skill、审批与删除边界。
 - `state-and-recovery.md`：文件化状态模型与恢复。
 - `git-worktree-strategy.md`：本地 Git 与 worktree 策略。

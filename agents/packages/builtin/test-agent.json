@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "kind": "openclaw-agent-package",
+  "id": "test-agent",
+  "display_name": "Test Agent",
+  "description": "补充并真实执行测试，保留原始测试证据。",
+  "origin": "builtin",
+  "protected": true,
+  "deletable": false,
+  "workspace_source_rel": "agents/test-agent/workspace",
+  "runtime_subdir": "agents/test-agent",
+  "role": "worker",
+  "capabilities": ["testing.plan", "testing.implementation", "testing.execution"],
+  "model": "",
+  "delegation": { "callable_by_manager": true, "allow_agents": [] },
+  "sandbox_mode": "off",
+  "assembly": { "include_common_rules": true, "include_templates": false },
+  "skills": [],
+  "lifecycle": { "register": true, "active": true }
+}

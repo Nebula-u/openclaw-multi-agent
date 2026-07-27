@@ -52,8 +52,8 @@ openclaw agents add [name]
 }
 ```
 
-- **manager-agent**：`subagents.allowAgents` = 6 个工作 Agent；`requireAgentId: true`；`delegationMode: "prefer"`。
-- **6 个工作 Agent**：`subagents.allowAgents` = `[]`（禁止再派生）。
+- **manager-agent**：`subagents.allowAgents` 由 package catalog 中 `register=true`、`active=true`、`callable_by_manager=true` 的工作 Agent 自动计算；`requireAgentId: true`；`delegationMode: "prefer"`。
+- **工作 Agent**：默认 `subagents.allowAgents = []`（禁止再派生）；生成 Agent 也使用该默认值。
 - **test-agent**：`sandbox.mode = "off"`（本阶段无沙箱的显式声明；不配置 Docker backend / mount / sandbox 网络）。
 
 ## 4. 原生跨 Agent 会话调度（实测存在于 schema / 工具面）

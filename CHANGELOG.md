@@ -2,6 +2,32 @@
 
 本项目遵循语义化的变更记录风格。日期格式 `YYYY-MM-DD`。
 
+## [0.2.0] - 2026-07-27
+
+### 可插拔 Agent package 与审批式生成组件
+
+#### 新增（Added）
+
+- Agent/Skill package、组件申请和构建结果契约。
+- `agents/packages/builtin/`：7 个内置 Agent 的只读 package manifest，不移动或修改原 workspace。
+- `agents/packages/generated/`：新 Agent/Skill 的唯一可写与可删除区域。
+- `scripts/manage-components.ps1`：审批式构建、注册、激活、停用和删除生成 Agent，以及 Skill Workshop 接入。
+- `agent-package-manager` workspace Skill；Skill 内容创建直接复用 OpenClaw bundled `skill-creator`。
+- 生成 Agent 安全模板、组件策略和完整操作文档。
+
+#### 变更（Changed）
+
+- PowerShell/Bash 安装与验证脚本改为扫描 package manifest，不再维护固定 Agent ID 数组。
+- Manager `allowAgents` 根据 register/active/callable package 自动计算。
+- 安装同步增加配置差异跳过、快照、失败恢复和 schema v2 安装清单。
+
+#### 安全（Security）
+
+- 内置 Agent 强制 `protected=true`、`deletable=false`，组件工具拒绝修改和删除。
+- 新 Agent 默认未注册、未激活、无 binding、`allowAgents=[]`。
+- 构建、激活、删除均要求与 component request 匹配的用户审批响应。
+- Skill 只能应用到生成 Agent；本阶段不创建 MCP。
+
 ## [0.1.0] - 2026-07-23
 
 ### 架构重构（Native OpenClaw Architecture Rebuild）

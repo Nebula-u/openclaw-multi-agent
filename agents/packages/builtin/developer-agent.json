@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "kind": "openclaw-agent-package",
+  "id": "developer-agent",
+  "display_name": "Developer Agent",
+  "description": "生产代码实现与本地 Git 提交。",
+  "origin": "builtin",
+  "protected": true,
+  "deletable": false,
+  "workspace_source_rel": "agents/developer-agent/workspace",
+  "runtime_subdir": "agents/developer-agent",
+  "role": "worker",
+  "capabilities": ["software.implementation", "code.change"],
+  "model": "",
+  "delegation": { "callable_by_manager": true, "allow_agents": [] },
+  "sandbox_mode": null,
+  "assembly": { "include_common_rules": true, "include_templates": false },
+  "skills": [],
+  "lifecycle": { "register": true, "active": true }
+}

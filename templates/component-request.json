@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "request_id": "CMP-REPLACE",
+  "decision_id": "DEC-REPLACE",
+  "workflow_id": null,
+  "component_type": "agent",
+  "proposed_id": "replace-agent",
+  "purpose": "REPLACE",
+  "capabilities": [],
+  "requested_by": "manager-agent",
+  "target_agent_id": null,
+  "model": "",
+  "retention": "ask_after_build",
+  "created_at": "1970-01-01T00:00:00Z"
+}

@@ -6,11 +6,11 @@
 
 ## 这是什么
 
-7 个在 OpenClaw 中真实注册、彼此隔离的原生 Agent，协作完成：
+项目内置 7 个在 OpenClaw 中真实注册、彼此隔离的原生 Agent，并通过 package catalog 支持后续接入生成 Agent：
 
 | Agent | 角色 |
 |-------|------|
-| `manager-agent` | 唯一工作流总控；管理状态、上下文、规则、Gate、审批、Git 合并；用原生会话工具调度其余 6 个 Agent |
+| `manager-agent` | 唯一工作流总控；管理状态、上下文、规则、Gate、审批、Git 合并；按 package capability 调度已激活 Agent |
 | `requirement-agent` | 需求分析、验收标准、追踪关系 |
 | `architect-agent` | 架构、接口、数据模型、威胁模型、测试策略、开发任务 |
 | `developer-agent` | 生产代码实现（真实本地 Git commit） |
@@ -25,12 +25,15 @@
 - **仅到"运维前交付"。** 不做真实部署、远程发布、CI/CD 接入、服务启停、生产迁移执行、生产凭证配置、监控告警。`release-agent` 的 `GO` 仅表示"具备移交后续运维/部署阶段的条件"。
 - **仅本地 Git。** 不连接任何远程仓库；不 push/pull/fetch。
 - **绝对路径。** 所有 workspace、agentDir、worktree、artifact、任务输入输出路径均为规范化绝对路径，绝不依赖当前工作目录（即使从 `C:\Windows\System32` 启动）。
+- **内置 Agent 只读。** 生成、更新和删除能力只能操作 `agents/packages/generated/`；内置 7 个 Agent 的源 workspace 不能被组件工具修改或删除。
+- **生成组件必须审批。** 新 Agent/Skill 在构建、激活和删除前分别绑定用户审批；新 Agent 默认未注册、未激活、无 binding、不能派生子 Agent。
 
 ## 前置条件
 
 - 已安装并可运行 OpenClaw（`openclaw --version` 正常）。本机验证：`2026.7.1-2 (0790d9f)`。
 - Git（本机验证：`2.51.2.windows.1`）。
 - PowerShell 7（Windows 主目标，本机验证：`7.6.4`）**或** Bash（本机验证：GNU bash 5.2.37）。
+- Bash 实现需要现成的 `jq` 读取 package JSON；脚本不会自动安装它。
 
 安装脚本**不会**自动安装任何依赖、不联网、不修改系统服务、不删除你已有的 OpenClaw Agent 或配置。
 
@@ -46,7 +49,7 @@ pwsh -File "d:\MicroConnect\project\openclaw-multi-agent\scripts\install.ps1" `
 # 2) 静态验证（不改配置）
 pwsh -File "d:\MicroConnect\project\openclaw-multi-agent\scripts\validate-install.ps1"
 
-# 3) 真正注册 7 个 Agent（会修改 OpenClaw 配置；先自动备份，再校验）
+# 3) 同步所有 register=true 的 Agent package（先自动备份，再校验）
 pwsh -File "d:\MicroConnect\project\openclaw-multi-agent\scripts\install.ps1" `
   -RuntimeRoot "d:\MicroConnect\project\openclaw-multi-agent\runtime" `
   -Apply -Yes
@@ -98,6 +101,21 @@ bash /abs/path/scripts/restore-openclaw-config.sh \
 
 `manager-agent` 会保存原始需求、规范化目标路径、探测 Git 状态、创建 `workflow.json`，然后按 SDLC 阶段调度其余 Agent。详见 [docs/workflow.md](docs/workflow.md) 与 [docs/manager-orchestration.md](docs/manager-orchestration.md)。
 
+## Agent package 与生成组件
+
+内置 Agent 由 `agents/packages/builtin/*.json` 描述，安装脚本不再维护固定 ID 数组。生成 Agent 位于 `agents/packages/generated/agents/<id>/`，生成 Skill 位于 `agents/packages/generated/skills/<slug>/`。
+
+```powershell
+# 查看和校验 catalog
+pwsh -File scripts/manage-components.ps1 -Command List
+pwsh -File scripts/manage-components.ps1 -Command Validate
+
+# 预演 package 同步
+pwsh -File scripts/install.ps1
+```
+
+Manager 只有在用户批准后才能调用 `NewAgent`；构建完成后还需第二次审批才能注册或激活。Skill 内容直接使用 OpenClaw bundled `skill-creator`，proposal/apply/reject/quarantine 使用原生 Skill Workshop，不在项目中重复实现 Skill Creator。完整协议见 [docs/component-management.md](docs/component-management.md)。本阶段不创建 MCP。
+
 ## manager-agent 如何恢复已中断的工作流
 
 新的 manager 会话不依赖聊天历史。它会读取 `<runtime>/control/active-workflows.json`，再读取对应 `workflow.json`、`events.jsonl`、`context-summary.md`、未决审批与 Git 状态后恢复。快照与事件/Git 不一致时进入 `HOLD`。详见 [docs/state-and-recovery.md](docs/state-and-recovery.md)。
@@ -119,6 +137,7 @@ bash /abs/path/scripts/restore-openclaw-config.sh \
 - [docs/compatibility-report.md](docs/compatibility-report.md) — 实测 OpenClaw 版本与差异
 - [docs/troubleshooting.md](docs/troubleshooting.md) — 排错
 - [docs/threat-model.md](docs/threat-model.md) — 威胁模型
+- [docs/component-management.md](docs/component-management.md) — Agent package、审批式生成、Skill Workshop 与删除边界
 
 ## 许可与安全
 

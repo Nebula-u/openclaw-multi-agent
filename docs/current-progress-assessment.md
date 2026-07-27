@@ -32,7 +32,7 @@
 | 任务 | 状态 | 评估 |
 |---|---|---|
 | 项目初始化、目录、配置、OpenClaw 入口 | ✅ | 已有安装、静态校验、配置恢复脚本及完整目录结构；7 个 Agent 已真实注册。 |
-| Agent 注册接口 | 🟡 | 安装脚本可注册固定的 7 个 Agent，但 Agent ID 在脚本中写死，尚非通用、可插拔的注册机制。 |
+| Agent 注册接口 | ✅ | 已迁移为 package manifest 驱动；安装/验证脚本不再维护固定 ID 数组，支持生成 Agent 的审批式构建、注册、激活和安全删除。 |
 | SDLC workflow 设计 | ✅ | 已定义需求、架构、开发、审查、测试、发布交接等 13 阶段。 |
 | 任务/工作流状态机 | 🟡 | Schema 和文档齐全，但实际工作流状态失同步，未形成可信状态机。 |
 | Agent 角色划分 | ✅ | manager、requirement、architect、developer、review、test、release 已落地。 |
@@ -92,7 +92,7 @@
 1. 新增 deployment/operations Agent，明确其权限边界和审批点。
 2. 接入目标环境的部署、健康检查、指标采集、告警、异常定位和回滚建议。
 3. 将测试从 `UNSANDBOXED_LOCAL` 迁移至受控隔离环境。
-4. 将固定 7 Agent 安装方案改为可配置的角色注册和工作流扩展机制。
+4. ✅ 已将固定 7 Agent 安装方案改为 package catalog；后续工作流图扩展仍可在 LangGraph 阶段继续建设。
 
 ## 证据位置
 
