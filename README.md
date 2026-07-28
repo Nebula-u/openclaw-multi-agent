@@ -78,6 +78,187 @@ bash /abs/path/openclaw-sdlc-multi-agent/scripts/install.sh \
   --runtime-root /abs/path/openclaw-sdlc-multi-agent/runtime --apply --yes
 ```
 
+### 当前 Linux 服务器的完整部署步骤
+
+下面的命令只针对当前服务器，已使用本项目在服务器上的真实绝对路径。原有的跨平台示例保留在上方；在这台服务器上部署时，请优先按照本节从上到下执行。
+
+当前服务器已核对的环境基线：
+
+| 项目 | 当前值 |
+|------|--------|
+| 操作系统 | Ubuntu Linux，x86_64 |
+| 项目目录 | `/home/ubuntu/microconnect/openclaw-multi-agent` |
+| Runtime 目录 | `/home/ubuntu/microconnect/openclaw-multi-agent/runtime` |
+| OpenClaw 配置 | `/home/ubuntu/.openclaw/openclaw.json` |
+| OpenClaw | `2026.7.1 (2d2ddc4)` |
+| Bash | `5.2.21` |
+| jq | `1.7` |
+| Git | `2.43.0` |
+| Node.js | `22.23.1` |
+
+> 项目原始兼容性基线是 OpenClaw `2026.7.1-2`，当前服务器运行的是 `2026.7.1`。当前版本的 `agents add`、`config set`、`config validate` 和 Gateway 接口已核对存在，但正式写配置前仍必须完成下面的静态验证和 dry-run。
+
+#### 1. 设置固定路径并检查环境
+
+```bash
+PROJECT_ROOT=/home/ubuntu/microconnect/openclaw-multi-agent
+RUNTIME_ROOT=/home/ubuntu/microconnect/openclaw-multi-agent/runtime
+
+cd "$PROJECT_ROOT"
+
+bash --version | head -n 1
+jq --version
+git --version
+openclaw --version
+openclaw config file
+openclaw config validate --json
+openclaw gateway status
+openclaw models status --agent main --check
+```
+
+预期结果：
+
+- 所有命令均能找到，且 `openclaw config validate --json` 返回 `"valid": true`。
+- `openclaw gateway status` 显示 Gateway 正在运行且 connectivity probe 正常。
+- `openclaw models status --agent main --check` 退出码为 `0`。该命令可能显示经过掩码处理的认证摘要，不要把完整输出复制到日志、Issue 或聊天中。
+
+当前服务器的 Gateway 状态会提示 systemd service 使用了 NVM/包管理器路径。这是现有服务配置警告；只要 runtime 为 `running` 且 connectivity probe 为 `ok`，它不阻塞本项目部署。不要在本部署流程中运行 `openclaw doctor --repair` 或 `openclaw doctor --fix`。
+
+如果 Gateway 未运行，先检查当前 systemd user service；不要运行会自动修改配置的修复命令：
+
+```bash
+systemctl --user status openclaw-gateway.service --no-pager
+journalctl --user -u openclaw-gateway.service -n 100 --no-pager
+```
+
+#### 2. 执行静态验证和安装预演
+
+安装前先运行不依赖已注册 `manager-agent` 的静态检查：
+
+```bash
+bash "$PROJECT_ROOT/scripts/validate-install.sh" --skip-openclaw
+```
+
+然后执行安装 dry-run。该命令不会修改 OpenClaw 配置，但会在 `artifacts/install-dryrun/` 生成计划清单：
+
+```bash
+bash "$PROJECT_ROOT/scripts/install.sh" \
+  --runtime-root "$RUNTIME_ROOT"
+
+jq '{mode, openclaw_version, config_file, runtime_root_abs, agents}' \
+  "$PROJECT_ROOT/artifacts/install-dryrun/install-manifest.dryrun.json"
+```
+
+确认清单满足以下条件后再继续：
+
+- `mode` 为 `DRYRUN`。
+- `config_file` 为 `~/.openclaw/openclaw.json`。这是当前 OpenClaw CLI 的显示形式，实际绝对路径是 `/home/ubuntu/.openclaw/openclaw.json`。
+- `runtime_root_abs` 为 `/home/ubuntu/microconnect/openclaw-multi-agent/runtime`。
+- 清单包含 7 个内置 Agent，且所有 `workspace_abs`、`agentDir_abs` 都位于上述 Runtime 目录中。
+- 没有“同名 Agent 已存在且 workspace 不同”的冲突提示。
+
+#### 3. 正式注册 Agent
+
+当前服务器的 `openclaw config file` 返回带 `~` 的路径。当前 Bash 安装脚本不会展开这个字符串，因此可能跳过脚本内置的配置备份。正式安装前必须先用绝对路径手动备份：
+
+```bash
+CONFIG_FILE=/home/ubuntu/.openclaw/openclaw.json
+SNAPSHOT_DIR="$RUNTIME_ROOT/control/config-snapshots"
+MANUAL_SNAPSHOT="$SNAPSHOT_DIR/openclaw.json.$(date +%Y%m%d-%H%M%S).pre-install.manual.bak"
+
+mkdir -p "$SNAPSHOT_DIR"
+test -f "$CONFIG_FILE"
+jq empty "$CONFIG_FILE"
+cp -- "$CONFIG_FILE" "$MANUAL_SNAPSHOT"
+jq empty "$MANUAL_SNAPSHOT"
+printf '手动配置快照：%s\n' "$MANUAL_SNAPSHOT"
+```
+
+保存终端打印的 `MANUAL_SNAPSHOT` 绝对路径，然后再正式注册：
+
+```bash
+bash "$PROJECT_ROOT/scripts/install.sh" \
+  --runtime-root "$RUNTIME_ROOT" \
+  --apply \
+  --yes
+```
+
+项目脚本设计上会把当前 OpenClaw 配置备份到：
+
+```text
+/home/ubuntu/microconnect/openclaw-multi-agent/runtime/control/config-snapshots/
+```
+
+但在当前 OpenClaw `2026.7.1` 上，安装输出可能提示未找到 `~/.openclaw/openclaw.json` 并跳过脚本内置备份。因此本服务器必须以前一步生成的 `*.pre-install.manual.bak` 为可靠回滚点，不要只依赖安装脚本自动生成的快照。
+
+本命令没有传入 `--set-manager-as-default` 或 `--manager-binding`，因此不会主动把 `manager-agent` 设为默认 Agent，也不会改动现有渠道 binding。当前服务器原有的 `main` Agent 应继续保持默认。
+
+#### 4. 验证安装结果
+
+```bash
+bash "$PROJECT_ROOT/scripts/validate-install.sh"
+openclaw config validate --json
+
+openclaw agents list --json | jq \
+  'map({id, workspace, agentDir, model, isDefault})'
+
+openclaw config get agents.list --json | jq \
+  '.[] | select(.id == "manager-agent") | {id, subagents}'
+
+openclaw config get agents.list --json | jq \
+  '.[] | select(.id == "test-agent") | {id, sandbox}'
+
+openclaw models status --agent manager-agent --check
+```
+
+再执行以下断言；命令没有输出且退出码为 `0` 表示通过：
+
+```bash
+openclaw agents list --json | jq -e '
+  ([
+    "manager-agent",
+    "requirement-agent",
+    "architect-agent",
+    "developer-agent",
+    "review-agent",
+    "test-agent",
+    "release-agent"
+  ] - map(.id) | length) == 0
+' >/dev/null
+
+openclaw agents list --json | jq -e \
+  'any(.[]; .id == "main" and .isDefault == true)' >/dev/null
+```
+
+安装成功应同时满足：
+
+- 7 个项目 Agent 均已注册。
+- `manager-agent.subagents.allowAgents` 包含其余 6 个工作 Agent，且 `requireAgentId=true`、`delegationMode=prefer`。
+- 其余工作 Agent 的 `subagents.allowAgents` 为空。
+- `test-agent.sandbox.mode` 为 `off`，即当前测试阶段是 `UNSANDBOXED_LOCAL`，不是完全隔离。
+- 原有 `main` Agent 的 `isDefault` 仍为 `true`。
+- `openclaw models status --agent manager-agent --check` 和 `openclaw config validate --json` 均成功。
+
+#### 5. 最小调用测试
+
+不改变默认 Agent，显式调用 `manager-agent`：
+
+```bash
+openclaw agent \
+  --agent manager-agent \
+  --message "请只确认 manager-agent 已可用，不要创建工作流。" \
+  --json
+```
+
+如果该命令返回模型或认证错误，先检查该 Agent 的模型状态，不要在 README、日志或 Issue 中粘贴密钥：
+
+```bash
+openclaw models status --agent manager-agent --check
+openclaw models status --agent manager-agent --probe
+```
+
+如果静态验证、配置校验、7 个 Agent 注册、默认 Agent 检查和最小调用测试全部通过，则当前服务器的部署完成。
+
 ## 恢复 OpenClaw 配置
 
 ```powershell
@@ -90,6 +271,35 @@ bash /abs/path/scripts/restore-openclaw-config.sh \
   --snapshot "<runtime>/control/config-snapshots/openclaw.json.<timestamp>.bak"
 ```
 
+当前 OpenClaw `2026.7.1` 的 `openclaw config file` 返回 `~/.openclaw/openclaw.json`，而 Bash 恢复脚本不会展开带引号的 `~`。因此保留上方原始跨平台命令作为项目参考，但当前服务器请使用下面的绝对路径手动恢复流程。
+
+先列出可恢复项：
+
+```bash
+RUNTIME_ROOT=/home/ubuntu/microconnect/openclaw-multi-agent/runtime
+
+ls -1t "$RUNTIME_ROOT"/control/config-snapshots/*.bak
+```
+
+从列表中复制需要恢复的完整绝对路径，先校验快照，再备份当前配置并恢复：
+
+```bash
+CONFIG_FILE=/home/ubuntu/.openclaw/openclaw.json
+SNAPSHOT="/home/ubuntu/microconnect/openclaw-multi-agent/runtime/control/config-snapshots/openclaw.json.<timestamp>.pre-install.manual.bak"
+PRE_RESTORE="$RUNTIME_ROOT/control/config-snapshots/openclaw.json.$(date +%Y%m%d-%H%M%S).pre-restore.manual.bak"
+
+mkdir -p "$RUNTIME_ROOT/control/config-snapshots"
+test -f "$SNAPSHOT"
+jq empty "$SNAPSHOT"
+cp -- "$CONFIG_FILE" "$PRE_RESTORE"
+cp -- "$SNAPSHOT" "$CONFIG_FILE"
+openclaw config validate --json
+systemctl --user restart openclaw-gateway.service
+openclaw gateway status
+```
+
+只有 `openclaw config validate --json` 通过后才重启 Gateway。如果校验失败，不要重启；把 `PRE_RESTORE` 复制回 `/home/ubuntu/.openclaw/openclaw.json` 后重新校验。
+
 恢复脚本只恢复你明确选择的快照，覆盖前会再次备份当前配置。**恢复配置 ≠ 删除 workspace**，两者是不同操作。
 
 ## 如何把需求交给 manager-agent
@@ -98,6 +308,17 @@ bash /abs/path/scripts/restore-openclaw-config.sh \
 
 1. 你的原始需求（自然语言）。
 2. 目标业务项目的**绝对路径**。
+
+当前 Linux 服务器不修改默认 Agent，可通过 CLI 显式把需求交给 `manager-agent`：
+
+```bash
+openclaw agent \
+  --agent manager-agent \
+  --message "请处理以下需求：<你的需求>。目标业务项目绝对路径：/absolute/path/to/target-project" \
+  --json
+```
+
+目标路径必须是待开发业务项目的真实绝对路径，不要填写本 README 中的占位符。若需要在后续命令中继续同一个会话，可为首次调用和后续调用传入相同的 `--session-key`。
 
 `manager-agent` 会保存原始需求、规范化目标路径、探测 Git 状态、创建 `workflow.json`，然后按 SDLC 阶段调度其余 Agent。详见 [docs/workflow.md](docs/workflow.md) 与 [docs/manager-orchestration.md](docs/manager-orchestration.md)。
 
@@ -113,6 +334,18 @@ pwsh -File scripts/manage-components.ps1 -Command Validate
 # 预演 package 同步
 pwsh -File scripts/install.ps1
 ```
+
+上面的组件管理命令依赖 PowerShell 7；当前 Linux 服务器没有对应的 Bash 版 `manage-components.sh`。普通部署和内置 package 校验不需要执行这些 PowerShell 命令，可使用下面的 Linux 命令：
+
+```bash
+PROJECT_ROOT=/home/ubuntu/microconnect/openclaw-multi-agent
+
+bash "$PROJECT_ROOT/scripts/validate-install.sh" --skip-openclaw
+bash "$PROJECT_ROOT/scripts/install.sh" \
+  --runtime-root "$PROJECT_ROOT/runtime"
+```
+
+如果确实要在当前服务器上运行 `manage-components.ps1` 的 `List`、`Validate`、生成或删除组件功能，需要先由管理员安装 PowerShell 7；本项目脚本不会自动安装该依赖。不要把上面的 Bash 校验命令理解为所有组件管理子命令的完整替代品。
 
 Manager 只有在用户批准后才能调用 `NewAgent`；构建完成后还需第二次审批才能注册或激活。Skill 内容直接使用 OpenClaw bundled `skill-creator`，proposal/apply/reject/quarantine 使用原生 Skill Workshop，不在项目中重复实现 Skill Creator。完整协议见 [docs/component-management.md](docs/component-management.md)。本阶段不创建 MCP。
 
