@@ -32,6 +32,8 @@
 - `checksums.sha256`
 - 需改代码的角色（developer / test）还需**真实本地 Git commit**
 
+所有 JSON / JSONL 产物都必须用 Runtime Guard + Ajv 按对应 `contracts/*.schema.json` 本地强校验。首次失败只允许一次 JSON-only retry，只重新生成失败 JSON / JSONL，不重新完整分析；校验错误写入 `raw-logs/json-validation-errors.jsonl`，记录格式见 `contracts/json-validation-error.schema.json`。
+
 ## 4. `result.json` 关键字段（以 contract 为准）
 
 来源 `contracts/result.schema.json`。`required`：
@@ -66,7 +68,7 @@
 
 ### 6.0 manager-agent
 
-`manager-agent` 不产出 `result.json`，而是维护**控制层文件**（唯一写入者）：`workflow.json`、`events.jsonl`、`active-workflows.json`、`context-summary.md`、`rules-snapshot.md`、`tasks/`、`decisions/`（approval-request/response）、`gates/`（gate-result），以及工作流结束时的 `final-report.md`。它对每个工作 Agent 结果执行 §2/§4 校验与 Gate（见 `manager-orchestration.md`）。Runtime Guard 可对文件和工作流做 fail-closed 校验，却不写这些快照、也不调度工作 Agent。终态 workflow 必须有非空 `final-report.md` 且已从 `active-workflows.json` 移除。
+`manager-agent` 不产出 `result.json`，而是维护**控制层文件**（唯一写入者）：`workflow.json`、`events.jsonl`、`active-workflows.json`、`context-summary.md`、`rules-snapshot.md`、`tasks/`、`decisions`（approval-request/response）、`gates/`（gate-result），以及工作流结束时的 `final-report.md`。它对每个工作 Agent 结果执行 §2/§4 校验与 Gate（见 `manager-orchestration.md`），并对工作 Agent 声明的 JSON / JSONL 输出再次执行 Ajv schema 校验。Runtime Guard 可对文件和工作流做 fail-closed 校验，却不写这些快照、也不调度工作 Agent。终态 workflow 必须有非空 `final-report.md` 且已从 `active-workflows.json` 移除。
 
 ### 6.A requirement-agent（§16.A）
 

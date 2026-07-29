@@ -65,10 +65,16 @@ Get-ChildItem -LiteralPath $templatesDir -Filter '*.json' -File | ForEach-Object
 $runtimeGuard = Join-Path $ProjectRoot 'scripts\runtime-guard.mjs'
 $runtimeGuardTest = Join-Path $ProjectRoot 'tests\runtime-guard.test.mjs'
 if (Get-Command node -ErrorAction SilentlyContinue) {
-  $guardOutput = & node $runtimeGuard self-check --project-root $ProjectRoot 2>&1
-  Add-Check 'Runtime Guard contracts/templates 自检' ($LASTEXITCODE -eq 0) ($guardOutput -join "`n")
-  $guardTestOutput = & node --test $runtimeGuardTest 2>&1
-  Add-Check 'Runtime Guard 行为测试' ($LASTEXITCODE -eq 0) (($guardTestOutput -join "`n") | Select-Object -Last 8)
+  $ajvDir = Join-Path $ProjectRoot 'node_modules\ajv'
+  $ajvFormatsDir = Join-Path $ProjectRoot 'node_modules\ajv-formats'
+  if ((Test-Path -LiteralPath $ajvDir) -and (Test-Path -LiteralPath $ajvFormatsDir)) {
+    $guardOutput = & node $runtimeGuard self-check --project-root $ProjectRoot 2>&1
+    Add-Check 'Runtime Guard contracts/templates 自检' ($LASTEXITCODE -eq 0) ($guardOutput -join "`n")
+    $guardTestOutput = & node --test $runtimeGuardTest 2>&1
+    Add-Check 'Runtime Guard 行为测试' ($LASTEXITCODE -eq 0) (($guardTestOutput -join "`n") | Select-Object -Last 8)
+  } else {
+    Add-Check 'Runtime Guard npm 依赖' $false '请先在项目根目录运行 npm install（需要 ajv 与 ajv-formats）'
+  }
 } else {
   Add-Check 'Node.js 可用（Runtime Guard 必需）' $false 'OpenClaw 运行环境应提供 Node.js'
 }

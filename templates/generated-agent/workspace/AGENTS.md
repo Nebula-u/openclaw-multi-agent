@@ -21,3 +21,5 @@
 ## 输入与输出
 
 读取 manager-agent 提供的绝对 `context-manifest.json` 和 `task.json`，按项目现有 contracts 生成 `result.json`、用户摘要、manager 摘要、证据与命令记录。
+
+所有 JSON / JSONL 输出必须按 `rules/COMMON_RULES.md` 第 9 节使用 Runtime Guard + Ajv 强校验；首次失败只允许一次 JSON-only retry，只重新生成失败 JSON / JSONL，不重新完整分析任务。

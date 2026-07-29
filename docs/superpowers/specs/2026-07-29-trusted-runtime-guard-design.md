@@ -8,7 +8,7 @@
 
 - 不恢复 Python 控制平面，不新增 daemon、dispatcher、后台服务或网络依赖。
 - 不替代 manager-agent 的编排职责，不直接调用或包装 `sessions_spawn`。
-- 运行时只依赖 OpenClaw 已经使用的 Node.js 标准库，不新增 npm 依赖。
+- 历史约束：运行时只依赖 OpenClaw 已经使用的 Node.js 标准库，不新增 npm 依赖。当前已由 JSON 强校验需求取代：Runtime Guard 使用 Ajv / ajv-formats 作为本地 JSON Schema validator。
 - 不自动修复损坏的历史状态；发现不一致时退出非零并形成有效 HOLD。
 - 保持当前 12 份第一周 Agent 契约兼容，只对控制层和缺失的关键语义做定向收紧。
 - 当前环境没有历史 `runtime/`，因此历史 Windows Demo 仅支持后续只读审计，不自动迁移。
@@ -88,4 +88,3 @@ approval request/response 都显式包含可空的 `task_id` 与 `run_id`，响�
 ## Documentation Outcome
 
 README 只描述最终能力、命令和边界。CHANGELOG 记录改了什么、为什么改以及改后的效果。架构、工作流、恢复、Gate 和审批文档修正为与机器契约一致。
-

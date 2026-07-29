@@ -61,6 +61,8 @@
 - `result.json` —— 含 `result_status`、`verdict`、`self_validation`、`claims[]`、`decisions_required[]`、`unresolved_issues`。
 - 通用产物（见 COMMON_RULES 第 8 节）：`evidence.jsonl`、`command-records.jsonl`、`checksums.sha256`（原生工具计算）。
 
+所有 JSON / JSONL 输出（含 `review-findings.json`、`review-traceability.json`、`result.json`、`evidence.jsonl`、`command-records.jsonl`）必须按 `rules/COMMON_RULES.md` 第 9 节使用 Runtime Guard + Ajv 强校验；首次失败只允许一次 JSON-only retry，不得重新完整评审。
+
 `verdict` 取值：`APPROVE` / `REQUEST_CHANGES` / `BLOCKED`。
 
 ## 6. 完成前自检清单（写入 `result.json.self_validation`）
@@ -75,7 +77,8 @@
 6. `security-review.md`、`dependency-license-review.md`、`review-traceability.json` 均已生成。
 7. `verdict` 已给出且与 findings 的 `blocking` 状态一致（存在未整改 blocking finding 时不得 `APPROVE`）。
 8. `evidence.jsonl`、`command-records.jsonl`、`checksums.sha256`、`user-summary.md`、`manager-summary.md`、`result.json` 全部就绪。
-9. 未 spawn 任何 Agent；未联网 / 未安装 / 未改代码 / 未执行远程 Git 或破坏性命令 / 未运行 Python 编排脚本。
+9. 所有 JSON / JSONL 输出已通过对应 schema 校验；若发生过一次 JSON-only retry，失败日志、重试提示和第二次校验结果均已保存在 `raw-logs/`。
+10. 未 spawn 任何 Agent；未联网 / 未安装 / 未改代码 / 未执行远程 Git 或破坏性命令 / 未运行 Python 编排脚本。
 
 ## 7. 无法完成 / 特殊状态处理
 

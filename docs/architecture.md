@@ -15,7 +15,7 @@
 | 维度 | 旧架构（已废弃） | 新架构（本项目） |
 |------|------------------|------------------|
 | 控制平面 | OpenClaw 之外单独运行 Python 控制平面（`sdlcctl` + orchestrator / dispatcher / state_store / gates / recovery / command_runner） | **无独立控制平面**；`manager-agent` 用文件协议 + OpenClaw 原生工具完成编排 |
-| 运行时 CLI | 依赖 `sdlcctl` 等自建运行时 CLI | 不引入编排型 CLI；唯一例外是依赖 Node.js 标准库的无状态 `scripts/runtime-guard.mjs`，用于 fail-closed 边界校验 |
+| 运行时 CLI | 依赖 `sdlcctl` 等自建运行时 CLI | 不引入编排型 CLI；唯一例外是无状态 `scripts/runtime-guard.mjs`，依赖 Ajv 做 JSON Schema 校验，用于 fail-closed 边界校验 |
 | 状态管理 | Python `state_store` / 状态机进程 | `manager-agent` 维护的文件：`workflow.json`、`events.jsonl`、`active-workflows.json` 等 |
 | 上下文与规则传递 | Python 编排器组装并注入 | `manager-agent` 按 `CONTEXT_PROTOCOL` 生成任务上下文包与 `rules-snapshot.md` |
 | 任务调度 | Python dispatcher 派发 | OpenClaw 原生跨 Agent 会话工具（如 `sessions_spawn`，显式传 `agentId`） |
@@ -135,12 +135,14 @@ D:\MicroConnect\project\openclaw-multi-agent\runtime\
 
 ## 6.1 Runtime Guard 可信边界
 
-`node scripts/runtime-guard.mjs` 只依赖 Node.js 标准库。manager 在派发、合并、阶段推进、恢复和宣布完成等边界调用它；校验失败时 Guard 返回非零退出码与 `effective_status=HOLD`，manager 必须停止推进并按状态机记录处理结果。可用命令为：
+`node scripts/runtime-guard.mjs` 依赖 Node.js、Ajv 与 ajv-formats；安装后需先执行 `npm install` 以获得官方 JSON Schema validator。manager 在派发、合并、阶段推进、恢复和宣布完成等边界调用它；校验失败时 Guard 返回非零退出码与 `effective_status=HOLD`，manager 必须停止推进并按状态机记录处理结果。可用命令为：
 
-- `validate-file`：按本地 JSON Schema 校验一个 JSON 或 JSONL 文件，并拒绝未解析的运行时占位符。
+- `validate-file`：用 Ajv 按本地 JSON Schema 校验一个 JSON 或 JSONL 文件，并拒绝未解析的运行时占位符；失败时可通过 `--log-file` 写入 `contracts/json-validation-error.schema.json` 约束的 JSONL 错误日志。
 - `append-event`：为事件草稿补入连续的序号、修订号和哈希后，追加到 JSONL 链。
 - `check-workflow`：核对工作流快照、活动索引、事件链、任务/结果、审批、Gate 与候选 Git commit。
-- `self-check`：校验 Guard 支持的 contracts、状态机和受映射模板。
+- `self-check`：用 Ajv strict mode 编译 contracts、校验状态机和受映射模板。
+
+所有工作 Agent 的 JSON / JSONL 输出必须先在本 run 内自检；manager 在派发和接收边界再次校验。首次 JSON 校验失败只允许一次 JSON-only retry，只重生失败 JSON / JSONL，不重新完整分析任务；两次错误都必须保存在 `raw-logs/json-validation-errors.jsonl` 或 workflow 级 `validation-errors.jsonl`。
 
 ## 7. 绝对路径与 System32 防护
 
