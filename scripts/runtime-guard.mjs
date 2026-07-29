@@ -320,6 +320,14 @@ function isRealPathWithin(root, candidate) {
   }
 }
 
+function isSameRealPath(left, right) {
+  try {
+    return realpathSync(left) === realpathSync(right);
+  } catch {
+    return false;
+  }
+}
+
 function jsonFiles(path, suffix = '.json') {
   if (!existsSync(path)) return [];
   return readdirSync(path)
@@ -390,9 +398,11 @@ function appendEventCommand(options) {
   const machine = readJson(join(projectRoot, 'config', 'workflow-state-machine.json'));
   const lockPath = `${eventsPath}.lock`;
   let lock;
+  let acquired = false;
   try {
     try {
       lock = openSync(lockPath, 'wx');
+      acquired = true;
     } catch (error) {
       error.guardIssue = issue('EVENT_LOCK_CONFLICT', lockPath, 'events chain is already locked');
       throw error;
@@ -431,7 +441,7 @@ function appendEventCommand(options) {
     emit({ ok: true, command: 'append-event', event });
   } finally {
     if (lock !== undefined) closeSync(lock);
-    if (existsSync(lockPath)) unlinkSync(lockPath);
+    if (acquired && existsSync(lockPath)) unlinkSync(lockPath);
   }
 }
 
@@ -515,7 +525,7 @@ function validateEventChain(events, workflow, machine, eventSchema, errors) {
     if (hasTaskTransition) {
       if (!event.task_id || !event.run_id || !event.task_status_before || !event.task_status_after) {
         errors.push(issue('INCOMPLETE_TASK_TRANSITION', `events.jsonl:${index + 1}`, 'task transition requires task_id, run_id, before and after status'));
-      } else if (event.task_status_before !== event.task_status_after) {
+      } else {
         const taskKey = `${event.task_id}\u0000${event.run_id}`;
         const priorTaskStatus = taskStatusByRun.get(taskKey);
         if (priorTaskStatus !== undefined && event.task_status_before !== priorTaskStatus) {
@@ -524,9 +534,11 @@ function validateEventChain(events, workflow, machine, eventSchema, errors) {
         if (priorTaskStatus === undefined && event.task_status_before !== 'CREATED') {
           errors.push(issue('INVALID_INITIAL_TASK_TRANSITION', `events.jsonl:${index + 1}`, 'first task event must begin at CREATED'));
         }
-        const allowed = machine.task.transitions[event.task_status_before] ?? [];
-        if (!allowed.includes(event.task_status_after)) {
-          errors.push(issue('INVALID_TASK_TRANSITION', `events.jsonl:${index + 1}`, `${event.task_status_before} -> ${event.task_status_after} is not allowed`));
+        if (event.task_status_before !== event.task_status_after) {
+          const allowed = machine.task.transitions[event.task_status_before] ?? [];
+          if (!allowed.includes(event.task_status_after)) {
+            errors.push(issue('INVALID_TASK_TRANSITION', `events.jsonl:${index + 1}`, `${event.task_status_before} -> ${event.task_status_after} is not allowed`));
+          }
         }
         taskStatusByRun.set(taskKey, event.task_status_after);
       }
@@ -568,8 +580,13 @@ function validateTasks({ workflow, workflowDir, projectRoot, eventRecords, error
     if (task.workflow_id !== workflow.workflow_id) {
       errors.push(issue('TASK_WORKFLOW_MISMATCH', taskFile, 'task workflow_id does not match workflow'));
     }
-    if (!isRealPathWithin(join(workflow.runtime_root_abs, 'artifacts', workflow.workflow_id), task.artifact_root_abs)) {
-      errors.push(issue('ARTIFACT_PATH_ESCAPE', taskFile, 'artifact_root_abs must exist under this workflow artifact root without symlink escape'));
+    const runtimeArtifactsRoot = join(workflow.runtime_root_abs, 'artifacts');
+    const workflowArtifactsRoot = join(runtimeArtifactsRoot, workflow.workflow_id);
+    const expectedArtifactRoot = join(workflowArtifactsRoot, task.task_id, task.run_id);
+    if (!isRealPathWithin(runtimeArtifactsRoot, workflowArtifactsRoot)
+      || !isRealPathWithin(workflowArtifactsRoot, expectedArtifactRoot)
+      || !isSameRealPath(expectedArtifactRoot, task.artifact_root_abs)) {
+      errors.push(issue('ARTIFACT_PATH_ESCAPE', taskFile, 'artifact_root_abs must exactly resolve to this workflow/task/run artifact directory'));
     }
     if (!isRealPathWithin(join(workflow.runtime_root_abs, 'worktrees'), task.worktree_path_abs)) {
       errors.push(issue('WORKTREE_PATH_ESCAPE', taskFile, 'worktree_path_abs must exist under runtime worktrees without symlink escape'));
@@ -638,7 +655,7 @@ function validateTasks({ workflow, workflowDir, projectRoot, eventRecords, error
     }
     if (task.status === 'COMPLETED') {
       for (const requiredOutput of task.required_outputs ?? []) {
-        if (!existsSync(requiredOutput) || !resolve(requiredOutput).startsWith(`${resolve(task.artifact_root_abs)}/`)) {
+        if (!existsSync(requiredOutput) || !isRealPathWithin(task.artifact_root_abs, requiredOutput)) {
           errors.push(issue('REQUIRED_OUTPUT_MISSING', taskFile, `required output is missing or outside artifact root: ${requiredOutput}`));
         }
       }
@@ -771,16 +788,18 @@ function validateGates({ workflow, workflowDir, projectRoot, approvals, taskStat
     const evidenceScope = gate.task_id === null
       ? taskState.allEvidenceIds
       : taskState.evidenceByScope.get(scopeKey(gate.task_id, taskState.tasks.find((task) => task.task_id === gate.task_id)?.run_id)) ?? new Set();
+    validateEvidenceRefs(gate.evidence_refs, evidenceScope, gateFile, errors, { required: true });
     for (const item of gate.items ?? []) {
-      validateEvidenceRefs(item.evidence_refs, evidenceScope, gateFile, errors, { required: item.blocking === true && item.status === 'PASS' });
+      validateEvidenceRefs(item.evidence_refs, evidenceScope, gateFile, errors, { required: item.status === 'PASS' });
     }
     for (const decisionId of gate.approved_decision_ids ?? []) {
       const approval = approvals.resolvedApprovals.get(decisionId);
+      const gateTask = gate.task_id === null ? null : taskState.tasks.find((task) => task.task_id === gate.task_id);
       if (!approval || !['APPROVED', 'MODIFIED'].includes(approval.response.outcome)) {
         errors.push(issue('GATE_APPROVAL_NOT_RESOLVED', gateFile, `approved decision is not resolved: ${decisionId}`));
       } else if (approval.request.workflow_id !== gate.workflow_id
         || (gate.task_id === null && (approval.request.task_id !== null || approval.request.run_id !== null))
-        || (gate.task_id !== null && approval.request.task_id !== gate.task_id)) {
+        || (gate.task_id !== null && (!gateTask || approval.request.task_id !== gate.task_id || approval.request.run_id !== gateTask.run_id))) {
         errors.push(issue('GATE_APPROVAL_SCOPE_MISMATCH', gateFile, 'approved decision scope does not match gate scope'));
       }
     }
@@ -834,6 +853,10 @@ function checkWorkflowCommand(options) {
     return;
   }
   const workflowDir = join(runtimeRoot, 'control', 'workflows', workflowId);
+  if (!isRealPathWithin(join(runtimeRoot, 'control', 'workflows'), workflowDir)) {
+    emit({ ok: false, command: 'check-workflow', workflow_id: workflowId, effective_status: 'HOLD', errors: [issue('WORKFLOW_DIR_ESCAPE', workflowDir, 'workflow directory must resolve inside runtime control/workflows')] }, 1);
+    return;
+  }
   const errors = [];
   const workflowSchema = readJson(join(projectRoot, 'contracts', 'workflow.schema.json'));
   const activeSchema = readJson(join(projectRoot, 'contracts', 'active-workflows.schema.json'));

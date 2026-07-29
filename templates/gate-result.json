@@ -16,6 +16,9 @@
       "notes": "<PLACEHOLDER: UNKNOWN 的原因与补齐方式>"
     }
   ],
+  "evidence_refs": [
+    "<PLACEHOLDER: 支撑 Gate 结论的 evidence_id>"
+  ],
   "approved_decision_ids": [],
   "overall": "HOLD",
   "overall_reason": "<PLACEHOLDER: 当前证据不足，默认 HOLD>"

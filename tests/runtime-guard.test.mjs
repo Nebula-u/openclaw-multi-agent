@@ -2,10 +2,13 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import {
   appendFileSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
   rmSync,
+  renameSync,
+  symlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -953,5 +956,79 @@ test('check-workflow has no public skip-git bypass', () => {
     const result = runGuard(['check-workflow', '--project-root', ROOT, '--runtime-root', fixture.runtimeRoot, '--workflow-id', WORKFLOW_ID, '--skip-git']);
     assert.equal(result.status, 1);
     assert.match(result.stdout, /unknown option: --skip-git/);
+  } finally { fixture.cleanup(); }
+});
+
+test('append-event preserves a pre-existing lock on conflict', () => {
+  const fixture = makeRuntime();
+  try {
+    const eventsPath = join(fixture.workflowDir, 'events.jsonl');
+    writeFileSync(`${eventsPath}.lock`, 'other owner\n', 'utf8');
+    const draftPath = join(fixture.root, 'draft.json');
+    writeJson(draftPath, { event_id: 'EVT-00000000-0000-0000-0000-000000000002', timestamp: '2026-07-29T00:00:01Z', workflow_id: WORKFLOW_ID, task_id: null, run_id: null, actor: 'manager-agent', event_type: 'PHASE_ADVANCED', from_status: 'CREATED', to_status: 'ANALYZING_REQUIREMENTS', from_phase: 'INTAKE', to_phase: 'REQUIREMENTS', task_status_before: null, task_status_after: null, candidate_commit: null, payload: {} });
+    const result = runGuard(['append-event', '--project-root', ROOT, '--events', eventsPath, '--event', draftPath]);
+    assert.equal(result.status, 1);
+    assert.match(result.stdout, /EVENT_LOCK_CONFLICT/);
+    assert.equal(existsSync(`${eventsPath}.lock`), true);
+  } finally { fixture.cleanup(); }
+});
+
+test('check-workflow rejects a first self-transition from RUNNING', () => {
+  const first = signedEvent({ seq: 1, event_type: 'WORKFLOW_CREATED', to_status: 'CREATED', to_phase: 'INTAKE' });
+  const second = signedEvent({ seq: 2, event_type: 'TASK_PING', from_status: 'CREATED', to_status: 'CREATED', from_phase: 'INTAKE', to_phase: 'INTAKE', task_id: TASK_ID, run_id: RUN_ID, task_status_before: 'RUNNING', task_status_after: 'RUNNING', previous_event_hash: first.event_hash });
+  const fixture = makeRuntime({ revision: 2, events: [first, second], taskIds: [TASK_ID] });
+  try {
+    const artifactRoot = join(fixture.runtimeRoot, 'artifacts', WORKFLOW_ID, TASK_ID, RUN_ID);
+    const worktree = join(fixture.runtimeRoot, 'worktrees', WORKFLOW_ID, TASK_ID, RUN_ID, 'repo');
+    mkdirSync(artifactRoot, { recursive: true });
+    mkdirSync(worktree, { recursive: true });
+    minimalTask(fixture, { status: 'RUNNING', artifact_root_abs: artifactRoot, worktree_path_abs: worktree });
+    const result = checkWorkflow(fixture);
+    assert.equal(result.status, 1);
+    assert.match(result.stdout, /INVALID_INITIAL_TASK_TRANSITION/);
+  } finally { fixture.cleanup(); }
+});
+
+test('check-workflow rejects a workflow directory symlink outside runtime control', () => {
+  const fixture = makeRuntime();
+  try {
+    const outside = join(fixture.root, 'outside');
+    mkdirSync(outside);
+    const realWorkflow = fixture.workflowDir;
+    const moved = join(outside, WORKFLOW_ID);
+    renameSync(realWorkflow, moved);
+    symlinkSync(moved, realWorkflow, 'dir');
+    const result = checkWorkflow(fixture);
+    assert.equal(result.status, 1);
+    assert.match(result.stdout, /WORKFLOW_DIR_ESCAPE/);
+  } finally { fixture.cleanup(); }
+});
+
+test('check-workflow rejects a gate approval from a previous run of the same task', () => {
+  const first = signedEvent({ seq: 1, event_type: 'WORKFLOW_CREATED', to_status: 'CREATED', to_phase: 'INTAKE' });
+  const second = signedEvent({ seq: 2, event_type: 'TASK_READY', from_status: 'CREATED', to_status: 'CREATED', from_phase: 'INTAKE', to_phase: 'INTAKE', task_id: TASK_ID, run_id: RUN_ID, task_status_before: 'CREATED', task_status_after: 'READY', previous_event_hash: first.event_hash });
+  const decisionId = 'DEC-00000000-0000-0000-0000-000000000001';
+  const fixture = makeRuntime({ revision: 2, events: [first, second], taskIds: [TASK_ID] });
+  try {
+    const artifactRoot = join(fixture.runtimeRoot, 'artifacts', WORKFLOW_ID, TASK_ID, RUN_ID);
+    const worktree = join(fixture.runtimeRoot, 'worktrees', WORKFLOW_ID, TASK_ID, RUN_ID, 'repo');
+    mkdirSync(artifactRoot, { recursive: true }); mkdirSync(worktree, { recursive: true });
+    minimalTask(fixture, { status: 'READY', artifact_root_abs: artifactRoot, worktree_path_abs: worktree });
+    writeJson(join(fixture.workflowDir, 'decisions', `${decisionId}.request.json`), { schema_version: 1, decision_id: decisionId, workflow_id: WORKFLOW_ID, task_id: TASK_ID, run_id: 'RUN-00000000-0000-0000-0000-000000000999', trigger: 'IMPLEMENTATION_TRADEOFF', summary: 'x', options: [{ option_id: 'A', description: 'a', impact: 'i', reversibility: 'reversible' }], recommended_option: null, evidence_refs: [], created_at: '2026-07-29T00:00:00Z', status: 'RESOLVED' });
+    writeJson(join(fixture.workflowDir, 'decisions', `${decisionId}.response.json`), { schema_version: 1, decision_id: decisionId, workflow_id: WORKFLOW_ID, task_id: TASK_ID, run_id: 'RUN-00000000-0000-0000-0000-000000000999', outcome: 'APPROVED', chosen_option_id: 'A', raw_user_reply_summary: 'yes', decided_by: 'user', decided_at: '2026-07-29T00:00:01Z', notes: '' });
+    writeJson(join(fixture.workflowDir, 'gates', 'gate.json'), { schema_version: 1, gate_id: 'GATE-001', gate_name: 'DevelopmentGate', workflow_id: WORKFLOW_ID, task_id: TASK_ID, checklist_version: 'v1', evaluated_at: '2026-07-29T00:00:01Z', items: [{ item_id: 'I', description: 'd', status: 'PASS', blocking: false, evidence_refs: [], notes: '' }], evidence_refs: ['EVD-none'], approved_decision_ids: [decisionId], overall: 'PASS', overall_reason: 'x' });
+    const result = checkWorkflow(fixture);
+    assert.equal(result.status, 1);
+    assert.match(result.stdout, /GATE_APPROVAL_SCOPE_MISMATCH/);
+  } finally { fixture.cleanup(); }
+});
+
+test('check-workflow requires evidence for every PASS gate item', () => {
+  const fixture = makeRuntime();
+  try {
+    writeJson(join(fixture.workflowDir, 'gates', 'gate.json'), { schema_version: 1, gate_id: 'GATE-001', gate_name: 'DevelopmentGate', workflow_id: WORKFLOW_ID, task_id: null, checklist_version: 'v1', evaluated_at: '2026-07-29T00:00:01Z', items: [{ item_id: 'I', description: 'd', status: 'PASS', blocking: false, evidence_refs: [], notes: '' }], evidence_refs: [], approved_decision_ids: [], overall: 'PASS', overall_reason: 'x' });
+    const result = checkWorkflow(fixture);
+    assert.equal(result.status, 1);
+    assert.match(result.stdout, /GATE_EVIDENCE_REQUIRED/);
   } finally { fixture.cleanup(); }
 });
