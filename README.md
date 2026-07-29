@@ -52,7 +52,7 @@ node scripts/runtime-guard.mjs check-workflow \
   --workflow-id WF-<uuid>
 ```
 
-Guard 失败会以非零退出码和 `effective_status=HOLD` 阻止推进。事件链使用 JSONL、按 Unicode 码点（含数字形态键）递归排序的 canonical JSON 与 SHA-256；非终态快照与活动索引一致，终态则要求 0 条活动记录和非空 `final-report.md`。Review/Security Gate 的 PASS 需要能绑定 current candidate 的 `review-agent` 证据；旧 candidate 的 finding 只保留为历史。ReleaseReadinessGate 仍按 task/run 绑定 decision，但历史 release gate 只做自身内部一致性校验，只有 current candidate 对应的 release gate 才参与终态映射。
+Guard 失败会以非零退出码和 `effective_status=HOLD` 阻止推进。事件链使用 JSONL、按 Unicode 码点（含数字形态键）递归排序的 canonical JSON 与 SHA-256；非终态快照与活动索引一致，终态则要求 0 条活动记录和非空 `final-report.md`。Review/Security Gate 的 PASS 需要能绑定 current candidate 的 `review-agent` 证据；旧 candidate 的 finding 只保留为历史。ReleaseReadinessGate 仍按 task/run 绑定 decision，但历史 release gate 只做自身内部一致性校验，只有 current candidate 的最新 release task/run gate 才参与终态映射。
 
 ## 快速开始（Windows / PowerShell 7）
 

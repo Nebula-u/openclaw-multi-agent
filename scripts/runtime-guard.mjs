@@ -581,6 +581,8 @@ function validateTasks({ workflow, workflowDir, projectRoot, eventRecords, error
   const currentCandidateFindings = [];
   const currentCandidateReviewEvidenceIds = new Set();
   const releaseDecisions = [];
+  let currentReleaseTaskKey = null;
+  let currentReleaseTaskSeq = -1;
   const evidenceByScope = new Map();
   const allEvidenceIds = new Set();
   for (const taskFile of taskFiles) {
@@ -673,6 +675,14 @@ function validateTasks({ workflow, workflowDir, projectRoot, eventRecords, error
           errors.push(issue('REQUIRED_OUTPUT_MISSING', taskFile, `required output is missing or outside artifact root: ${requiredOutput}`));
         }
       }
+    }
+    if (task.task_type === 'RELEASE_VERIFICATION'
+      && task.assigned_agent === 'release-agent'
+      && task.input_commit === workflow.current_candidate_commit
+      && Number.isInteger(latestTaskEvent?.seq)
+      && latestTaskEvent.seq > currentReleaseTaskSeq) {
+      currentReleaseTaskSeq = latestTaskEvent.seq;
+      currentReleaseTaskKey = scopeKey(task.task_id, task.run_id);
     }
 
     const reviewPath = join(outputDir, 'review-findings.json');
@@ -785,7 +795,7 @@ function validateTasks({ workflow, workflowDir, projectRoot, eventRecords, error
   if (!sameStringSet(tasks.map((task) => task.task_id), workflow.task_ids)) {
     errors.push(issue('WORKFLOW_TASK_INDEX_MISMATCH', '$.task_ids', 'workflow task_ids do not match control task files'));
   }
-  return { tasks, blockingFindings, currentCandidateReviewEvidenceIds, releaseDecisions, evidenceByScope, allEvidenceIds };
+  return { tasks, blockingFindings, currentCandidateReviewEvidenceIds, currentReleaseTaskKey, releaseDecisions, evidenceByScope, allEvidenceIds };
 }
 
 function validateApprovals({ workflow, workflowDir, projectRoot, taskState, errors }) {
@@ -943,7 +953,7 @@ function validateGates({ workflow, workflowDir, projectRoot, machine, approvals,
       }
       const expectedStatus = { GO: 'READY_FOR_OPERATIONS_HANDOFF', NO_GO: 'RELEASE_NO_GO', HOLD: 'RELEASE_HOLD' }[verdict];
       const isTerminal = new Set(machine.workflow?.terminal_statuses ?? []).has(workflow.status);
-      if (gateTask?.input_commit === workflow.current_candidate_commit && isTerminal && expectedStatus && workflow.status !== expectedStatus) {
+      if (gateTask && taskState.currentReleaseTaskKey === scopeKey(gateTask.task_id, gateTask.run_id) && isTerminal && expectedStatus && workflow.status !== expectedStatus) {
         errors.push(issue('RELEASE_WORKFLOW_STATUS_MISMATCH', gateFile, `release verdict ${verdict} requires workflow status ${expectedStatus}`));
       }
     }

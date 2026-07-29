@@ -1918,6 +1918,58 @@ test('check-workflow lets historical release gates keep their own noncurrent can
   }
 });
 
+test('check-workflow lets historical same-candidate release rerun gates stay inert', () => {
+  const fixture = makeRuntime({
+    status: 'READY_FOR_OPERATIONS_HANDOFF',
+    phase: 'FINAL_REPORT',
+    withCurrentCandidate: true,
+    taskIds: [TASK_ID, TASK_ID_2],
+  });
+  try {
+    const oldTask = releaseTask(fixture);
+    const currentTask = releaseTask(fixture, {
+      task_id: TASK_ID_2,
+      run_id: RUN_ID_2,
+    });
+    appendTaskLifecycle(fixture, oldTask);
+    appendTaskLifecycle(fixture, currentTask);
+    writeTaskResult(oldTask);
+    writeTaskResult(currentTask);
+    writeTaskEvidence(oldTask, ['EVD-old-release-rerun']);
+    writeTaskEvidence(currentTask, ['EVD-current-release-rerun']);
+    writeReleaseDecision(oldTask, {
+      evidenceId: 'EVD-old-release-rerun',
+      verdict: 'HOLD',
+      checks: [{
+        name: 'old same-candidate check',
+        status: 'HOLD',
+        evidence_refs: ['EVD-old-release-rerun'],
+        notes: 'historical rerun hold',
+      }],
+    });
+    writeReleaseGate(fixture, {
+      taskId: oldTask.task_id,
+      evidenceId: 'EVD-old-release-rerun',
+      overall: 'HOLD',
+    });
+    writeReleaseDecision(currentTask, {
+      evidenceId: 'EVD-current-release-rerun',
+      verdict: 'GO',
+    });
+    writeReleaseGate(fixture, {
+      taskId: currentTask.task_id,
+      evidenceId: 'EVD-current-release-rerun',
+      overall: 'PASS',
+    });
+    clearActiveWorkflows(fixture);
+    writeFileSync(join(fixture.workflowDir, 'final-report.md'), '# Final report\n', 'utf8');
+    const result = checkWorkflow(fixture);
+    assert.equal(result.status, 0, result.stdout || result.stderr);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
 test('check-workflow requires a ReleaseReadinessGate to bind a release task', () => {
   const fixture = makeRuntime({
     status: 'VERIFYING_RELEASE_READINESS',
