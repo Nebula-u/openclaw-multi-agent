@@ -26,7 +26,7 @@
 
 manager 每次写入或接受 `gate-result.json` 前必须从 `items[]` 重新聚合，不能沿用先前的 `overall`：任一 item 为 `FAIL` → `FAIL`；否则任一 item 为 `HOLD` 或任一 `blocking=true` 的 item 为 `UNKNOWN` → `HOLD`；否则 → `PASS`。`NOT_APPLICABLE` 不阻断，但必须说明原因。
 
-此外，下列任一情况都禁止 `overall=PASS`：任何 `FAIL`/`HOLD` item、未决审批、开放的 `BLOCKER`/`CRITICAL`/`HIGH` 且 `blocking=true` 的 finding。`overall` 非 `PASS` **不得**进入下一阶段；`overall_reason` 必须写明依据。Runtime Guard 在 `check-workflow` 中重新计算并 fail-closed。
+此外，下列任一情况都禁止 `overall=PASS`：任何 `FAIL`/`HOLD` item、未决审批；对于 `ReviewGate`、`SecurityGate` 和 `ReleaseReadinessGate`，还包括开放的 `BLOCKER`/`CRITICAL`/`HIGH` 且 `blocking=true` 的 finding。`overall` 非 `PASS` **不得**进入下一阶段；`overall_reason` 必须写明依据。Runtime Guard 在 `check-workflow` 中按此范围重新计算并 fail-closed。
 
 ### 0.4 严重度阈值（来自 policy）
 
