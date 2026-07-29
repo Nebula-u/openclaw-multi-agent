@@ -67,15 +67,15 @@ pwsh -File "d:\MicroConnect\project\openclaw-multi-agent\scripts\install.ps1" `
 
 ```bash
 # 预演
-bash /abs/path/openclaw-sdlc-multi-agent/scripts/install.sh \
+bash scripts/install.sh \
   --runtime-root /abs/path/openclaw-sdlc-multi-agent/runtime
 
 # 静态验证
-bash /abs/path/openclaw-sdlc-multi-agent/scripts/validate-install.sh
+bash scripts/validate-install.sh
 
 # 真正注册（修改配置，先备份）
-bash /abs/path/openclaw-sdlc-multi-agent/scripts/install.sh \
-  --runtime-root /abs/path/openclaw-sdlc-multi-agent/runtime --apply --yes
+bash scripts/install.sh \
+  --runtime-root runtime --apply --yes
 ```
 
 ### 当前 Linux 服务器的完整部署步骤
