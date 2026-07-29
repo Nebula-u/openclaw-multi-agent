@@ -874,6 +874,7 @@ function expectedGateOverall(items) {
 function validateGates({ workflow, workflowDir, projectRoot, machine, approvals, taskState, errors }) {
   const gateSchema = readJson(join(projectRoot, 'contracts', 'gate-result.schema.json'));
   const gateFiles = jsonFiles(join(workflowDir, 'gates'));
+  let currentReleaseGateCount = 0;
   for (const gateFile of gateFiles) {
     const gate = readJsonForCheck(gateFile, errors);
     if (!gate) continue;
@@ -935,6 +936,9 @@ function validateGates({ workflow, workflowDir, projectRoot, machine, approvals,
         || gateTask.assigned_agent !== 'release-agent') {
         errors.push(issue('RELEASE_GATE_TASK_SCOPE_MISMATCH', gateFile, 'ReleaseReadinessGate task must be the current release-agent verification task'));
       }
+      const gateTaskKey = gateTask ? scopeKey(gateTask.task_id, gateTask.run_id) : null;
+      const isCurrentReleaseGate = gateTaskKey !== null && taskState.currentReleaseTaskKey === gateTaskKey;
+      if (isCurrentReleaseGate) currentReleaseGateCount += 1;
       const matchingDecisions = taskState.releaseDecisions.filter(({ decision }) => gateTask
         && decision.workflow_id === workflow.workflow_id
         && decision.task_id === gateTask.task_id
@@ -953,10 +957,15 @@ function validateGates({ workflow, workflowDir, projectRoot, machine, approvals,
       }
       const expectedStatus = { GO: 'READY_FOR_OPERATIONS_HANDOFF', NO_GO: 'RELEASE_NO_GO', HOLD: 'RELEASE_HOLD' }[verdict];
       const isTerminal = new Set(machine.workflow?.terminal_statuses ?? []).has(workflow.status);
-      if (gateTask && taskState.currentReleaseTaskKey === scopeKey(gateTask.task_id, gateTask.run_id) && isTerminal && expectedStatus && workflow.status !== expectedStatus) {
+      if (isCurrentReleaseGate && isTerminal && expectedStatus && workflow.status !== expectedStatus) {
         errors.push(issue('RELEASE_WORKFLOW_STATUS_MISMATCH', gateFile, `release verdict ${verdict} requires workflow status ${expectedStatus}`));
       }
     }
+  }
+  if (['READY_FOR_OPERATIONS_HANDOFF', 'RELEASE_NO_GO'].includes(workflow.status)
+    && taskState.currentReleaseTaskKey !== null
+    && currentReleaseGateCount !== 1) {
+    errors.push(issue('RELEASE_CURRENT_GATE_REQUIRED', join(workflowDir, 'gates'), 'release terminal status requires exactly one gate for the latest current-candidate release task/run'));
   }
 }
 

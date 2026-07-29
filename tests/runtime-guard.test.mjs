@@ -1970,6 +1970,43 @@ test('check-workflow lets historical same-candidate release rerun gates stay ine
   }
 });
 
+test('check-workflow rejects terminal release status without a gate for the latest release rerun', () => {
+  const fixture = makeRuntime({
+    status: 'READY_FOR_OPERATIONS_HANDOFF',
+    phase: 'FINAL_REPORT',
+    withCurrentCandidate: true,
+    taskIds: [TASK_ID, TASK_ID_2],
+  });
+  try {
+    const oldTask = releaseTask(fixture);
+    const latestTask = releaseTask(fixture, {
+      task_id: TASK_ID_2,
+      run_id: RUN_ID_2,
+      status: 'READY',
+    });
+    appendTaskLifecycle(fixture, oldTask);
+    appendTaskLifecycle(fixture, latestTask, 'READY');
+    writeTaskResult(oldTask);
+    writeTaskEvidence(oldTask, ['EVD-old-release-rerun']);
+    writeReleaseDecision(oldTask, {
+      evidenceId: 'EVD-old-release-rerun',
+      verdict: 'GO',
+    });
+    writeReleaseGate(fixture, {
+      taskId: oldTask.task_id,
+      evidenceId: 'EVD-old-release-rerun',
+      overall: 'PASS',
+    });
+    clearActiveWorkflows(fixture);
+    writeFileSync(join(fixture.workflowDir, 'final-report.md'), '# Final report\n', 'utf8');
+    const result = checkWorkflow(fixture);
+    assert.equal(result.status, 1);
+    assert.match(result.stdout, /RELEASE_CURRENT_GATE_REQUIRED/);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
 test('check-workflow requires a ReleaseReadinessGate to bind a release task', () => {
   const fixture = makeRuntime({
     status: 'VERIFYING_RELEASE_READINESS',
