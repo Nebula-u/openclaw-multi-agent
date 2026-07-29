@@ -852,6 +852,20 @@ function checkWorkflowCommand(options) {
     emit({ ok: false, command: 'check-workflow', workflow_id: workflowId, effective_status: 'HOLD', errors: [issue('INVALID_WORKFLOW_ID', '$.workflow-id', 'workflow-id must be a complete safe WF identifier')] }, 1);
     return;
   }
+  let trustedRuntimeRoot;
+  try {
+    trustedRuntimeRoot = realpathSync(runtimeRoot);
+  } catch (error) {
+    emit({ ok: false, command: 'check-workflow', workflow_id: workflowId, effective_status: 'HOLD', errors: [issue('RUNTIME_ROOT_UNREADABLE', runtimeRoot, error.message)] }, 1);
+    return;
+  }
+  for (const runtimeSubtree of [['control', 'workflows'], ['artifacts'], ['worktrees']]) {
+    const root = join(runtimeRoot, ...runtimeSubtree);
+    if (!isRealPathWithin(trustedRuntimeRoot, root)) {
+      emit({ ok: false, command: 'check-workflow', workflow_id: workflowId, effective_status: 'HOLD', errors: [issue('RUNTIME_ROOT_ESCAPE', root, `${runtimeSubtree.join(sep)} must resolve below the trusted runtime root`)] }, 1);
+      return;
+    }
+  }
   const workflowDir = join(runtimeRoot, 'control', 'workflows', workflowId);
   if (!isRealPathWithin(join(runtimeRoot, 'control', 'workflows'), workflowDir)) {
     emit({ ok: false, command: 'check-workflow', workflow_id: workflowId, effective_status: 'HOLD', errors: [issue('WORKFLOW_DIR_ESCAPE', workflowDir, 'workflow directory must resolve inside runtime control/workflows')] }, 1);

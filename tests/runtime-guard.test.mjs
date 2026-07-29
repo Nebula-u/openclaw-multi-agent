@@ -126,6 +126,8 @@ function makeRuntime({
   mkdirSync(join(workflowDir, 'tasks'), { recursive: true });
   mkdirSync(join(workflowDir, 'decisions'), { recursive: true });
   mkdirSync(join(workflowDir, 'gates'), { recursive: true });
+  mkdirSync(join(runtimeRoot, 'artifacts'), { recursive: true });
+  mkdirSync(join(runtimeRoot, 'worktrees'), { recursive: true });
 
   const workflow = {
     schema_version: 1,
@@ -1030,5 +1032,18 @@ test('check-workflow requires evidence for every PASS gate item', () => {
     const result = checkWorkflow(fixture);
     assert.equal(result.status, 1);
     assert.match(result.stdout, /GATE_EVIDENCE_REQUIRED/);
+  } finally { fixture.cleanup(); }
+});
+
+test('check-workflow rejects a control workflows parent symlink outside runtime root', () => {
+  const fixture = makeRuntime();
+  try {
+    const workflowsRoot = join(fixture.runtimeRoot, 'control', 'workflows');
+    const outside = join(fixture.root, 'outside-workflows');
+    renameSync(workflowsRoot, outside);
+    symlinkSync(outside, workflowsRoot, 'dir');
+    const result = checkWorkflow(fixture);
+    assert.equal(result.status, 1);
+    assert.match(result.stdout, /RUNTIME_ROOT_ESCAPE/);
   } finally { fixture.cleanup(); }
 });

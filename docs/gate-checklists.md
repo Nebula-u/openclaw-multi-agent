@@ -34,7 +34,7 @@ manager 每次写入或接受 `gate-result.json` 前必须从 `items[]` 重新�
 
 ### 0.5 gate-result.json 必填字段
 
-`schema_version`、`gate_id`、`gate_name`、`workflow_id`、`task_id`、`checklist_version`（= `gate-checklists v1`）、`evaluated_at`、`items[]`（每项必须含 `item_id`、`description`、`status`、`blocking`、`evidence_refs`、`notes`）、`overall`、`overall_reason`。
+`schema_version`、`gate_id`、`gate_name`、`workflow_id`、`task_id`、`checklist_version`（= `gate-checklists v1`）、`evaluated_at`、顶层 `evidence_refs`（至少一条）、`items[]`（每项必须含 `item_id`、`description`、`status`、`blocking`、`evidence_refs`、`notes`）、`overall`、`overall_reason`。
 
 ---
 
