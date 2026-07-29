@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "gate_id": "GATE-0001",
+  "gate_name": "RequirementGate",
+  "workflow_id": "WF-00000000-0000-0000-0000-000000000000",
+  "task_id": null,
+  "checklist_version": "gate-checklists v1",
+  "evaluated_at": "2026-01-01T00:00:00Z",
+  "items": [
+    {
+      "item_id": "REQ-1",
+      "description": "<PLACEHOLDER: 检查项说明>",
+      "status": "UNKNOWN",
+      "blocking": true,
+      "evidence_refs": [],
+      "notes": "<PLACEHOLDER: UNKNOWN 的原因与补齐方式>"
+    }
+  ],
+  "approved_decision_ids": [],
+  "overall": "HOLD",
+  "overall_reason": "<PLACEHOLDER: 当前证据不足，默认 HOLD>"
+}

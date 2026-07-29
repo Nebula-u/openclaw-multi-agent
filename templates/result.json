@@ -8,7 +8,7 @@
   "attempt": 1,
   "started_at": "2026-01-01T00:00:00Z",
   "finished_at": "2026-01-01T00:00:00Z",
-  "result_status": "COMPLETED",
+  "result_status": "BLOCKED",
   "summary_for_user": "<PLACEHOLDER: 面向用户的简洁总结（中文）>",
   "summary_for_manager": "<PLACEHOLDER: 面向 manager 的结构化总结，含关键事实、证据引用与未决项>",
   "input_commit": "PLACEHOLDER_INPUT_COMMIT_SHA",
@@ -30,18 +30,7 @@
   "evidence_refs": [
     "EVD-00000000-0000-0000-0000-000000000000"
   ],
-  "claims": [
-    {
-      "claim_id": "CLAIM-001",
-      "statement": "<PLACEHOLDER: 一条可核验的陈述>",
-      "classification": "OBSERVED",
-      "evidence_refs": [
-        "EVD-00000000-0000-0000-0000-000000000000"
-      ],
-      "limitations": "<PLACEHOLDER: 该结论的边界与限制>",
-      "observed_at": "2026-01-01T00:00:00Z"
-    }
-  ],
+  "claims": [],
   "findings": [],
   "unresolved_issues": [
     "<PLACEHOLDER: 未解决问题>"
@@ -54,7 +43,7 @@
   "git_status_after_completion": "<PLACEHOLDER: 完成后 git status 摘要>",
   "isolation_mode": "UNSANDBOXED_LOCAL",
   "self_validation": {
-    "preflight_passed": true,
+    "preflight_passed": false,
     "checks": [
       {
         "name": "expected_outputs_present",

@@ -46,6 +46,28 @@ function canonicalize(value) {
   return value;
 }
 
+function compareUnicodeCodePoints(left, right) {
+  const leftPoints = Array.from(left, (character) => character.codePointAt(0));
+  const rightPoints = Array.from(right, (character) => character.codePointAt(0));
+  const length = Math.min(leftPoints.length, rightPoints.length);
+  for (let index = 0; index < length; index += 1) {
+    if (leftPoints[index] !== rightPoints[index]) return leftPoints[index] - rightPoints[index];
+  }
+  return leftPoints.length - rightPoints.length;
+}
+
+function canonicalizeCodePoints(value) {
+  if (Array.isArray(value)) return value.map(canonicalizeCodePoints);
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.keys(value)
+        .sort(compareUnicodeCodePoints)
+        .map((key) => [key, canonicalizeCodePoints(value[key])]),
+    );
+  }
+  return value;
+}
+
 function signedEvent(fields) {
   const unsigned = {
     schema_version: 1,
@@ -247,6 +269,38 @@ test('validate-file rejects a result missing agent_id', () => {
   }
 });
 
+test('validate-file enforces uniqueItems used by component contracts', () => {
+  const root = mkdtempSync(join(tmpdir(), 'openclaw-runtime-guard-unique-'));
+  try {
+    const file = join(root, 'component-request.json');
+    writeJson(file, {
+      schema_version: 1,
+      request_id: 'CMP-validation',
+      decision_id: 'DEC-validation',
+      workflow_id: WORKFLOW_ID,
+      component_type: 'agent',
+      proposed_id: 'validation-agent',
+      purpose: 'validate duplicate capabilities',
+      capabilities: ['validation.test', 'validation.test'],
+      requested_by: 'manager-agent',
+      target_agent_id: null,
+      model: '',
+      retention: 'ask_after_build',
+      created_at: '2026-07-29T00:00:00Z',
+    });
+    const result = runGuard([
+      'validate-file',
+      '--project-root', ROOT,
+      '--schema', join(ROOT, 'contracts', 'component-request.schema.json'),
+      '--file', file,
+    ]);
+    assert.equal(result.status, 1);
+    assert.match(result.stdout, /SCHEMA_UNIQUE_ITEMS/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('append-event creates a deterministic first hash', () => {
   const fixture = makeRuntime();
   try {
@@ -282,6 +336,85 @@ test('append-event creates a deterministic first hash', () => {
     assert.equal(event.state_revision, 1);
     assert.equal(event.previous_event_hash, ZERO_HASH);
     assert.equal(event.event_hash, FIRST_EVENT_HASH);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('append-event canonicalizes object keys by Unicode code point', () => {
+  const fixture = makeRuntime();
+  try {
+    const eventsPath = join(fixture.workflowDir, 'unicode-events.jsonl');
+    const draftPath = join(fixture.root, 'unicode-event-draft.json');
+    writeJson(draftPath, {
+      event_id: 'EVT-00000000-0000-0000-0000-000000000001',
+      timestamp: '2026-07-29T00:00:00Z',
+      workflow_id: WORKFLOW_ID,
+      task_id: null,
+      run_id: null,
+      actor: 'manager-agent',
+      event_type: 'WORKFLOW_CREATED',
+      from_status: null,
+      to_status: 'CREATED',
+      from_phase: null,
+      to_phase: 'INTAKE',
+      task_status_before: null,
+      task_status_after: null,
+      candidate_commit: null,
+      payload: { '\u{10000}': 'supplementary', '\uE000': 'bmp' },
+    });
+    const result = runGuard([
+      'append-event',
+      '--project-root', ROOT,
+      '--events', eventsPath,
+      '--event', draftPath,
+    ]);
+    assert.equal(result.status, 0, result.stdout || result.stderr);
+    const event = JSON.parse(readFileSync(eventsPath, 'utf8').trim());
+    const { event_hash: ignored, ...unsigned } = event;
+    const expectedHash = createHash('sha256')
+      .update(JSON.stringify(canonicalizeCodePoints(unsigned)), 'utf8')
+      .digest('hex');
+    assert.equal(event.event_hash, expectedHash);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('append-event refuses to extend a tampered event chain', () => {
+  const fixture = makeRuntime();
+  try {
+    const eventsPath = join(fixture.workflowDir, 'events.jsonl');
+    const first = JSON.parse(readFileSync(eventsPath, 'utf8').trim());
+    first.event_hash = 'f'.repeat(64);
+    writeFileSync(eventsPath, `${JSON.stringify(first)}\n`, 'utf8');
+    const draftPath = join(fixture.root, 'event-draft.json');
+    writeJson(draftPath, {
+      event_id: 'EVT-00000000-0000-0000-0000-000000000002',
+      timestamp: '2026-07-29T00:00:01Z',
+      workflow_id: WORKFLOW_ID,
+      task_id: null,
+      run_id: null,
+      actor: 'manager-agent',
+      event_type: 'PHASE_ADVANCED',
+      from_status: 'CREATED',
+      to_status: 'ANALYZING_REQUIREMENTS',
+      from_phase: 'INTAKE',
+      to_phase: 'REQUIREMENTS',
+      task_status_before: null,
+      task_status_after: null,
+      candidate_commit: null,
+      payload: {},
+    });
+    const result = runGuard([
+      'append-event',
+      '--project-root', ROOT,
+      '--events', eventsPath,
+      '--event', draftPath,
+    ]);
+    assert.equal(result.status, 1);
+    assert.match(result.stdout, /EVENT_HASH_MISMATCH/);
+    assert.equal(readFileSync(eventsPath, 'utf8').trim(), JSON.stringify(first));
   } finally {
     fixture.cleanup();
   }
@@ -328,6 +461,82 @@ test('check-workflow rejects active index revision drift', () => {
     const result = checkWorkflow(fixture);
     assert.equal(result.status, 1);
     assert.match(result.stdout, /ACTIVE_WORKFLOW_MISMATCH/);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('check-workflow rejects a result whose artifact root differs from its task', () => {
+  const fixture = makeRuntime({ taskIds: [TASK_ID] });
+  try {
+    const task = minimalTask(fixture);
+    writeJson(join(task.artifact_root_abs, 'output', 'result.json'), {
+      schema_version: 1,
+      workflow_id: WORKFLOW_ID,
+      task_id: TASK_ID,
+      run_id: RUN_ID,
+      agent_id: 'review-agent',
+      role: 'reviewer',
+      attempt: 1,
+      started_at: '2026-07-29T00:00:00Z',
+      finished_at: '2026-07-29T00:00:01Z',
+      result_status: 'COMPLETED',
+      summary_for_user: 'review complete',
+      summary_for_manager: 'review complete',
+      worktree_path_abs: fixture.targetRoot,
+      artifact_root_abs: join(fixture.runtimeRoot, 'artifacts', 'another-run'),
+      isolation_mode: 'UNSANDBOXED_LOCAL',
+      self_validation: { preflight_passed: true, checks: [] },
+    });
+    const result = checkWorkflow(fixture);
+    assert.equal(result.status, 1);
+    assert.match(result.stdout, /RESULT_PATH_MISMATCH/);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('check-workflow rejects a command record from another task or run', () => {
+  const fixture = makeRuntime({ taskIds: [TASK_ID] });
+  try {
+    const task = minimalTask(fixture);
+    writeJson(join(task.artifact_root_abs, 'output', 'result.json'), {
+      schema_version: 1,
+      workflow_id: WORKFLOW_ID,
+      task_id: TASK_ID,
+      run_id: RUN_ID,
+      agent_id: 'review-agent',
+      role: 'reviewer',
+      attempt: 1,
+      started_at: '2026-07-29T00:00:00Z',
+      finished_at: '2026-07-29T00:00:01Z',
+      result_status: 'COMPLETED',
+      summary_for_user: 'review complete',
+      summary_for_manager: 'review complete',
+      worktree_path_abs: fixture.targetRoot,
+      artifact_root_abs: task.artifact_root_abs,
+      isolation_mode: 'UNSANDBOXED_LOCAL',
+      self_validation: { preflight_passed: true, checks: [] },
+    });
+    writeFileSync(join(task.artifact_root_abs, 'output', 'command-records.jsonl'), `${JSON.stringify({
+      command_record_id: 'CMD-0001',
+      executable: 'node',
+      cwd_abs: fixture.targetRoot,
+      started_at: '2026-07-29T00:00:00Z',
+      finished_at: '2026-07-29T00:00:01Z',
+      exit_code: 0,
+      timed_out: false,
+      stdout_path_abs: join(task.artifact_root_abs, 'raw-logs', 'stdout.log'),
+      stderr_path_abs: join(task.artifact_root_abs, 'raw-logs', 'stderr.log'),
+      attempt: 1,
+      invoked_by_agent: 'review-agent',
+      task_id: 'TASK-00000000-0000-0000-0000-000000000999',
+      run_id: RUN_ID,
+      isolation_mode: 'UNSANDBOXED_LOCAL',
+    })}\n`, 'utf8');
+    const result = checkWorkflow(fixture);
+    assert.equal(result.status, 1);
+    assert.match(result.stdout, /COMMAND_RECORD_SCOPE_MISMATCH/);
   } finally {
     fixture.cleanup();
   }
@@ -381,6 +590,39 @@ test('check-workflow rejects FAIL items with PASS overall', () => {
   }
 });
 
+test('check-workflow rejects a gate for another workflow', () => {
+  const fixture = makeRuntime();
+  try {
+    writeJson(join(fixture.workflowDir, 'gates', 'requirement-1.json'), {
+      schema_version: 1,
+      gate_id: 'GATE-001',
+      gate_name: 'RequirementGate',
+      workflow_id: 'WF-00000000-0000-0000-0000-000000000999',
+      task_id: null,
+      checklist_version: 'gate-checklists v1',
+      evaluated_at: '2026-07-29T00:00:01Z',
+      items: [
+        {
+          item_id: 'REQ-1',
+          description: 'requirements saved',
+          status: 'PASS',
+          blocking: true,
+          evidence_refs: [],
+          notes: 'present',
+        },
+      ],
+      approved_decision_ids: [],
+      overall: 'PASS',
+      overall_reason: 'all items pass',
+    });
+    const result = checkWorkflow(fixture);
+    assert.equal(result.status, 1);
+    assert.match(result.stdout, /GATE_WORKFLOW_MISMATCH/);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
 test('check-workflow rejects PASS while an approval is pending', () => {
   const decisionId = 'DEC-00000000-0000-0000-0000-000000000001';
   const fixture = makeRuntime({
@@ -390,6 +632,7 @@ test('check-workflow rejects PASS while an approval is pending', () => {
   });
   try {
     writeJson(join(fixture.workflowDir, 'decisions', `${decisionId}.request.json`), {
+      schema_version: 1,
       decision_id: decisionId,
       workflow_id: WORKFLOW_ID,
       task_id: null,
@@ -444,6 +687,7 @@ test('check-workflow rejects approval responses reused across task or run', () =
   const fixture = makeRuntime();
   try {
     writeJson(join(fixture.workflowDir, 'decisions', `${decisionId}.request.json`), {
+      schema_version: 1,
       decision_id: decisionId,
       workflow_id: WORKFLOW_ID,
       task_id: TASK_ID,
@@ -464,6 +708,7 @@ test('check-workflow rejects approval responses reused across task or run', () =
       status: 'RESOLVED',
     });
     writeJson(join(fixture.workflowDir, 'decisions', `${decisionId}.response.json`), {
+      schema_version: 1,
       decision_id: decisionId,
       workflow_id: WORKFLOW_ID,
       task_id: 'TASK-00000000-0000-0000-0000-000000000999',
@@ -478,6 +723,74 @@ test('check-workflow rejects approval responses reused across task or run', () =
     const result = checkWorkflow(fixture);
     assert.equal(result.status, 1);
     assert.match(result.stdout, /APPROVAL_SCOPE_MISMATCH/);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('check-workflow rejects a gate approval requested for another workflow', () => {
+  const decisionId = 'DEC-00000000-0000-0000-0000-000000000001';
+  const fixture = makeRuntime();
+  try {
+    writeJson(join(fixture.workflowDir, 'decisions', `${decisionId}.request.json`), {
+      schema_version: 1,
+      decision_id: decisionId,
+      workflow_id: 'WF-00000000-0000-0000-0000-000000000999',
+      task_id: null,
+      run_id: null,
+      trigger: 'IMPLEMENTATION_TRADEOFF',
+      summary: 'choose implementation',
+      options: [
+        {
+          option_id: 'SAFE',
+          description: 'safe option',
+          impact: 'slower',
+          reversibility: 'reversible',
+        },
+      ],
+      recommended_option: null,
+      evidence_refs: [],
+      created_at: '2026-07-29T00:00:00Z',
+      status: 'RESOLVED',
+    });
+    writeJson(join(fixture.workflowDir, 'decisions', `${decisionId}.response.json`), {
+      schema_version: 1,
+      decision_id: decisionId,
+      workflow_id: 'WF-00000000-0000-0000-0000-000000000999',
+      task_id: null,
+      run_id: null,
+      outcome: 'APPROVED',
+      chosen_option_id: 'SAFE',
+      raw_user_reply_summary: 'approved safe option',
+      decided_by: 'user',
+      decided_at: '2026-07-29T00:00:01Z',
+      notes: '',
+    });
+    writeJson(join(fixture.workflowDir, 'gates', 'development-1.json'), {
+      schema_version: 1,
+      gate_id: 'GATE-DEV-001',
+      gate_name: 'DevelopmentGate',
+      workflow_id: WORKFLOW_ID,
+      task_id: null,
+      checklist_version: 'gate-checklists v1',
+      evaluated_at: '2026-07-29T00:00:01Z',
+      items: [
+        {
+          item_id: 'DEV-1',
+          description: 'approval recorded',
+          status: 'PASS',
+          blocking: true,
+          evidence_refs: [],
+          notes: 'present',
+        },
+      ],
+      approved_decision_ids: [decisionId],
+      overall: 'PASS',
+      overall_reason: 'all items pass',
+    });
+    const result = checkWorkflow(fixture);
+    assert.equal(result.status, 1);
+    assert.match(result.stdout, /APPROVAL_WORKFLOW_MISMATCH/);
   } finally {
     fixture.cleanup();
   }
