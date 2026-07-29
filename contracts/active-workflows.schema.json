@@ -22,7 +22,7 @@
           "workflow_json_abs"
         ],
         "properties": {
-          "workflow_id": { "type": "string", "pattern": "^WF-" },
+          "workflow_id": { "type": "string", "pattern": "^WF-[A-Za-z0-9][A-Za-z0-9-]*$" },
           "status": {
             "type": "string",
             "enum": [

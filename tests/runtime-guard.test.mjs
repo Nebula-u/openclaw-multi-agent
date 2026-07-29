@@ -110,6 +110,16 @@ function makeRuntime({
   const targetRoot = join(root, 'target');
   const workflowDir = join(runtimeRoot, 'control', 'workflows', WORKFLOW_ID);
   mkdirSync(targetRoot, { recursive: true });
+  const git = (args) => {
+    const result = spawnSync('git', args, { encoding: 'utf8' });
+    assert.equal(result.status, 0, result.stderr);
+    return result.stdout.trim();
+  };
+  git(['init', '-q', targetRoot]);
+  writeFileSync(join(targetRoot, 'README.md'), 'fixture\n', 'utf8');
+  git(['-C', targetRoot, 'add', 'README.md']);
+  git(['-C', targetRoot, '-c', 'user.name=Runtime Guard Test', '-c', 'user.email=guard@example.test', 'commit', '-qm', 'fixture']);
+  git(['-C', targetRoot, 'branch', '-M', `sdlc/${WORKFLOW_ID}/integration`]);
   mkdirSync(join(workflowDir, 'tasks'), { recursive: true });
   mkdirSync(join(workflowDir, 'decisions'), { recursive: true });
   mkdirSync(join(workflowDir, 'gates'), { recursive: true });
@@ -179,7 +189,6 @@ function checkWorkflow(fixture) {
     '--project-root', ROOT,
     '--runtime-root', fixture.runtimeRoot,
     '--workflow-id', WORKFLOW_ID,
-    '--skip-git',
   ]);
 }
 
@@ -469,7 +478,7 @@ test('check-workflow rejects active index revision drift', () => {
 test('check-workflow rejects a result whose artifact root differs from its task', () => {
   const fixture = makeRuntime({ taskIds: [TASK_ID] });
   try {
-    const task = minimalTask(fixture);
+    const task = minimalTask(fixture, { status: 'READY' });
     writeJson(join(task.artifact_root_abs, 'output', 'result.json'), {
       schema_version: 1,
       workflow_id: WORKFLOW_ID,
@@ -866,4 +875,83 @@ test('check-workflow accepts a consistent minimal workflow', () => {
   } finally {
     fixture.cleanup();
   }
+});
+
+test('validate-file rejects a Draft-07 false schema', () => {
+  const root = mkdtempSync(join(tmpdir(), 'openclaw-runtime-guard-false-schema-'));
+  try {
+    const schemaPath = join(root, 'false.schema.json');
+    const valuePath = join(root, 'value.json');
+    writeFileSync(schemaPath, 'false\n', 'utf8');
+    writeJson(valuePath, { any: 'value' });
+    const result = runGuard(['validate-file', '--schema', schemaPath, '--file', valuePath]);
+    assert.equal(result.status, 1);
+    assert.match(result.stdout, /SCHEMA_FALSE/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('check-workflow rejects a cancelled approval reused by a gate', () => {
+  const decisionId = 'DEC-00000000-0000-0000-0000-000000000001';
+  const fixture = makeRuntime();
+  try {
+    writeJson(join(fixture.workflowDir, 'decisions', `${decisionId}.request.json`), { schema_version: 1, decision_id: decisionId, workflow_id: WORKFLOW_ID, task_id: null, run_id: null, trigger: 'IMPLEMENTATION_TRADEOFF', summary: 'x', options: [{ option_id: 'A', description: 'a', impact: 'i', reversibility: 'reversible' }], recommended_option: null, evidence_refs: [], created_at: '2026-07-29T00:00:00Z', status: 'CANCELLED' });
+    writeJson(join(fixture.workflowDir, 'decisions', `${decisionId}.response.json`), { schema_version: 1, decision_id: decisionId, workflow_id: WORKFLOW_ID, task_id: null, run_id: null, outcome: 'APPROVED', chosen_option_id: 'A', raw_user_reply_summary: 'yes', decided_by: 'user', decided_at: '2026-07-29T00:00:01Z', notes: '' });
+    writeJson(join(fixture.workflowDir, 'gates', 'gate.json'), { schema_version: 1, gate_id: 'GATE-001', gate_name: 'DevelopmentGate', workflow_id: WORKFLOW_ID, task_id: null, checklist_version: 'v1', evaluated_at: '2026-07-29T00:00:01Z', items: [{ item_id: 'I', description: 'd', status: 'PASS', blocking: false, evidence_refs: [], notes: '' }], approved_decision_ids: [decisionId], overall: 'PASS', overall_reason: 'x' });
+    const result = checkWorkflow(fixture);
+    assert.equal(result.status, 1);
+    assert.match(result.stdout, /CANCELLED_APPROVAL_HAS_RESPONSE|GATE_APPROVAL_NOT_RESOLVED/);
+  } finally { fixture.cleanup(); }
+});
+
+test('check-workflow blocks an open HIGH finding even when nonblocking', () => {
+  const fixture = makeRuntime({ taskIds: [TASK_ID] });
+  try {
+    const task = minimalTask(fixture, { status: 'READY' });
+    writeJson(join(task.artifact_root_abs, 'output', 'review-findings.json'), { schema_version: 1, workflow_id: WORKFLOW_ID, task_id: TASK_ID, reviewed_commit: 'b'.repeat(40), review_scope: 'PRODUCTION_CODE', verdict: 'REQUEST_CHANGES', findings: [{ finding_id: 'FIND-1', severity: 'HIGH', category: 'security', title: 't', description: 'd', blocking: false, status: 'OPEN' }] });
+    writeJson(join(fixture.workflowDir, 'gates', 'gate.json'), { schema_version: 1, gate_id: 'GATE-001', gate_name: 'SecurityGate', workflow_id: WORKFLOW_ID, task_id: null, checklist_version: 'v1', evaluated_at: '2026-07-29T00:00:01Z', items: [{ item_id: 'I', description: 'd', status: 'PASS', blocking: false, evidence_refs: [], notes: '' }], approved_decision_ids: [], overall: 'PASS', overall_reason: 'x' });
+    const result = checkWorkflow(fixture);
+    assert.equal(result.status, 1);
+    assert.match(result.stdout, /OPEN_BLOCKING_FINDING/);
+  } finally { fixture.cleanup(); }
+});
+
+test('check-workflow rejects a PASS release gate without a matching release decision', () => {
+  const fixture = makeRuntime();
+  try {
+    writeJson(join(fixture.workflowDir, 'gates', 'release.json'), { schema_version: 1, gate_id: 'GATE-001', gate_name: 'ReleaseReadinessGate', workflow_id: WORKFLOW_ID, task_id: null, checklist_version: 'v1', evaluated_at: '2026-07-29T00:00:01Z', items: [{ item_id: 'I', description: 'd', status: 'PASS', blocking: false, evidence_refs: [], notes: '' }], approved_decision_ids: [], overall: 'PASS', overall_reason: 'x' });
+    const result = checkWorkflow(fixture);
+    assert.equal(result.status, 1);
+    assert.match(result.stdout, /RELEASE_DECISION_REQUIRED/);
+  } finally { fixture.cleanup(); }
+});
+
+test('append-event rejects a semantically invalid workflow transition', () => {
+  const fixture = makeRuntime();
+  try {
+    const draftPath = join(fixture.root, 'bad-event.json');
+    writeJson(draftPath, { event_id: 'EVT-00000000-0000-0000-0000-000000000002', timestamp: '2026-07-29T00:00:01Z', workflow_id: WORKFLOW_ID, task_id: null, run_id: null, actor: 'manager-agent', event_type: 'PHASE_ADVANCED', from_status: 'CREATED', to_status: 'TESTING', from_phase: 'INTAKE', to_phase: 'TESTING', task_status_before: null, task_status_after: null, candidate_commit: null, payload: {} });
+    const result = runGuard(['append-event', '--project-root', ROOT, '--events', join(fixture.workflowDir, 'events.jsonl'), '--event', draftPath]);
+    assert.equal(result.status, 1);
+    assert.match(result.stdout, /INVALID_WORKFLOW_TRANSITION/);
+  } finally { fixture.cleanup(); }
+});
+
+test('check-workflow rejects a traversal workflow id before reading control files', () => {
+  const fixture = makeRuntime();
+  try {
+    const result = runGuard(['check-workflow', '--project-root', ROOT, '--runtime-root', fixture.runtimeRoot, '--workflow-id', '../x']);
+    assert.equal(result.status, 1);
+    assert.match(result.stdout, /INVALID_WORKFLOW_ID/);
+  } finally { fixture.cleanup(); }
+});
+
+test('check-workflow has no public skip-git bypass', () => {
+  const fixture = makeRuntime();
+  try {
+    const result = runGuard(['check-workflow', '--project-root', ROOT, '--runtime-root', fixture.runtimeRoot, '--workflow-id', WORKFLOW_ID, '--skip-git']);
+    assert.equal(result.status, 1);
+    assert.match(result.stdout, /unknown option: --skip-git/);
+  } finally { fixture.cleanup(); }
 });

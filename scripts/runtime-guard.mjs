@@ -10,8 +10,10 @@ import {
   openSync,
   readFileSync,
   readdirSync,
+  realpathSync,
+  unlinkSync,
 } from 'node:fs';
-import { isAbsolute, join, resolve } from 'node:path';
+import { isAbsolute, join, resolve, sep } from 'node:path';
 
 const SUPPORTED_SCHEMA_KEYS = new Set([
   '$id',
@@ -45,9 +47,12 @@ function parseArgs(argv) {
       throw new Error(`unexpected positional argument: ${token}`);
     }
     const name = token.slice(2);
-    if (['jsonl', 'allow-placeholders', 'skip-git'].includes(name)) {
+    if (['jsonl', 'allow-placeholders'].includes(name)) {
       options[name] = true;
       continue;
+    }
+    if (!['schema', 'file', 'project-root', 'events', 'event', 'runtime-root', 'workflow-id'].includes(name)) {
+      throw new Error(`unknown option: --${name}`);
     }
     const value = rest[index + 1];
     if (value === undefined || value.startsWith('--')) {
@@ -128,6 +133,7 @@ function resolveLocalRef(rootSchema, reference) {
 }
 
 function assertSupportedSchema(schema, path = '#', errors = []) {
+  if (typeof schema === 'boolean') return errors;
   if (!isObject(schema)) return errors;
   for (const [key, value] of Object.entries(schema)) {
     if (!SUPPORTED_SCHEMA_KEYS.has(key)) {
@@ -154,6 +160,11 @@ function validateDateTime(value) {
 }
 
 function validateValue(value, schema, rootSchema, path = '$', errors = []) {
+  if (schema === false) {
+    errors.push(issue('SCHEMA_FALSE', path, 'boolean false schema rejects every instance'));
+    return errors;
+  }
+  if (schema === true) return errors;
   if (schema.$ref) {
     const referenced = resolveLocalRef(rootSchema, schema.$ref);
     if (!referenced) {
@@ -286,6 +297,29 @@ function sameStringSet(left, right) {
   return equalJson(sortedUnique(left), sortedUnique(right));
 }
 
+function scopeKey(taskId, runId) {
+  return `${taskId}\u0000${runId}`;
+}
+
+function validateEvidenceRefs(refs, available, source, errors, { required = false } = {}) {
+  if (required && (!Array.isArray(refs) || refs.length === 0)) {
+    errors.push(issue('GATE_EVIDENCE_REQUIRED', source, 'blocking PASS item requires evidence_refs'));
+  }
+  for (const reference of refs ?? []) {
+    if (!available.has(reference)) errors.push(issue('EVIDENCE_REFERENCE_NOT_FOUND', source, `evidence reference is not available in scope: ${reference}`));
+  }
+}
+
+function isRealPathWithin(root, candidate) {
+  try {
+    const normalizedRoot = realpathSync(root);
+    const normalizedCandidate = realpathSync(candidate);
+    return normalizedCandidate === normalizedRoot || normalizedCandidate.startsWith(`${normalizedRoot}${sep}`);
+  } catch {
+    return false;
+  }
+}
+
 function jsonFiles(path, suffix = '.json') {
   if (!existsSync(path)) return [];
   return readdirSync(path)
@@ -352,55 +386,53 @@ function appendEventCommand(options) {
   const eventsPath = resolve(requireOption(options, 'events'));
   const draftPath = resolve(requireOption(options, 'event'));
   const eventSchema = readJson(join(projectRoot, 'contracts', 'workflow-event.schema.json'));
-  const existing = existsSync(eventsPath) ? readJsonLines(eventsPath).map((record) => record.value) : [];
   const draft = readJson(draftPath);
-  const errors = [];
-  let prior = null;
-  for (const [index, existingEvent] of existing.entries()) {
-    const source = `events.jsonl:${index + 1}`;
-    addSchemaErrors(errors, existingEvent, eventSchema, source);
-    const expectedSequence = index + 1;
-    if (existingEvent.seq !== expectedSequence || existingEvent.state_revision !== expectedSequence) {
-      errors.push(issue('EVENT_SEQUENCE_MISMATCH', source, `expected seq and state_revision ${expectedSequence}`));
-    }
-    const expectedPreviousHash = prior?.event_hash ?? '0'.repeat(64);
-    if (existingEvent.previous_event_hash !== expectedPreviousHash) {
-      errors.push(issue('EVENT_PREVIOUS_HASH_MISMATCH', source, 'previous_event_hash does not match prior event'));
-    }
-    if (existingEvent.event_hash !== eventHash(existingEvent)) {
-      errors.push(issue('EVENT_HASH_MISMATCH', source, 'event_hash does not match canonical event content'));
-    }
-    if (prior && existingEvent.workflow_id !== prior.workflow_id) {
-      errors.push(issue('EVENT_WORKFLOW_MISMATCH', source, 'event workflow differs from existing chain'));
-    }
-    prior = existingEvent;
-  }
-  const previous = existing.at(-1) ?? null;
-  const event = {
-    ...draft,
-    schema_version: 1,
-    seq: existing.length + 1,
-    state_revision: existing.length + 1,
-    previous_event_hash: previous?.event_hash ?? '0'.repeat(64),
-  };
-  delete event.event_hash;
-  event.event_hash = eventHash(event);
-  errors.push(...validateInstance(event, eventSchema));
-  if (previous && previous.workflow_id !== event.workflow_id) {
-    errors.push(issue('EVENT_WORKFLOW_MISMATCH', '$.workflow_id', 'event workflow differs from existing chain'));
-  }
-  if (errors.length > 0) {
-    emit({ ok: false, command: 'append-event', effective_status: 'HOLD', errors }, 1);
-    return;
-  }
-  const descriptor = openSync(eventsPath, 'a');
+  const machine = readJson(join(projectRoot, 'config', 'workflow-state-machine.json'));
+  const lockPath = `${eventsPath}.lock`;
+  let lock;
   try {
+    try {
+      lock = openSync(lockPath, 'wx');
+    } catch (error) {
+      error.guardIssue = issue('EVENT_LOCK_CONFLICT', lockPath, 'events chain is already locked');
+      throw error;
+    }
+    const existing = existsSync(eventsPath) ? readJsonLines(eventsPath).map((record) => record.value) : [];
+    const previous = existing.at(-1) ?? null;
+    const event = {
+      ...draft,
+      schema_version: 1,
+      seq: existing.length + 1,
+      state_revision: existing.length + 1,
+      previous_event_hash: previous?.event_hash ?? '0'.repeat(64),
+    };
+    delete event.event_hash;
+    event.event_hash = eventHash(event);
+    const errors = [];
+    validateStateMachine(machine, errors);
+    validateEventChain([...existing, event], {
+      workflow_id: event.workflow_id,
+      status: event.to_status,
+      current_phase: event.to_phase,
+      current_candidate_commit: event.candidate_commit,
+      state_revision: event.state_revision,
+    }, machine, eventSchema, errors);
+    if (errors.length > 0) {
+      emit({ ok: false, command: 'append-event', effective_status: 'HOLD', errors }, 1);
+      return;
+    }
+    const descriptor = openSync(eventsPath, 'a');
+    try {
     appendFileSync(descriptor, `${JSON.stringify(event)}\n`, 'utf8');
     fsyncSync(descriptor);
+    } finally {
+      closeSync(descriptor);
+    }
+    emit({ ok: true, command: 'append-event', event });
   } finally {
-    closeSync(descriptor);
+    if (lock !== undefined) closeSync(lock);
+    if (existsSync(lockPath)) unlinkSync(lockPath);
   }
-  emit({ ok: true, command: 'append-event', event });
 }
 
 function validateStateMachine(machine, errors) {
@@ -443,6 +475,7 @@ function validateEventChain(events, workflow, machine, eventSchema, errors) {
     return;
   }
   let previous = null;
+  const taskStatusByRun = new Map();
   for (const [index, event] of events.entries()) {
     addSchemaErrors(errors, event, eventSchema, `events.jsonl:${index + 1}`);
     const expectedSequence = index + 1;
@@ -483,10 +516,19 @@ function validateEventChain(events, workflow, machine, eventSchema, errors) {
       if (!event.task_id || !event.run_id || !event.task_status_before || !event.task_status_after) {
         errors.push(issue('INCOMPLETE_TASK_TRANSITION', `events.jsonl:${index + 1}`, 'task transition requires task_id, run_id, before and after status'));
       } else if (event.task_status_before !== event.task_status_after) {
+        const taskKey = `${event.task_id}\u0000${event.run_id}`;
+        const priorTaskStatus = taskStatusByRun.get(taskKey);
+        if (priorTaskStatus !== undefined && event.task_status_before !== priorTaskStatus) {
+          errors.push(issue('TASK_EVENT_DISCONTINUITY', `events.jsonl:${index + 1}`, 'task_status_before does not match the prior task event'));
+        }
+        if (priorTaskStatus === undefined && event.task_status_before !== 'CREATED') {
+          errors.push(issue('INVALID_INITIAL_TASK_TRANSITION', `events.jsonl:${index + 1}`, 'first task event must begin at CREATED'));
+        }
         const allowed = machine.task.transitions[event.task_status_before] ?? [];
         if (!allowed.includes(event.task_status_after)) {
           errors.push(issue('INVALID_TASK_TRANSITION', `events.jsonl:${index + 1}`, `${event.task_status_before} -> ${event.task_status_after} is not allowed`));
         }
+        taskStatusByRun.set(taskKey, event.task_status_after);
       }
     }
     previous = event;
@@ -516,6 +558,8 @@ function validateTasks({ workflow, workflowDir, projectRoot, eventRecords, error
   const tasks = [];
   const blockingFindings = [];
   const releaseDecisions = [];
+  const evidenceByScope = new Map();
+  const allEvidenceIds = new Set();
   for (const taskFile of taskFiles) {
     const task = readJsonForCheck(taskFile, errors);
     if (!task) continue;
@@ -524,17 +568,26 @@ function validateTasks({ workflow, workflowDir, projectRoot, eventRecords, error
     if (task.workflow_id !== workflow.workflow_id) {
       errors.push(issue('TASK_WORKFLOW_MISMATCH', taskFile, 'task workflow_id does not match workflow'));
     }
+    if (!isRealPathWithin(join(workflow.runtime_root_abs, 'artifacts', workflow.workflow_id), task.artifact_root_abs)) {
+      errors.push(issue('ARTIFACT_PATH_ESCAPE', taskFile, 'artifact_root_abs must exist under this workflow artifact root without symlink escape'));
+    }
+    if (!isRealPathWithin(join(workflow.runtime_root_abs, 'worktrees'), task.worktree_path_abs)) {
+      errors.push(issue('WORKTREE_PATH_ESCAPE', taskFile, 'worktree_path_abs must exist under runtime worktrees without symlink escape'));
+    }
     const latestTaskEvent = [...eventRecords]
       .reverse()
       .find((event) => event.task_id === task.task_id && event.task_status_after !== null);
-    if (latestTaskEvent && (latestTaskEvent.task_status_after !== task.status || latestTaskEvent.run_id !== task.run_id)) {
+    if (!latestTaskEvent) {
+      errors.push(issue('TASK_EVENT_REQUIRED', taskFile, 'task snapshot has no task state event'));
+    } else if (latestTaskEvent.task_status_after !== task.status || latestTaskEvent.run_id !== task.run_id) {
       errors.push(issue('TASK_EVENT_MISMATCH', taskFile, 'latest task event does not match task snapshot'));
     }
 
     const outputDir = join(task.artifact_root_abs, 'output');
     const resultPath = join(outputDir, 'result.json');
+    let result;
     if (existsSync(resultPath)) {
-      const result = readJsonForCheck(resultPath, errors);
+      result = readJsonForCheck(resultPath, errors);
       if (result) {
         addSchemaErrors(errors, result, resultSchema, resultPath);
         for (const field of ['workflow_id', 'task_id', 'run_id']) {
@@ -555,6 +608,8 @@ function validateTasks({ workflow, workflowDir, projectRoot, eventRecords, error
       errors.push(issue('RESULT_REQUIRED', resultPath, 'completed task is missing output/result.json'));
     }
 
+    const evidenceIds = new Set();
+    const commandIds = new Set();
     for (const [name, schema] of [['evidence.jsonl', evidenceSchema], ['command-records.jsonl', commandSchema]]) {
       const path = join(outputDir, name);
       if (!existsSync(path)) continue;
@@ -563,6 +618,28 @@ function validateTasks({ workflow, workflowDir, projectRoot, eventRecords, error
         if (name === 'command-records.jsonl'
           && (record.value.task_id !== task.task_id || record.value.run_id !== task.run_id)) {
           errors.push(issue('COMMAND_RECORD_SCOPE_MISMATCH', `${path}:${record.line}`, 'command record task_id or run_id does not match task'));
+        }
+        if (name === 'evidence.jsonl') {
+          if (allEvidenceIds.has(record.value.evidence_id)) errors.push(issue('DUPLICATE_EVIDENCE_ID', `${path}:${record.line}`, 'evidence_id must be unique in workflow'));
+          allEvidenceIds.add(record.value.evidence_id);
+          evidenceIds.add(record.value.evidence_id);
+        } else {
+          commandIds.add(record.value.command_record_id);
+        }
+      }
+    }
+    evidenceByScope.set(scopeKey(task.task_id, task.run_id), evidenceIds);
+    if (result) {
+      validateEvidenceRefs(result.evidence_refs, evidenceIds, resultPath, errors);
+      for (const claim of result.claims ?? []) validateEvidenceRefs(claim.evidence_refs, evidenceIds, resultPath, errors);
+      for (const reference of result.command_record_refs ?? []) {
+        if (!commandIds.has(reference)) errors.push(issue('COMMAND_REFERENCE_NOT_FOUND', resultPath, `command record reference is not available in task scope: ${reference}`));
+      }
+    }
+    if (task.status === 'COMPLETED') {
+      for (const requiredOutput of task.required_outputs ?? []) {
+        if (!existsSync(requiredOutput) || !resolve(requiredOutput).startsWith(`${resolve(task.artifact_root_abs)}/`)) {
+          errors.push(issue('REQUIRED_OUTPUT_MISSING', taskFile, `required output is missing or outside artifact root: ${requiredOutput}`));
         }
       }
     }
@@ -573,7 +650,7 @@ function validateTasks({ workflow, workflowDir, projectRoot, eventRecords, error
       if (review) {
         addSchemaErrors(errors, review, reviewSchema, reviewPath);
         for (const finding of review.findings ?? []) {
-          if (finding.blocking === true && ['BLOCKER', 'CRITICAL', 'HIGH'].includes(finding.severity) && finding.status === 'OPEN') {
+          if (['BLOCKER', 'CRITICAL', 'HIGH'].includes(finding.severity) && finding.status === 'OPEN') {
             blockingFindings.push({ task_id: task.task_id, finding_id: finding.finding_id, severity: finding.severity });
           }
         }
@@ -585,6 +662,12 @@ function validateTasks({ workflow, workflowDir, projectRoot, eventRecords, error
       const release = readJsonForCheck(releasePath, errors);
       if (release) {
         addSchemaErrors(errors, release, releaseSchema, releasePath);
+        if (release.workflow_id !== workflow.workflow_id) {
+          errors.push(issue('RELEASE_WORKFLOW_MISMATCH', releasePath, 'release decision workflow_id does not match workflow'));
+        }
+        if (release.candidate_commit !== workflow.current_candidate_commit) {
+          errors.push(issue('RELEASE_CANDIDATE_MISMATCH', releasePath, 'release decision candidate does not match current candidate'));
+        }
         releaseDecisions.push(release);
       }
     }
@@ -592,10 +675,10 @@ function validateTasks({ workflow, workflowDir, projectRoot, eventRecords, error
   if (!sameStringSet(tasks.map((task) => task.task_id), workflow.task_ids)) {
     errors.push(issue('WORKFLOW_TASK_INDEX_MISMATCH', '$.task_ids', 'workflow task_ids do not match control task files'));
   }
-  return { tasks, blockingFindings, releaseDecisions };
+  return { tasks, blockingFindings, releaseDecisions, evidenceByScope, allEvidenceIds };
 }
 
-function validateApprovals({ workflow, workflowDir, projectRoot, errors }) {
+function validateApprovals({ workflow, workflowDir, projectRoot, taskState, errors }) {
   const requestSchema = readJson(join(projectRoot, 'contracts', 'approval-request.schema.json'));
   const responseSchema = readJson(join(projectRoot, 'contracts', 'approval-response.schema.json'));
   const decisionDir = join(workflowDir, 'decisions');
@@ -609,6 +692,8 @@ function validateApprovals({ workflow, workflowDir, projectRoot, errors }) {
     if (request.workflow_id !== workflow.workflow_id) {
       errors.push(issue('APPROVAL_WORKFLOW_MISMATCH', `${requestFile}:workflow_id`, 'request workflow_id does not match workflow'));
     }
+    const evidenceScope = request.task_id === null ? taskState.allEvidenceIds : taskState.evidenceByScope.get(scopeKey(request.task_id, request.run_id)) ?? new Set();
+    validateEvidenceRefs(request.evidence_refs, evidenceScope, requestFile, errors);
     const responsePath = requestFile.replace(/\.request\.json$/u, '.response.json');
     const hasResponse = existsSync(responsePath);
     if (request.status === 'PENDING') {
@@ -618,11 +703,15 @@ function validateApprovals({ workflow, workflowDir, projectRoot, errors }) {
       }
       continue;
     }
+    if (request.status === 'CANCELLED') {
+      if (hasResponse) errors.push(issue('CANCELLED_APPROVAL_HAS_RESPONSE', responsePath, 'cancelled request must not have a response'));
+      continue;
+    }
     if (request.status === 'RESOLVED' && !hasResponse) {
       errors.push(issue('APPROVAL_RESPONSE_REQUIRED', responsePath, 'resolved request is missing a response'));
       continue;
     }
-    if (!hasResponse) continue;
+    if (request.status !== 'RESOLVED' || !hasResponse) continue;
     const response = readJsonForCheck(responsePath, errors);
     if (!response) continue;
     addSchemaErrors(errors, response, responseSchema, responsePath);
@@ -679,10 +768,20 @@ function validateGates({ workflow, workflowDir, projectRoot, approvals, taskStat
     if (approvals.pendingIds.length > 0 && gate.overall === 'PASS') {
       errors.push(issue('PENDING_APPROVAL_BLOCKS_GATE', gateFile, 'gate cannot PASS while an approval is pending'));
     }
+    const evidenceScope = gate.task_id === null
+      ? taskState.allEvidenceIds
+      : taskState.evidenceByScope.get(scopeKey(gate.task_id, taskState.tasks.find((task) => task.task_id === gate.task_id)?.run_id)) ?? new Set();
+    for (const item of gate.items ?? []) {
+      validateEvidenceRefs(item.evidence_refs, evidenceScope, gateFile, errors, { required: item.blocking === true && item.status === 'PASS' });
+    }
     for (const decisionId of gate.approved_decision_ids ?? []) {
       const approval = approvals.resolvedApprovals.get(decisionId);
       if (!approval || !['APPROVED', 'MODIFIED'].includes(approval.response.outcome)) {
         errors.push(issue('GATE_APPROVAL_NOT_RESOLVED', gateFile, `approved decision is not resolved: ${decisionId}`));
+      } else if (approval.request.workflow_id !== gate.workflow_id
+        || (gate.task_id === null && (approval.request.task_id !== null || approval.request.run_id !== null))
+        || (gate.task_id !== null && approval.request.task_id !== gate.task_id)) {
+        errors.push(issue('GATE_APPROVAL_SCOPE_MISMATCH', gateFile, 'approved decision scope does not match gate scope'));
       }
     }
     if (['ReviewGate', 'SecurityGate', 'ReleaseReadinessGate'].includes(gate.gate_name)
@@ -690,11 +789,23 @@ function validateGates({ workflow, workflowDir, projectRoot, approvals, taskStat
         && gate.overall === 'PASS') {
       errors.push(issue('OPEN_BLOCKING_FINDING', gateFile, 'gate cannot PASS with open BLOCKER, CRITICAL, or HIGH findings'));
     }
-    if (gate.gate_name === 'ReleaseReadinessGate' && taskState.releaseDecisions.length > 0) {
-      const verdict = taskState.releaseDecisions.at(-1).verdict;
+    if (gate.gate_name === 'ReleaseReadinessGate') {
+      const matchingDecisions = taskState.releaseDecisions.filter((decision) => decision.workflow_id === workflow.workflow_id
+        && decision.candidate_commit === workflow.current_candidate_commit);
+      if (gate.overall === 'PASS' && matchingDecisions.length !== 1) {
+        errors.push(issue('RELEASE_DECISION_REQUIRED', gateFile, 'PASS release gate requires exactly one matching release decision'));
+      }
+      if (matchingDecisions.length > 1) {
+        errors.push(issue('AMBIGUOUS_RELEASE_DECISION', gateFile, 'multiple release decisions match the current candidate'));
+      }
+      const verdict = matchingDecisions[0]?.verdict;
       const verdictOverall = { GO: 'PASS', NO_GO: 'FAIL', HOLD: 'HOLD' }[verdict];
       if (verdictOverall && gate.overall !== verdictOverall) {
         errors.push(issue('RELEASE_VERDICT_MISMATCH', gateFile, `release verdict ${verdict} requires ${verdictOverall}`));
+      }
+      const expectedStatus = { GO: 'READY_FOR_OPERATIONS_HANDOFF', NO_GO: 'RELEASE_NO_GO', HOLD: 'RELEASE_HOLD' }[verdict];
+      if (expectedStatus && workflow.status !== expectedStatus) {
+        errors.push(issue('RELEASE_WORKFLOW_STATUS_MISMATCH', gateFile, `release verdict ${verdict} requires workflow status ${expectedStatus}`));
       }
     }
   }
@@ -718,6 +829,10 @@ function checkWorkflowCommand(options) {
   const projectRoot = resolve(requireOption(options, 'project-root'));
   const runtimeRoot = resolve(requireOption(options, 'runtime-root'));
   const workflowId = requireOption(options, 'workflow-id');
+  if (!/^WF-[A-Za-z0-9][A-Za-z0-9-]*$/u.test(workflowId)) {
+    emit({ ok: false, command: 'check-workflow', workflow_id: workflowId, effective_status: 'HOLD', errors: [issue('INVALID_WORKFLOW_ID', '$.workflow-id', 'workflow-id must be a complete safe WF identifier')] }, 1);
+    return;
+  }
   const workflowDir = join(runtimeRoot, 'control', 'workflows', workflowId);
   const errors = [];
   const workflowSchema = readJson(join(projectRoot, 'contracts', 'workflow.schema.json'));
@@ -762,9 +877,9 @@ function checkWorkflowCommand(options) {
   const eventRecords = readJsonLinesForCheck(eventsPath, errors).map((record) => record.value);
   validateEventChain(eventRecords, workflow, machine, eventSchema, errors);
   const taskState = validateTasks({ workflow, workflowDir, projectRoot, eventRecords, errors });
-  const approvals = validateApprovals({ workflow, workflowDir, projectRoot, errors });
+  const approvals = validateApprovals({ workflow, workflowDir, projectRoot, taskState, errors });
   validateGates({ workflow, workflowDir, projectRoot, approvals, taskState, errors });
-  if (!options['skip-git']) validateGitCandidate(workflow, errors);
+  validateGitCandidate(workflow, errors);
 
   if (errors.length > 0) {
     emit({

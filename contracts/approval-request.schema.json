@@ -11,10 +11,10 @@
   ],
   "properties": {
     "schema_version": { "type": "integer", "const": 1 },
-    "decision_id": { "type": "string", "pattern": "^DEC-" },
-    "workflow_id": { "type": "string", "pattern": "^WF-" },
-    "task_id": { "type": ["string", "null"], "pattern": "^TASK-" },
-    "run_id": { "type": ["string", "null"], "pattern": "^RUN-" },
+    "decision_id": { "type": "string", "pattern": "^DEC-[A-Za-z0-9][A-Za-z0-9-]*$" },
+    "workflow_id": { "type": "string", "pattern": "^WF-[A-Za-z0-9][A-Za-z0-9-]*$" },
+    "task_id": { "type": ["string", "null"], "pattern": "^TASK-[A-Za-z0-9][A-Za-z0-9-]*$" },
+    "run_id": { "type": ["string", "null"], "pattern": "^RUN-[A-Za-z0-9][A-Za-z0-9-]*$" },
     "trigger": {
       "type": "string",
       "enum": [

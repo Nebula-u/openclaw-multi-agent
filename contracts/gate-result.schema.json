@@ -11,13 +11,13 @@
   ],
   "properties": {
     "schema_version": { "type": "integer", "const": 1 },
-    "gate_id": { "type": "string", "pattern": "^GATE-" },
+    "gate_id": { "type": "string", "pattern": "^GATE-[A-Za-z0-9][A-Za-z0-9-]*$" },
     "gate_name": {
       "type": "string",
       "enum": ["RequirementGate", "ArchitectureGate", "DevelopmentGate", "ReviewGate", "TestGate", "SecurityGate", "ReleaseReadinessGate"]
     },
-    "workflow_id": { "type": "string", "pattern": "^WF-" },
-    "task_id": { "type": ["string", "null"], "pattern": "^TASK-" },
+    "workflow_id": { "type": "string", "pattern": "^WF-[A-Za-z0-9][A-Za-z0-9-]*$" },
+    "task_id": { "type": ["string", "null"], "pattern": "^TASK-[A-Za-z0-9][A-Za-z0-9-]*$" },
     "checklist_version": { "type": "string", "minLength": 1 },
     "evaluated_at": { "type": "string", "format": "date-time" },
     "items": {
@@ -37,7 +37,7 @@
         }
       }
     },
-    "approved_decision_ids": { "type": "array", "items": { "type": "string", "pattern": "^DEC-" } },
+    "approved_decision_ids": { "type": "array", "items": { "type": "string", "pattern": "^DEC-[A-Za-z0-9][A-Za-z0-9-]*$" } },
     "overall": { "type": "string", "enum": ["PASS", "FAIL", "HOLD"] },
     "overall_reason": { "type": "string", "minLength": 1 }
   }
