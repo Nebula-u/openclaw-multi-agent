@@ -114,6 +114,8 @@
 - `result.json` — 见第 10 节字段。
 - `evidence.jsonl` + `checksums.sha256`。
 
+所有 JSON / JSONL 输出（含 `test-cases.json`、`coverage-report.json` 如存在、`test-traceability.json`、`result.json`、`evidence.jsonl`、`command-records.jsonl`）必须按 `rules/COMMON_RULES.md` 第 9 节使用 Runtime Guard + Ajv 强校验；首次失败只允许一次 JSON-only retry，不得重新完整分析或重新执行测试。
+
 ## 9. `test-report.md` 必含内容
 
 - 每条测试/构建命令的**准确命令文本**与**来源**（第 4 节三类之一）。
@@ -147,9 +149,10 @@
 7. `coverage-report.json` 仅在工具真实产出数据时存在；否则相关结论标 `UNKNOWN` / `NOT_EXECUTED`。
 8. 已记录 `isolation_mode = UNSANDBOXED_LOCAL` 及风险；**未声称"完全隔离"**。
 9. `evidence.jsonl` / `command-records.jsonl` / `checksums.sha256` 齐全。
-10. 配置/日志无 token/password/cookie/private key；已按需 `redactions_applied`。
-11. 未 spawn 任何 Agent；未联网；未安装依赖；未启动服务；未执行远程 Git 或破坏性命令；未执行本项目 Python 编排脚本。
-12. 未自行宣布"测试通过/可发布"。
+10. 所有 JSON / JSONL 输出已通过对应 schema 校验；若发生过一次 JSON-only retry，失败日志、重试提示和第二次校验结果均已保存在 `raw-logs/`。
+11. 配置/日志无 token/password/cookie/private key；已按需 `redactions_applied`。
+12. 未 spawn 任何 Agent；未联网；未安装依赖；未启动服务；未执行远程 Git 或破坏性命令；未执行本项目 Python 编排脚本。
+13. 未自行宣布"测试通过/可发布"。
 
 ## 12. 无法完成时的返回
 

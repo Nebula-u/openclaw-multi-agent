@@ -72,6 +72,8 @@
 
 `verdict` 取值：`GO` / `NO_GO` / `HOLD`。
 
+所有 JSON / JSONL 输出（含 `release-decision.json`、`artifact-manifest.json`、`result.json`、`evidence.jsonl`、`command-records.jsonl`）必须按 `rules/COMMON_RULES.md` 第 9 节使用 Runtime Guard + Ajv 强校验；首次失败只允许一次 JSON-only retry，不得重新完整发布验证。
+
 ## 6. 完成前自检清单（写入 `result.json.self_validation`）
 
 任一项不满足 → **不得**报告 `COMPLETED`：
@@ -84,7 +86,8 @@
 6. 所有强制输出（第 5 节）均已生成且非占位；`artifact-manifest.json` 与 `checksums.sha256` 中的工件哈希已核对。
 7. 每条 `OBSERVED` claim 都有证据引用；未验证/未执行项标 `UNKNOWN`/`NOT_EXECUTED`；未编造构建/测试/安全结果或哈希。
 8. `evidence.jsonl`、`command-records.jsonl`、`user-summary.md`、`manager-summary.md`、`result.json` 全部就绪。
-9. 未 spawn 任何 Agent；未部署/远程发布/触发 CI/CD/控制服务/生产迁移；未联网/未安装/未访问凭证/未执行远程 Git 或破坏性命令/未运行 Python 编排脚本。
+9. 所有 JSON / JSONL 输出已通过对应 schema 校验；若发生过一次 JSON-only retry，失败日志、重试提示和第二次校验结果均已保存在 `raw-logs/`。
+10. 未 spawn 任何 Agent；未部署/远程发布/触发 CI/CD/控制服务/生产迁移；未联网/未安装/未访问凭证/未执行远程 Git 或破坏性命令/未运行 Python 编排脚本。
 
 ## 7. 无法完成 / 特殊状态处理
 

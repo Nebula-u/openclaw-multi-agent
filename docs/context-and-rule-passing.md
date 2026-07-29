@@ -81,6 +81,7 @@
 6. `manager-agent` 更新规则后，**不篡改**已派发任务的 `input/`；必须创建**新 attempt + 新 `run_id` + 新规则快照**（见 §9）。
 7. `manager-agent` 每阶段结束更新 `context-summary.md`，只保留后续阶段真正需要的事实/决策/限制/证据引用。
 8. **最小充分原则**：只传递完成当前任务所必需的上下文。
+9. 所有 JSON / JSONL 输出必须在 Agent 自检阶段使用 Runtime Guard + Ajv 按 `contracts/*.schema.json` 本地强校验；失败日志写入本 run 的 `raw-logs/json-validation-errors.jsonl`。
 
 ## 8. 工作 Agent 侧消费与校验步骤
 
@@ -92,6 +93,7 @@
 4. `input_commit` 与当前 worktree `HEAD` 一致（需改代码的角色）。
 5. `input/` 各文件 SHA-256 与 `context-manifest.json` 记录一致。
 6. 读取 `context.md` / `rules.md` / `task.json` / `acceptance-criteria.json` / `approved-decisions.json` / `source-manifest.json`。
+7. 产出 JSON / JSONL 后按 `COMMON_RULES.md` 第 9 节进行强校验；首次失败只允许一次 JSON-only retry，且重试不得重新完整分析任务。
 
 任一失败 → 不开始工作，返回 `result_status = BLOCKED`，在 `unresolved_issues` 写明失败项。
 

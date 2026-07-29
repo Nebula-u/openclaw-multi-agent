@@ -49,13 +49,13 @@ artifacts        = <runtime_root_abs>\artifacts
 6. 派发提示只含：任务摘要、绝对 `context-manifest.json` 路径、绝对 `task.json` 路径、绝对输出目录、绝对 worktree 路径。
 7. `task.status` → `DISPATCHED` → `RUNNING`；append event；保存子会话 session/run 标识与完成公告引用。
 8. 用 OpenClaw 原生 **yield / wait / 完成通知**机制等待；**不用 `sleep`、不高频轮询**。
-9. 在 spawn 前以 `validate-file` 校验任务、上下文和将要使用的结构化文件；校验失败即停止派发。每次任务状态变化由 manager 通过 `append-event` 追加事件，或在阶段/合并边界以 `check-workflow` 复核。
+9. 在 spawn 前以 `validate-file` 校验任务、上下文和将要使用的结构化文件，校验使用 Runtime Guard 内置 Ajv validator；校验失败即停止派发，并写入 `<workflow>/validation-errors.jsonl`。每次任务状态变化由 manager 通过 `append-event` 追加事件，或在阶段/合并边界以 `check-workflow` 复核。
 
 ## 5. 验证工作 Agent 返回（任何改动类任务，编号即必检项）
 
 Agent 返回后，`manager-agent` **必须实际检查**以下各项，**任一失败即不继续**：
 
-1. `output/result.json` 可解析且 schema 合法（见 `contracts/result.schema.json`）。
+1. `output/result.json` 可解析且 schema 合法（见 `contracts/result.schema.json`），所有工作 Agent 声明的 JSON / JSONL 输出也必须按对应 contract 再校验一次。
 2. `workflow_id` / `task_id` / `run_id` 与当前任务一致。
 3. `result.json.agent_id == task.assigned_agent`。
 4. 声明的 output / report 文件真实存在。
@@ -68,7 +68,9 @@ Agent 返回后，`manager-agent` **必须实际检查**以下各项，**任一�
 11. 文件哈希与 `checksums.sha256` 一致。
 12. 无明显凭证泄露（扫描 result/report/日志的敏感模式）。
 
-验证失败 → **不继续**；任务按合法任务状态进入 `NEEDS_REWORK`、`FAILED`、`BLOCKED` 或 `WAITING_HUMAN`，workflow 视情形进入 `HOLD`，再 append event，按第 7 节决策。**不得**把 `HOLD` 写入 `result_status`，也不得因 Agent 回复"已完成"就跳过上述校验。
+JSON / JSONL 校验首次失败 → 只允许一次 JSON-only retry：manager 明确要求工作 Agent 只重新生成失败 JSON / JSONL 文件，不重新完整分析，不改变既有事实、证据、报告、代码、命令结果或审批判断；重试提示保存到该 run 的 `raw-logs/`，两次错误都写入 `json-validation-errors.jsonl` 或 `<workflow>/validation-errors.jsonl`。
+
+验证失败或重试仍失败 → **不继续**；任务按合法任务状态进入 `NEEDS_REWORK`、`FAILED`、`BLOCKED` 或 `WAITING_HUMAN`，workflow 视情形进入 `HOLD`，再 append event，按第 7 节决策。**不得**把 `HOLD` 写入 `result_status`，也不得因 Agent 回复"已完成"就跳过上述校验。
 
 ## 6. Gate 与阶段推进
 
@@ -79,7 +81,7 @@ Agent 返回后，`manager-agent` **必须实际检查**以下各项，**任一�
 - 每个 Agent 完成后，`manager-agent` **必须**向用户显示该 Agent 的自然语言总结（`output/user-summary.md`），**标注来源角色**，并**保留其中的 `UNKNOWN` / 风险 / 限制**。
 - 通过 Gate 的任务分支由 `manager-agent` 用 `--no-ff` 合并进 integration（合并前重跑第 5 节校验；conflict **不猜测**，退回对应 Agent，见 `git-worktree-strategy.md`）。
 - 每阶段结束更新 `context-summary.md`，只保留后续阶段需要的事实/决策/限制/证据引用。
-- 在 spawn、合并、阶段推进、恢复与宣布完成前后运行适用的 Guard 检查；任一 Guard 非零退出或 `effective_status=HOLD` 都 fail-closed：不派发、不合并、不推进、不宣布完成，直到 manager 按状态机处理并重新校验。
+- 在 spawn、合并、阶段推进、恢复与宣布完成前后运行适用的 Guard 检查；任一 Guard 非零退出或 `effective_status=HOLD` 都 fail-closed：不派发、不合并、不推进、不宣布完成，直到 manager 按状态机处理并重新校验。Guard 调用必须带错误日志路径，确保校验失败主体和错误内容可追溯。
 
 ## 7. 决策、审批与状态机
 

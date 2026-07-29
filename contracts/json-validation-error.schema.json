@@ -1,0 +1,70 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://openclaw.local/contracts/json-validation-error.schema.json",
+  "title": "JSON Validation Error Log Record",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "timestamp",
+    "stage",
+    "agent_id",
+    "workflow_id",
+    "task_id",
+    "run_id",
+    "attempt",
+    "file_path_abs",
+    "schema_path_abs",
+    "validator",
+    "validator_errors",
+    "invalid_content_sha256",
+    "invalid_content_excerpt",
+    "retry_count",
+    "retry_prompt_path_abs",
+    "final_status"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "timestamp": { "type": "string", "format": "date-time" },
+    "stage": {
+      "type": "string",
+      "enum": [
+        "unspecified",
+        "agent_self_validation",
+        "manager_dispatch",
+        "manager_receive",
+        "append_event",
+        "gate",
+        "workflow_check",
+        "self_check"
+      ]
+    },
+    "agent_id": { "type": ["string", "null"] },
+    "workflow_id": { "type": ["string", "null"] },
+    "task_id": { "type": ["string", "null"] },
+    "run_id": { "type": ["string", "null"] },
+    "attempt": { "type": ["integer", "null"], "minimum": 1 },
+    "file_path_abs": { "type": "string", "minLength": 1 },
+    "schema_path_abs": { "type": "string", "minLength": 1 },
+    "validator": { "const": "ajv" },
+    "validator_errors": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": ["code", "path", "message"],
+        "properties": {
+          "code": { "type": "string", "minLength": 1 },
+          "path": { "type": "string", "minLength": 1 },
+          "message": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "invalid_content_sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "invalid_content_excerpt": { "type": "string" },
+    "retry_count": { "type": "integer", "minimum": 0 },
+    "retry_prompt_path_abs": { "type": ["string", "null"] },
+    "final_status": { "type": "string", "enum": ["FAILED", "RETRY_SUCCEEDED", "RETRY_FAILED"] }
+  }
+}

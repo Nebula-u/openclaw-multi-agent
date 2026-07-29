@@ -59,7 +59,7 @@
 4. 以最新事件为依据更新 `workflow.json` 的 `status`、`current_phase`、`updated_at`、`state_revision`、`current_candidate_commit`、`task_ids[]`、`pending_decision_ids[]`。代码阶段的 candidate 必须等于 integration 分支 HEAD；除非用户明确批准，不把进行中的 workflow 合并到目标仓库默认分支。
 5. 同步 `active-workflows.json`：非终态条目的 `status`、`updated_at`、`state_revision`、`current_phase`、`current_candidate_commit` 必须与 `workflow.json` 完全一致，并记录 `workflow_json_abs`；进入终态且写完 `final-report.md` 后，从活动索引移除该条目。
 6. 阶段结束时先写对应 Gate 和 `context-summary.md`，再推进下一阶段；最终交付前必须写 `final-report.md`。
-7. 写完后必须运行 `node <project_root_abs>/scripts/runtime-guard.mjs check-workflow --project-root <project_root_abs> --runtime-root <runtime_root_abs> --workflow-id <workflow-id>`。只有退出码为 0 且 `ok=true` 才算屏障通过。
+7. 写完后必须运行 `node <project_root_abs>/scripts/runtime-guard.mjs check-workflow --project-root <project_root_abs> --runtime-root <runtime_root_abs> --workflow-id <workflow-id> --log-file <workflow_dir_abs>/validation-errors.jsonl --stage workflow_check`。只有退出码为 0 且 `ok=true` 才算屏障通过。
 8. Guard 任一失败 → 不 spawn、不 merge、不推进、不宣布完成；其 `effective_status=HOLD` 是权威失败关闭结果。保留 Guard 输出与原始文件，工作流使用合法 `HOLD` / `RELEASE_HOLD` / `FAILED` 状态报告差异，不覆盖历史 Agent 产物。
 
 ## 4. ID 生成
@@ -90,19 +90,20 @@
    仅在该 worktree 仓库设置**本地** Git identity（不改全局）。
 3. 组装任务上下文包到 `<artifact_run>/input/`（见 `rules/CONTEXT_PROTOCOL.md`）：`task.json`、`context.md`、`rules.md`、`acceptance-criteria.json`、`approved-decisions.json`、`source-manifest.json`、`context-manifest.json`。为每个 input 文件计算 SHA-256 写入 manifest。
 4. 只传最小充分上下文：**不**复制用户完整聊天历史；**不**要求工作 Agent 读我的会话历史。
-5. 先将控制层 task 置为 `DISPATCHED`，更新 workflow/active，追加 `TASK_DISPATCHED` 事件，并通过第 3.1 节的提交屏障；屏障未通过不得派发。
-6. 用 OpenClaw 原生会话工具创建隔离的工作 Agent 会话：
+5. 对 `input/` 内所有 JSON / JSONL 结构化文件运行 Runtime Guard `validate-file`，带 `--log-file <workflow_dir_abs>/validation-errors.jsonl --stage manager_dispatch`；任一失败不得派发。
+6. 先将控制层 task 置为 `DISPATCHED`，更新 workflow/active，追加 `TASK_DISPATCHED` 事件，并通过第 3.1 节的提交屏障；屏障未通过不得派发。
+7. 用 OpenClaw 原生会话工具创建隔离的工作 Agent 会话：
    - 若本版本提供 `sessions_spawn`：调用时**必须**显式传 `agentId`，且 `agentId == task.assigned_agent`；上下文语义用 `isolated`（干净子会话）。
    - 若工具名/参数不同：以真实工具 schema 为准调整，并在兼容性报告记录差异。**不得**退回相对路径，**不得**引入 Python 脚本。
-7. 派发提示只含：任务摘要、绝对 `context-manifest.json` 路径、绝对 `task.json` 路径、绝对输出目录、绝对 worktree 路径。
-8. spawn 成功后保存子会话 session/run 标识，将 task 置为 `RUNNING`，追加事件并再次通过提交屏障；spawn 失败则记录 `BLOCKED`/`FAILED`，不得假装已派发。
-9. 用 OpenClaw 原生 yield/wait/完成通知机制等待；**不**用 `sleep`、**不**高频轮询。
+8. 派发提示只含：任务摘要、绝对 `context-manifest.json` 路径、绝对 `task.json` 路径、绝对输出目录、绝对 worktree 路径，以及 JSON-only retry 规则：若某个 JSON / JSONL 产物校验失败，只重生该 JSON / JSONL 文件，不重新完整分析任务。
+9. spawn 成功后保存子会话 session/run 标识，将 task 置为 `RUNNING`，追加事件并再次通过提交屏障；spawn 失败则记录 `BLOCKED`/`FAILED`，不得假装已派发。
+10. 用 OpenClaw 原生 yield/wait/完成通知机制等待；**不**用 `sleep`、**不**高频轮询。
 
 ## 7. 验证工作 Agent 返回（Development/Test/任何改动类任务）
 
 Agent 返回后，我**必须实际检查**（任一失败即不继续）：
 
-1. 用 Runtime Guard `validate-file` 确认 `output/result.json` 可解析且符合 `contracts/result.schema.json`。
+1. 用 Runtime Guard `validate-file` 确认 `output/result.json` 可解析且符合 `contracts/result.schema.json`，带 `--log-file <workflow_dir_abs>/validation-errors.jsonl --stage manager_receive`。
 2. `workflow_id`/`task_id`/`run_id` 与当前任务一致。
 3. `result.json.agent_id` == `assigned_agent`。
 4. 声明的 output / report 文件真实存在。
@@ -115,7 +116,9 @@ Agent 返回后，我**必须实际检查**（任一失败即不继续）：
 11. 文件哈希与 `checksums.sha256` 一致。
 12. 无明显凭证泄露（扫描 result/report/日志的敏感模式）。
 
-验证失败 → **不**继续；工作 Agent 的历史 result 保持不变，将控制层 task 置为 `NEEDS_REWORK` / `FAILED` / `LOST`，工作流按情况置 `HOLD`，追加事件并按第 10 节决策。
+若任一 JSON / JSONL 输出首次 schema 校验失败，我只允许对该失败文件发起一次 JSON-only retry：明确要求工作 Agent 只重新生成失败的 JSON / JSONL，不重新完整分析，不改变已有事实、证据、报告、代码、命令结果或审批判断。重试提示保存为 `<artifact_root_abs>/raw-logs/json-regeneration-retry-prompt-<n>.md`；两次校验都必须写入 `json-validation-errors.jsonl` 或 workflow `validation-errors.jsonl`。
+
+验证失败或重试后仍失败 → **不**继续；工作 Agent 的历史 result 保持不变，将控制层 task 置为 `NEEDS_REWORK` / `FAILED` / `LOST`，工作流按情况置 `HOLD`，追加事件并按第 10 节决策。
 
 ## 8. Gate 与阶段推进
 

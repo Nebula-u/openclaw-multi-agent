@@ -2,6 +2,9 @@
 
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
+import Ajv from 'ajv';
+import Ajv2020 from 'ajv/dist/2020.js';
+import addFormats from 'ajv-formats';
 import {
   appendFileSync,
   closeSync,
@@ -15,28 +18,24 @@ import {
 } from 'node:fs';
 import { isAbsolute, join, resolve, sep } from 'node:path';
 
-const SUPPORTED_SCHEMA_KEYS = new Set([
-  '$id',
-  '$ref',
-  '$schema',
-  'additionalProperties',
-  'const',
-  'default',
-  'definitions',
-  'description',
-  'enum',
-  'format',
-  'items',
-  'minimum',
-  'minItems',
-  'minLength',
-  'pattern',
-  'properties',
-  'required',
-  'title',
-  'type',
-  'uniqueItems',
-]);
+const VALIDATOR_NAME = 'ajv';
+const LOG_EXCERPT_LIMIT = 16 * 1024;
+
+function ajvOptions() {
+  return {
+    allErrors: true,
+    strict: true,
+    allowUnionTypes: true,
+  };
+}
+
+function createAjv(schema) {
+  const schemaDialect = schema?.$schema ?? '';
+  const AjvClass = schemaDialect.includes('2020-12') ? Ajv2020 : Ajv;
+  const ajv = new AjvClass(ajvOptions());
+  addFormats(ajv);
+  return ajv;
+}
 
 function parseArgs(argv) {
   const [command, ...rest] = argv;
@@ -51,7 +50,23 @@ function parseArgs(argv) {
       options[name] = true;
       continue;
     }
-    if (!['schema', 'file', 'project-root', 'events', 'event', 'runtime-root', 'workflow-id'].includes(name)) {
+    if (![
+      'schema',
+      'file',
+      'project-root',
+      'events',
+      'event',
+      'runtime-root',
+      'workflow-id',
+      'log-file',
+      'stage',
+      'agent-id',
+      'task-id',
+      'run-id',
+      'attempt',
+      'retry-count',
+      'retry-prompt',
+    ].includes(name)) {
       throw new Error(`unknown option: --${name}`);
     }
     const value = rest[index + 1];
@@ -71,6 +86,48 @@ function emit(payload, exitCode = 0) {
 
 function issue(code, path, message) {
   return { code, path, message };
+}
+
+function ajvIssue(error) {
+  const path = ajvInstancePath(error.instancePath);
+  return {
+    code: schemaErrorCode(error.keyword),
+    path,
+    message: error.message ?? `schema validation failed: ${error.keyword}`,
+    schema_keyword: error.keyword,
+    schema_path: error.schemaPath,
+    params: error.params ?? {},
+  };
+}
+
+function schemaErrorCode(keyword) {
+  const map = {
+    additionalProperties: 'SCHEMA_ADDITIONAL_PROPERTY',
+    const: 'SCHEMA_CONST',
+    enum: 'SCHEMA_ENUM',
+    falseSchema: 'SCHEMA_FALSE',
+    format: 'SCHEMA_FORMAT',
+    minimum: 'SCHEMA_MINIMUM',
+    minItems: 'SCHEMA_MIN_ITEMS',
+    minLength: 'SCHEMA_MIN_LENGTH',
+    pattern: 'SCHEMA_PATTERN',
+    required: 'SCHEMA_REQUIRED',
+    type: 'SCHEMA_TYPE',
+    uniqueItems: 'SCHEMA_UNIQUE_ITEMS',
+  };
+  return map[keyword] ?? `SCHEMA_${String(keyword).replaceAll(/[^A-Za-z0-9]+/gu, '_').toUpperCase()}`;
+}
+
+function ajvInstancePath(instancePath) {
+  if (!instancePath) return '$';
+  return instancePath
+    .split('/')
+    .slice(1)
+    .reduce((path, rawPart) => {
+      const part = rawPart.replaceAll('~1', '/').replaceAll('~0', '~');
+      if (/^(0|[1-9]\d*)$/u.test(part)) return `${path}[${part}]`;
+      return `${path}.${part}`;
+    }, '$');
 }
 
 function readJson(path) {
@@ -104,141 +161,8 @@ function isObject(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
-function matchesType(value, type) {
-  switch (type) {
-    case 'array': return Array.isArray(value);
-    case 'boolean': return typeof value === 'boolean';
-    case 'integer': return Number.isInteger(value);
-    case 'null': return value === null;
-    case 'number': return typeof value === 'number' && Number.isFinite(value);
-    case 'object': return isObject(value);
-    case 'string': return typeof value === 'string';
-    default: return false;
-  }
-}
-
 function equalJson(left, right) {
   return JSON.stringify(left) === JSON.stringify(right);
-}
-
-function resolveLocalRef(rootSchema, reference) {
-  if (!reference.startsWith('#/')) {
-    throw new Error(`only local JSON Schema references are supported: ${reference}`);
-  }
-  return reference
-    .slice(2)
-    .split('/')
-    .map((part) => part.replaceAll('~1', '/').replaceAll('~0', '~'))
-    .reduce((value, part) => value?.[part], rootSchema);
-}
-
-function assertSupportedSchema(schema, path = '#', errors = []) {
-  if (typeof schema === 'boolean') return errors;
-  if (!isObject(schema)) return errors;
-  for (const [key, value] of Object.entries(schema)) {
-    if (!SUPPORTED_SCHEMA_KEYS.has(key)) {
-      errors.push(issue('UNSUPPORTED_SCHEMA_KEYWORD', `${path}/${key}`, `unsupported keyword: ${key}`));
-      continue;
-    }
-    if (key === 'properties' || key === 'definitions') {
-      if (isObject(value)) {
-        for (const [name, child] of Object.entries(value)) {
-          assertSupportedSchema(child, `${path}/${key}/${name}`, errors);
-        }
-      }
-    } else if (key === 'items' || (key === 'additionalProperties' && isObject(value))) {
-      assertSupportedSchema(value, `${path}/${key}`, errors);
-    }
-  }
-  return errors;
-}
-
-function validateDateTime(value) {
-  if (typeof value !== 'string') return false;
-  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/u.test(value)) return false;
-  return Number.isFinite(Date.parse(value));
-}
-
-function validateValue(value, schema, rootSchema, path = '$', errors = []) {
-  if (schema === false) {
-    errors.push(issue('SCHEMA_FALSE', path, 'boolean false schema rejects every instance'));
-    return errors;
-  }
-  if (schema === true) return errors;
-  if (schema.$ref) {
-    const referenced = resolveLocalRef(rootSchema, schema.$ref);
-    if (!referenced) {
-      errors.push(issue('SCHEMA_REF_NOT_FOUND', path, `reference not found: ${schema.$ref}`));
-      return errors;
-    }
-    return validateValue(value, referenced, rootSchema, path, errors);
-  }
-
-  if (schema.type !== undefined) {
-    const types = Array.isArray(schema.type) ? schema.type : [schema.type];
-    if (!types.some((type) => matchesType(value, type))) {
-      errors.push(issue('SCHEMA_TYPE', path, `expected ${types.join('|')}`));
-      return errors;
-    }
-  }
-
-  if (schema.const !== undefined && !equalJson(value, schema.const)) {
-    errors.push(issue('SCHEMA_CONST', path, `expected ${JSON.stringify(schema.const)}`));
-  }
-  if (schema.enum && !schema.enum.some((candidate) => equalJson(value, candidate))) {
-    errors.push(issue('SCHEMA_ENUM', path, `value is not in enum ${JSON.stringify(schema.enum)}`));
-  }
-
-  if (typeof value === 'number' && schema.minimum !== undefined && value < schema.minimum) {
-    errors.push(issue('SCHEMA_MINIMUM', path, `must be >= ${schema.minimum}`));
-  }
-
-  if (typeof value === 'string') {
-    if (schema.minLength !== undefined && value.length < schema.minLength) {
-      errors.push(issue('SCHEMA_MIN_LENGTH', path, `must have at least ${schema.minLength} characters`));
-    }
-    if (schema.pattern !== undefined && !new RegExp(schema.pattern, 'u').test(value)) {
-      errors.push(issue('SCHEMA_PATTERN', path, `must match ${schema.pattern}`));
-    }
-    if (schema.format === 'date-time' && !validateDateTime(value)) {
-      errors.push(issue('SCHEMA_FORMAT', path, 'must be an RFC 3339 date-time'));
-    }
-  }
-
-  if (Array.isArray(value)) {
-    if (schema.minItems !== undefined && value.length < schema.minItems) {
-      errors.push(issue('SCHEMA_MIN_ITEMS', path, `must contain at least ${schema.minItems} items`));
-    }
-    if (schema.items) {
-      value.forEach((item, index) => validateValue(item, schema.items, rootSchema, `${path}[${index}]`, errors));
-    }
-    if (schema.uniqueItems === true) {
-      const identities = value.map((item) => JSON.stringify(canonicalize(item)));
-      if (new Set(identities).size !== identities.length) {
-        errors.push(issue('SCHEMA_UNIQUE_ITEMS', path, 'array items must be unique'));
-      }
-    }
-  }
-
-  if (isObject(value)) {
-    const properties = schema.properties ?? {};
-    for (const required of schema.required ?? []) {
-      if (!Object.hasOwn(value, required)) {
-        errors.push(issue('SCHEMA_REQUIRED', path, `missing required property: ${required}`));
-      }
-    }
-    for (const [key, child] of Object.entries(value)) {
-      if (Object.hasOwn(properties, key)) {
-        validateValue(child, properties[key], rootSchema, `${path}.${key}`, errors);
-      } else if (schema.additionalProperties === false) {
-        errors.push(issue('SCHEMA_ADDITIONAL_PROPERTY', `${path}.${key}`, 'additional property is not allowed'));
-      } else if (isObject(schema.additionalProperties)) {
-        validateValue(child, schema.additionalProperties, rootSchema, `${path}.${key}`, errors);
-      }
-    }
-  }
-
-  return errors;
 }
 
 function findPlaceholders(value, path = '$', errors = []) {
@@ -255,8 +179,15 @@ function findPlaceholders(value, path = '$', errors = []) {
 }
 
 function validateInstance(value, schema, { allowPlaceholders = false } = {}) {
-  const errors = assertSupportedSchema(schema);
-  validateValue(value, schema, schema, '$', errors);
+  const errors = [];
+  try {
+    const validate = createAjv(schema).compile(schema);
+    if (!validate(value)) {
+      errors.push(...(validate.errors ?? []).map(ajvIssue));
+    }
+  } catch (error) {
+    errors.push(issue('SCHEMA_COMPILE_ERROR', '$', error.message));
+  }
   if (!allowPlaceholders) findPlaceholders(value, '$', errors);
   return errors;
 }
@@ -351,6 +282,50 @@ function addSchemaErrors(errors, value, schema, source, options = {}) {
   }
 }
 
+function validationFailureRecord({ options, schemaPath, filePath, errors }) {
+  let rawContent = '';
+  try {
+    rawContent = existsSync(filePath) ? readFileSync(filePath, 'utf8') : '';
+  } catch {
+    rawContent = '';
+  }
+  return {
+    schema_version: 1,
+    timestamp: new Date().toISOString(),
+    stage: options.stage ?? 'unspecified',
+    agent_id: options['agent-id'] ?? null,
+    workflow_id: options['workflow-id'] ?? null,
+    task_id: options['task-id'] ?? null,
+    run_id: options['run-id'] ?? null,
+    attempt: options.attempt === undefined ? null : Number(options.attempt),
+    file_path_abs: resolve(filePath),
+    schema_path_abs: resolve(schemaPath),
+    validator: VALIDATOR_NAME,
+    validator_errors: errors,
+    invalid_content_sha256: createHash('sha256').update(rawContent, 'utf8').digest('hex'),
+    invalid_content_excerpt: rawContent.slice(0, LOG_EXCERPT_LIMIT),
+    retry_count: options['retry-count'] === undefined ? 0 : Number(options['retry-count']),
+    retry_prompt_path_abs: options['retry-prompt'] ? resolve(options['retry-prompt']) : null,
+    final_status: 'FAILED',
+  };
+}
+
+function appendValidationFailureLog(options, schemaPath, filePath, errors) {
+  if (!options['log-file']) return;
+  const logPath = resolve(options['log-file']);
+  appendFileSync(logPath, `${JSON.stringify(validationFailureRecord({
+    options,
+    schemaPath,
+    filePath,
+    errors,
+  }))}\n`, 'utf8');
+}
+
+function appendGuardFailureLog(options, subjectPath, errors) {
+  if (!options['log-file']) return;
+  appendValidationFailureLog(options, subjectPath, subjectPath, errors);
+}
+
 function readJsonForCheck(path, errors) {
   try {
     return readJson(path);
@@ -377,9 +352,18 @@ function requireOption(options, name) {
 function validateFileCommand(options) {
   const schemaPath = requireOption(options, 'schema');
   const filePath = requireOption(options, 'file');
-  const schema = readJson(schemaPath);
-  const records = options.jsonl ? readJsonLines(filePath) : [{ line: null, value: readJson(filePath) }];
   const errors = [];
+  let schema;
+  let records;
+  try {
+    schema = readJson(schemaPath);
+    records = options.jsonl ? readJsonLines(filePath) : [{ line: null, value: readJson(filePath) }];
+  } catch (error) {
+    const parseIssue = error.guardIssue ?? issue('JSON_READ_ERROR', filePath, error.message);
+    appendValidationFailureLog(options, schemaPath, filePath, [parseIssue]);
+    emit({ ok: false, command: 'validate-file', file: filePath, validator: VALIDATOR_NAME, errors: [parseIssue] }, 1);
+    return;
+  }
   for (const record of records) {
     const recordErrors = validateInstance(record.value, schema, {
       allowPlaceholders: Boolean(options['allow-placeholders']),
@@ -392,10 +376,11 @@ function validateFileCommand(options) {
     }
   }
   if (errors.length > 0) {
-    emit({ ok: false, command: 'validate-file', file: filePath, errors }, 1);
+    appendValidationFailureLog(options, schemaPath, filePath, errors);
+    emit({ ok: false, command: 'validate-file', file: filePath, validator: VALIDATOR_NAME, errors }, 1);
     return;
   }
-  emit({ ok: true, command: 'validate-file', file: filePath, records: records.length });
+  emit({ ok: true, command: 'validate-file', file: filePath, validator: VALIDATOR_NAME, records: records.length });
 }
 
 function appendEventCommand(options) {
@@ -437,6 +422,7 @@ function appendEventCommand(options) {
       state_revision: event.state_revision,
     }, machine, eventSchema, errors);
     if (errors.length > 0) {
+      appendGuardFailureLog(options, draftPath, errors);
       emit({ ok: false, command: 'append-event', effective_status: 'HOLD', errors }, 1);
       return;
     }
@@ -1066,6 +1052,7 @@ function checkWorkflowCommand(options) {
   validateGitCandidate(workflow, errors);
 
   if (errors.length > 0) {
+    appendGuardFailureLog(options, workflowPath, errors);
     emit({
       ok: false,
       command: 'check-workflow',
@@ -1094,7 +1081,11 @@ function selfCheckCommand(options) {
   for (const schemaPath of jsonFiles(contractsDir, '.schema.json')) {
     const schema = readJsonForCheck(schemaPath, errors);
     if (schema) {
-      for (const error of assertSupportedSchema(schema)) errors.push({ ...error, source: schemaPath });
+      try {
+        createAjv(schema).compile(schema);
+      } catch (error) {
+        errors.push({ ...issue('SCHEMA_COMPILE_ERROR', '$', error.message), source: schemaPath });
+      }
     }
   }
   const machine = readJsonForCheck(join(projectRoot, 'config', 'workflow-state-machine.json'), errors);
@@ -1119,6 +1110,7 @@ function selfCheckCommand(options) {
     if (template && schema) addSchemaErrors(errors, template, schema, templatePath, { allowPlaceholders });
   }
   if (errors.length > 0) {
+    appendGuardFailureLog(options, projectRoot, errors);
     emit({ ok: false, command: 'self-check', effective_status: 'HOLD', errors }, 1);
     return;
   }

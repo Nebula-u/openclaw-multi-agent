@@ -82,6 +82,8 @@ Preflight 全部通过后方可开始设计，且只在允许范围内读写（�
 
 并按通用输出契约（`rules/COMMON_RULES.md` 第 8 节）同时产出：`output/evidence.jsonl`、`output/command-records.jsonl`（若执行过命令）、`checksums.sha256`。本 Agent **不产生代码 commit**。
 
+所有 JSON / JSONL 输出（含 `implementation-plan.json`、`risk-register.json`、`architecture-traceability.json`、`result.json`、`evidence.jsonl`、`command-records.jsonl`，以及适用时的 `openapi.json`）必须按 `rules/COMMON_RULES.md` 第 9 节使用 Runtime Guard + Ajv 强校验；首次失败只允许一次 JSON-only retry，不得重新完整分析架构。
+
 ## 7. 完成前自检清单（Completion Self-Check）
 
 报告 `COMPLETED` 前逐项确认，并把结果写入 `result.json.self_validation`。任一必检项不满足 → **不得报告 `COMPLETED`**：
@@ -95,7 +97,8 @@ Preflight 全部通过后方可开始设计，且只在允许范围内读写（�
 7. 所有陈述均已分级；设计主张标 `PROPOSED` 未写成已实现；每条 `OBSERVED` 在 `evidence.jsonl` 有证据引用；无编造的接口/依赖/扫描结果。
 8. `risk-register.json` 与 `threat-model.md` 覆盖已识别的关键风险与威胁。
 9. 若执行过命令，`command-records.jsonl` 与 `raw-logs/` 完整（含绝对 cwd、退出码），无删失败留成功；`checksums.sha256` 覆盖关键产物。
-10. `result.json.result_status` 取值合法；未越权：未做完整实现、未改业务仓库、未产生代码 commit、未 spawn Agent、未联网、未碰凭证。
+10. 所有 JSON / JSONL 输出已通过对应 schema 校验；若发生过一次 JSON-only retry，失败日志、重试提示和第二次校验结果均已保存在 `raw-logs/`。
+11. `result.json.result_status` 取值合法；未越权：未做完整实现、未改业务仓库、未产生代码 commit、未 spawn Agent、未联网、未碰凭证。
 
 ## 8. 无法完成 / 需要决策时如何返回
 

@@ -554,6 +554,79 @@ test('validate-file enforces uniqueItems used by component contracts', () => {
   }
 });
 
+test('validate-file reports ajv schema errors for invalid enum values', () => {
+  const root = mkdtempSync(join(tmpdir(), 'openclaw-runtime-guard-ajv-enum-'));
+  try {
+    const schemaPath = join(root, 'enum.schema.json');
+    const filePath = join(root, 'value.json');
+    writeJson(schemaPath, {
+      $schema: 'http://json-schema.org/draft-07/schema#',
+      type: 'object',
+      required: ['status'],
+      additionalProperties: false,
+      properties: {
+        status: { enum: ['PASS', 'FAIL'] },
+      },
+    });
+    writeJson(filePath, { status: 'MAYBE' });
+
+    const result = runGuard(['validate-file', '--schema', schemaPath, '--file', filePath]);
+
+    assert.equal(result.status, 1);
+    const payload = JSON.parse(result.stdout);
+    assert.equal(payload.ok, false);
+    assert.equal(payload.validator, 'ajv');
+    assert.equal(payload.errors[0].code, 'SCHEMA_ENUM');
+    assert.equal(payload.errors[0].schema_keyword, 'enum');
+    assert.equal(payload.errors[0].path, '$.status');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('validate-file writes json validation failures to a jsonl log', () => {
+  const root = mkdtempSync(join(tmpdir(), 'openclaw-runtime-guard-validation-log-'));
+  try {
+    const file = join(root, 'bad.json');
+    const logFile = join(root, 'json-validation-errors.jsonl');
+    writeFileSync(file, '{"schema_version": 1,', 'utf8');
+
+    const result = runGuard([
+      'validate-file',
+      '--project-root', ROOT,
+      '--schema', join(ROOT, 'contracts', 'result.schema.json'),
+      '--file', file,
+      '--log-file', logFile,
+      '--stage', 'agent_self_validation',
+      '--agent-id', 'developer-agent',
+      '--workflow-id', WORKFLOW_ID,
+      '--task-id', TASK_ID,
+      '--run-id', RUN_ID,
+      '--attempt', '1',
+    ]);
+
+    assert.equal(result.status, 1);
+    const records = readFileSync(logFile, 'utf8').trim().split(/\r?\n/u).map((line) => JSON.parse(line));
+    assert.equal(records.length, 1);
+    assert.equal(records[0].validator, 'ajv');
+    assert.equal(records[0].stage, 'agent_self_validation');
+    assert.equal(records[0].agent_id, 'developer-agent');
+    assert.equal(records[0].workflow_id, WORKFLOW_ID);
+    assert.equal(records[0].task_id, TASK_ID);
+    assert.equal(records[0].run_id, RUN_ID);
+    assert.equal(records[0].attempt, 1);
+    assert.equal(records[0].file_path_abs, file);
+    assert.equal(records[0].schema_path_abs, join(ROOT, 'contracts', 'result.schema.json'));
+    assert.match(records[0].invalid_content_sha256, /^[a-f0-9]{64}$/u);
+    assert.match(records[0].invalid_content_excerpt, /\{"schema_version": 1,/u);
+    assert.equal(records[0].retry_count, 0);
+    assert.equal(records[0].final_status, 'FAILED');
+    assert.match(JSON.stringify(records[0].validator_errors), /JSON_PARSE_ERROR/u);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('append-event creates a deterministic first hash', () => {
   const fixture = makeRuntime();
   try {

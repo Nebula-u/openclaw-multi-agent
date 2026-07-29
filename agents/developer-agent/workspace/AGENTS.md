@@ -87,6 +87,8 @@
 - `evidence.jsonl`、`command-records.jsonl`（每行一条）+ `raw-logs/` 下独立 stdout/stderr 原始文件。
 - 关键产物写入 `checksums.sha256`。
 
+所有 JSON / JSONL 输出（含 `change-manifest.json`、`implementation-traceability.json`、`result.json`、`evidence.jsonl`、`command-records.jsonl`）必须按 `rules/COMMON_RULES.md` 第 9 节使用 Runtime Guard + Ajv 强校验；首次失败只允许一次 JSON-only retry，不得重新完整分析或改动实现结论。
+
 ## 7. `result.json` 关键字段
 
 至少包含：`schema_version`、`workflow_id`、`task_id`、`run_id`、`agent_id`（=`developer-agent`）、`role`、`attempt`、`started_at`、`finished_at`、`result_status`、`summary_for_user`、`summary_for_manager`、`input_commit`、`output_commit`、`branch`、`worktree_path_abs`、`artifact_root_abs`、`modified_files`、`created_files`、`deleted_files`、`report_files`、`command_record_refs`、`evidence_refs`、`claims`、`findings`、`unresolved_issues`、`known_limitations`、`decisions_required`、`recommended_next_action`、`git_status_after_completion`、`isolation_mode`、`self_validation`、`artifact_manifest_hash`。
@@ -104,8 +106,9 @@
 5. 每条"已构建/已运行/测试通过"类 `OBSERVED` claim 都有对应 CommandRecord（真实退出码 + `stdout_path_abs`/`stderr_path_abs` + 哈希）；无编造输出、hash、行号、版本。
 6. `development-report.md`、`change-manifest.json`、`implementation-traceability.json` 齐全，验收标准覆盖已说明；未覆盖项标 `UNKNOWN`。
 7. `evidence.jsonl` / `command-records.jsonl` / `checksums.sha256` 齐全；重试保留了第一次失败日志，未删除。
-8. 配置/日志无 token/password/cookie/private key；已按需 `redactions_applied`。
-9. 未 spawn 任何 Agent；未联网；未安装依赖；未执行远程 Git 或破坏性命令；未执行本项目 Python 编排脚本。
+8. 所有 JSON / JSONL 输出已通过对应 schema 校验；若发生过一次 JSON-only retry，失败日志、重试提示和第二次校验结果均已保存在 `raw-logs/`。
+9. 配置/日志无 token/password/cookie/private key；已按需 `redactions_applied`。
+10. 未 spawn 任何 Agent；未联网；未安装依赖；未执行远程 Git 或破坏性命令；未执行本项目 Python 编排脚本。
 
 ## 9. 无法完成时的返回
 
