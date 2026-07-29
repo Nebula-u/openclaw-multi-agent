@@ -5,7 +5,7 @@
 
 ## 1. 本文用途
 
-本文说明新架构的**文件化状态模型**（取代旧架构的 Python `state_store` / recovery 服务）与**恢复规则**：状态完全落在文件上，`manager-agent` 是控制层文件的唯一写入者；`manager-agent` 或 Gateway 会话中断后，新的 `manager-agent` 会话必须能**仅凭文件恢复**。聊天记录**不是**唯一状态源。
+本文说明新架构的**文件化状态模型**（取代旧架构的 Python `state_store` / recovery 服务）与**恢复规则**：状态完全落在文件上，`manager-agent` 是控制层文件的唯一写入者；`manager-agent` 或 Gateway 会话中断后，新的 `manager-agent` 会话必须能**仅凭文件恢复**。Runtime Guard 只校验或追加事件，不维护快照、不调度任务。聊天记录**不是**唯一状态源。
 
 ## 2. 唯一事实来源
 
@@ -43,14 +43,13 @@
 
 ### 3.2 `workflow.json`（字段以 contract 为准）
 
-来源 `contracts/workflow.schema.json`，`required`：`schema_version`、`workflow_id`（`^WF-`）、`status`、`target_project_root_abs`、`runtime_root_abs`、`integration_branch`、`base_commit`、`current_phase`、`created_at`、`updated_at`。
-其他：`status_reason`、`current_candidate_commit`、`task_ids[]`、`pending_decision_ids[]`、`context_version`、`rules_version`。`status` 全枚举见 `workflow.md`。
+来源 `contracts/workflow.schema.json`，`required` 包括：`schema_version`、`workflow_id`（`^WF-`）、`status`、`status_reason`、`target_project_root_abs`、`runtime_root_abs`、`integration_branch`、`base_commit`、`current_candidate_commit`、`current_phase`、`state_revision`、`task_ids[]`、`pending_decision_ids[]`、`context_version`、`rules_version`、`created_at`、`updated_at`。`status` 全枚举和合法迁移见 `workflow.md` 与状态机。
 
 ### 3.3 `events.jsonl`（append-only 哈希链，SHA-256）
 
-`manager-agent` 每次状态变化**追加**一条事件，永不改写既有行。每条至少含：`seq`、`event_id`、`timestamp`、`workflow_id`、`task_id`、`run_id`、`actor`、`event_type`、`previous_event_hash`、`payload`、`event_hash`。
+`events.jsonl` 是 JSONL 的 append-only 哈希链。manager 每次状态变化创建事件草稿；`append-event` 写入 `schema_version=1`、连续的 `seq` 和 `state_revision`、前一行的 `previous_event_hash`（首行是 64 个 `0`），并在 fsync 后追加，既有行永不改写。每条事件还含 `event_id`、`timestamp`、`workflow_id`、`task_id`、`run_id`、`actor`、`event_type`、状态/阶段前后值、候选 commit、`payload` 与 `event_hash`。
 
-哈希链规则：`event_hash = SHA-256(previous_event_hash + 规范化事件内容)`，形成 `previous_event_hash → event_hash` 链条。计算用**原生工具**（Windows `Get-FileHash -Algorithm SHA256`、POSIX `sha256sum` / `shasum -a 256`），**不引入 Python**。链断裂即视为不一致（见 §5）。
+哈希规则：移除 `event_hash` 后，递归按键名字典序排序 JSON 对象（数组顺序不变），将其 canonical JSON 用 UTF-8 编码并计算 SHA-256。`previous_event_hash → event_hash` 形成连续链；第 *n* 条的 `seq` 和 `state_revision` 均为 *n*。最新事件的 `to_status`、`to_phase`、`candidate_commit` 与 `state_revision` 必须分别等于 `workflow.json` 的 `status`、`current_phase`、`current_candidate_commit` 与 `state_revision`，而 `active-workflows.json` 的同名快照字段必须再与 workflow 一致。
 
 ### 3.4 `context-summary.md` / `rules-snapshot.md` / `decisions` / `gates`
 
@@ -78,11 +77,8 @@ WF-<UUID> · TASK-<UUID> · RUN-<UUID> · DEC-<UUID> · FIND-<UUID> · EVD-<UUID
 1. 读 `<runtime_root_abs>\control\active-workflows.json`。
 2. **恰好一个**活动 workflow → 读其 `workflow.json`、`events.jsonl`、`context-summary.md`、未决 `decisions/`、Git 状态后恢复。
 3. **多个**活动 workflow → **让用户选择**，不擅自挑选。
-4. 一致性校验：
-   - `events.jsonl` 哈希链完整（`previous_event_hash → event_hash` 连续）。
-   - `workflow.json` 快照与最新事件一致。
-   - `workflow.json` 与 Git 一致（`current_candidate_commit`、`integration_branch`、任务分支、worktree 真实存在且匹配）。
-5. 发现不一致 → 置 **`HOLD`**，保留证据，向用户报告差异，等待指示；**不擅自修复**。
+4. 运行 `check-workflow --project-root <project> --runtime-root <runtime> --workflow-id <WF-...>`，校验事件链、状态机迁移、最新快照、任务/结果、审批、Gate 与 Git 候选 commit。
+5. Guard 失败或发现不一致 → manager 将 workflow 按合法迁移置 **`HOLD`**（Guard 本身不写快照），保留证据，向用户报告差异，等待指示；**不擅自修复**。
 6. **绝不因聊天上下文丢失而丢失工作流。**
 
 ## 6. 不可变性与重做

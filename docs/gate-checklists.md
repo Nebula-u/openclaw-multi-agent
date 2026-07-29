@@ -24,10 +24,9 @@
 
 ### 0.3 overall 汇总规则
 
-- 任一 item = `FAIL` → `overall = FAIL`。
-- 无 `FAIL` 但存在 `HOLD` / `UNKNOWN`（且该项为阻断项）→ `overall = HOLD`。
-- 全部阻断项为 `PASS`（`NOT_APPLICABLE` 视为不阻断）→ `overall = PASS`。
-- `overall` 非 `PASS` **不得**进入下一阶段。`overall_reason` 必须写明依据。
+manager 每次写入或接受 `gate-result.json` 前必须从 `items[]` 重新聚合，不能沿用先前的 `overall`：任一 item 为 `FAIL` → `FAIL`；否则任一 item 为 `HOLD` 或任一 `blocking=true` 的 item 为 `UNKNOWN` → `HOLD`；否则 → `PASS`。`NOT_APPLICABLE` 不阻断，但必须说明原因。
+
+此外，下列任一情况都禁止 `overall=PASS`：任何 `FAIL`/`HOLD` item、未决审批、开放的 `BLOCKER`/`CRITICAL`/`HIGH` 且 `blocking=true` 的 finding。`overall` 非 `PASS` **不得**进入下一阶段；`overall_reason` 必须写明依据。Runtime Guard 在 `check-workflow` 中重新计算并 fail-closed。
 
 ### 0.4 严重度阈值（来自 policy）
 
@@ -133,7 +132,7 @@
 | REL-7 | 未越出阶段红线 | 未做真实部署 / 远程发布 / CI-CD / 生产迁移 / 服务控制 |
 | REL-8 | verdict 与证据一致 | release-agent 的 `verdict`（`GO` / `NO_GO` / `HOLD`）与判定规则一致；关键证据缺失未给 `GO` |
 
-> 说明：ReleaseReadinessGate 的 `overall` 与 release-agent 的 `verdict` 对应关系——`PASS`≈`GO`（仅表示 `READY_FOR_OPERATIONS_HANDOFF`）、`FAIL`≈`NO_GO`、`HOLD`≈`HOLD`。若 release-agent 给 `HOLD` 而用户欲继续，属审批节点（`RELEASE_HOLD_OVERRIDE`）。最终门禁决定权归 manager-agent。
+> 说明：ReleaseReadinessGate 的 `overall` 必须与最新 release-agent `verdict` 严格一致：`PASS` ↔ `GO`（仅表示 `READY_FOR_OPERATIONS_HANDOFF`）、`FAIL` ↔ `NO_GO`、`HOLD` ↔ `HOLD`。若 release-agent 给 `HOLD` 而用户欲继续，属审批节点（`RELEASE_HOLD_OVERRIDE`）。最终门禁决定权归 manager-agent。
 
 ---
 

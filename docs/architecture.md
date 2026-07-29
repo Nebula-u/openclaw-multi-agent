@@ -6,7 +6,7 @@
 
 ## 1. 本文用途
 
-本文说明 `openclaw-sdlc-multi-agent` 的总体架构，**重点对比旧架构与新架构**，并给出三层架构文本图与目录说明。核心结论：本次重构**删除了"在 OpenClaw 之外再运行一套 Python 控制平面"的设计**，改由 `manager-agent` 依据固定**文件协议** + OpenClaw **原生工具**完成全部编排。日常工作流不运行本项目自建的任何 Python 脚本。
+本文说明 `openclaw-sdlc-multi-agent` 的总体架构，**重点对比旧架构与新架构**，并给出三层架构文本图与目录说明。核心结论：本次重构**删除了"在 OpenClaw 之外再运行一套 Python 控制平面"的设计**，改由 `manager-agent` 依据固定**文件协议** + OpenClaw **原生工具**完成全部编排。日常工作流不运行本项目自建的 Python 脚本；唯一的项目运行时命令是无状态的 Node.js Runtime Guard 边界校验器。
 
 本文中"必须""禁止""只能"均为硬性要求，与 `openclaw-native-architecture-rebuild-prompt.md`（下称"重构 Prompt"）第一、四、五、六节一致。
 
@@ -15,7 +15,7 @@
 | 维度 | 旧架构（已废弃） | 新架构（本项目） |
 |------|------------------|------------------|
 | 控制平面 | OpenClaw 之外单独运行 Python 控制平面（`sdlcctl` + orchestrator / dispatcher / state_store / gates / recovery / command_runner） | **无独立控制平面**；`manager-agent` 用文件协议 + OpenClaw 原生工具完成编排 |
-| 运行时 CLI | 依赖 `sdlcctl` 等自建运行时 CLI | 禁止新增任何同类运行时 CLI |
+| 运行时 CLI | 依赖 `sdlcctl` 等自建运行时 CLI | 不引入编排型 CLI；唯一例外是依赖 Node.js 标准库的无状态 `scripts/runtime-guard.mjs`，用于 fail-closed 边界校验 |
 | 状态管理 | Python `state_store` / 状态机进程 | `manager-agent` 维护的文件：`workflow.json`、`events.jsonl`、`active-workflows.json` 等 |
 | 上下文与规则传递 | Python 编排器组装并注入 | `manager-agent` 按 `CONTEXT_PROTOCOL` 生成任务上下文包与 `rules-snapshot.md` |
 | 任务调度 | Python dispatcher 派发 | OpenClaw 原生跨 Agent 会话工具（如 `sessions_spawn`，显式传 `agentId`） |
@@ -55,6 +55,7 @@
 │    control/config-snapshots/                                                │
 │    artifacts/<wf>/<task>/<run>/{input,output,raw-logs,checksums.sha256}     │
 └───────────────┬────────────────────────────────────────────────────────────┘
+                │ Runtime Guard 边界校验（无状态；不调度、不写控制快照）
                 │ 分支 / worktree / commit / diff（仅本地 Git）
                 ▼
 ┌──────────────────────────────────────────────────────────────────────────┐
@@ -104,9 +105,9 @@ D:\MicroConnect\project\openclaw-multi-agent\
 │   ├── review-agent\workspace\
 │   ├── test-agent\workspace\
 │   └── release-agent\workspace\
-├── contracts\                  # 12 份 *.schema.json（字段以此为准）
+├── contracts\                  # JSON Schema 契约（字段以此为准）
 ├── templates\                  # workflow/task/context/result/report 等模板
-├── scripts\                    # install.ps1 / install.sh / validate-install.* / restore-*
+├── scripts\                    # install/validate/restore 脚本及 runtime-guard.mjs
 ├── docs\                       # 本目录：架构与协议文档
 ├── examples\                   # demo-request / demo-policy / demo-project-config
 └── artifacts\preflight\        # 只读环境探测的真实日志与 index.tsv
@@ -130,7 +131,16 @@ D:\MicroConnect\project\openclaw-multi-agent\runtime\
 └── artifacts\<workflow-id>\<task-id>\<run-id>\{input,output,raw-logs,checksums.sha256}
 ```
 
-写入边界：`manager-agent` 是 `control/workflows`、`active-workflows.json`、任务 `input/`、`decisions/`、`gates/` 的**唯一写入者**；工作 Agent 只能写入本次 run 的 `output/`、`raw-logs/` 与被分配的 worktree。已派发任务的 `input/` 与已完成 run 目录**不可变**；重做必须新建 `run_id` 与新目录，不覆盖旧报告/日志/结果。
+写入边界：`manager-agent` 是 `control/workflows`、`active-workflows.json`、任务 `input/`、`decisions/`、`gates/` 的**唯一写入者**；工作 Agent 只能写入本次 run 的 `output/`、`raw-logs/` 与被分配的 worktree。Runtime Guard 不是 daemon、dispatcher 或第二控制平面：它不派发任务、不维护状态，也不写控制快照；`append-event` 仅作为 manager 显式调用的原子追加操作写入并 fsync `events.jsonl`，不转移控制文件的写入权。已派发任务的 `input/` 与已完成 run 目录**不可变**；重做必须新建 `run_id` 与新目录，不覆盖旧报告/日志/结果。
+
+## 6.1 Runtime Guard 可信边界
+
+`node scripts/runtime-guard.mjs` 只依赖 Node.js 标准库。manager 在派发、合并、阶段推进、恢复和宣布完成等边界调用它；校验失败时 Guard 返回非零退出码与 `effective_status=HOLD`，manager 必须停止推进并按状态机记录处理结果。可用命令为：
+
+- `validate-file`：按本地 JSON Schema 校验一个 JSON 或 JSONL 文件，并拒绝未解析的运行时占位符。
+- `append-event`：为事件草稿补入连续的序号、修订号和哈希后，追加到 JSONL 链。
+- `check-workflow`：核对工作流快照、活动索引、事件链、任务/结果、审批、Gate 与候选 Git commit。
+- `self-check`：校验 Guard 支持的 contracts、状态机和受映射模板。
 
 ## 7. 绝对路径与 System32 防护
 

@@ -5,7 +5,7 @@
 
 ## 1. 本文用途
 
-本文规定 7 个 Agent 的**输入校验（Preflight Check）**与**强制产物**，给出 `result.json` 关键字段与 `result_status` 五值，并逐角色列出产物清单（**引用重构 Prompt §16 各 Agent 强制产物**，字段名以 `contracts/*.schema.json` 为准）。
+本文规定 7 个 Agent 的**输入校验（Preflight Check）**与**强制产物**，给出 `result.json` 关键字段与 `result_status` 五值，并逐角色列出产物清单（字段名以 `contracts/*.schema.json` 为准）。
 
 ## 2. 通用输入校验（Preflight Check，所有工作 Agent）
 
@@ -60,11 +60,13 @@
 
 工作 Agent **不擅自决定**审批节点；遇到时返回 `HUMAN_DECISION_REQUIRED` 并在 `decisions_required[]` 列出选项与影响，交由 `manager-agent` 发起审批。
 
+`HOLD` 不属于 `result_status`，不得写入 `result.json`。它是 workflow 的状态；任务等待人工决定用 `task.status=WAITING_HUMAN`，环境或权限阻塞用 `task.status=BLOCKED`。manager 将 Agent 结果、任务状态和 workflow 状态分别按 contracts 与 `config/workflow-state-machine.json` 处理。
+
 ## 6. 各角色产物清单（引用重构 Prompt §16）
 
 ### 6.0 manager-agent
 
-`manager-agent` 不产出 `result.json`，而是维护**控制层文件**（唯一写入者）：`workflow.json`、`events.jsonl`、`active-workflows.json`、`context-summary.md`、`rules-snapshot.md`、`tasks/`、`decisions/`（approval-request/response）、`gates/`（gate-result），以及工作流结束时的 `final-report.md`。它对每个工作 Agent 结果执行 §2/§4 校验与 Gate（见 `manager-orchestration.md`）。
+`manager-agent` 不产出 `result.json`，而是维护**控制层文件**（唯一写入者）：`workflow.json`、`events.jsonl`、`active-workflows.json`、`context-summary.md`、`rules-snapshot.md`、`tasks/`、`decisions/`（approval-request/response）、`gates/`（gate-result），以及工作流结束时的 `final-report.md`。它对每个工作 Agent 结果执行 §2/§4 校验与 Gate（见 `manager-orchestration.md`）。Runtime Guard 可对文件和工作流做 fail-closed 校验，却不写这些快照、也不调度工作 Agent。
 
 ### 6.A requirement-agent（§16.A）
 

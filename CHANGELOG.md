@@ -2,6 +2,23 @@
 
 本项目遵循语义化的变更记录风格。日期格式 `YYYY-MM-DD`。
 
+## [0.2.1] - 2026-07-29
+
+### 改动了什么
+
+- 新增依赖 Node.js 标准库的无状态 Runtime Guard、工作流状态机、事件/审批/Gate 契约和对应模板。
+- 文档补充 Guard 命令、fail-closed 边界、状态迁移、canonical 事件哈希、Gate 聚合与审批绑定规则。
+
+### 为什么要改
+
+- 使控制快照、事件链、任务结果、审批和 Gate 在派发、合并、阶段推进、恢复与完成声明时得到同一套可执行一致性校验。
+
+### 改后的效果
+
+- `manager-agent` 继续是唯一编排者和控制文件写入者；Guard 不充当 daemon、dispatcher 或第二控制平面。
+- 无效状态迁移、快照/事件不一致、未决审批、开放阻断 finding 或 Gate/release verdict 不一致会 fail-closed。
+- 已提供 Node.js 测试；本机没有 `pwsh`，未在本机声明 PowerShell 测试通过。
+
 ## [0.2.0] - 2026-07-27
 
 ### 可插拔 Agent package 与审批式生成组件
