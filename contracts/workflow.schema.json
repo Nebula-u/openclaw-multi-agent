@@ -5,20 +5,15 @@
   "type": "object",
   "additionalProperties": true,
   "required": [
-    "schema_version",
-    "workflow_id",
-    "status",
-    "target_project_root_abs",
-    "runtime_root_abs",
-    "integration_branch",
-    "base_commit",
-    "current_phase",
-    "created_at",
-    "updated_at"
+    "schema_version", "workflow_id", "status", "status_reason",
+    "target_project_root_abs", "runtime_root_abs", "integration_branch",
+    "base_commit", "current_candidate_commit", "current_phase",
+    "state_revision", "task_ids", "pending_decision_ids", "context_version",
+    "rules_version", "created_at", "updated_at"
   ],
   "properties": {
-    "schema_version": { "type": "integer", "minimum": 1 },
-    "workflow_id": { "type": "string", "pattern": "^WF-" },
+    "schema_version": { "type": "integer", "const": 1 },
+    "workflow_id": { "type": "string", "pattern": "^WF-[A-Za-z0-9][A-Za-z0-9-]*$" },
     "status": {
       "type": "string",
       "enum": [
@@ -26,21 +21,30 @@
         "DESIGNING", "WAITING_ARCHITECTURE_APPROVAL", "IMPLEMENTING",
         "REVIEWING_CODE", "TESTING", "REVIEWING_TESTS",
         "VERIFYING_RELEASE_READINESS", "WAITING_RELEASE_APPROVAL",
-        "READY_FOR_OPERATIONS_HANDOFF", "RELEASE_NO_GO", "RELEASE_HOLD",
-        "FAILED", "CANCELLED"
+        "WAITING_HUMAN", "HOLD", "READY_FOR_OPERATIONS_HANDOFF",
+        "RELEASE_NO_GO", "RELEASE_HOLD", "FAILED", "CANCELLED"
       ]
     },
-    "status_reason": { "type": "string" },
+    "status_reason": { "type": "string", "minLength": 1 },
     "target_project_root_abs": { "type": "string", "minLength": 1 },
     "runtime_root_abs": { "type": "string", "minLength": 1 },
     "integration_branch": { "type": "string", "minLength": 1 },
     "base_commit": { "type": "string", "minLength": 1 },
     "current_candidate_commit": { "type": ["string", "null"] },
-    "current_phase": { "type": "string" },
-    "task_ids": { "type": "array", "items": { "type": "string", "pattern": "^TASK-" } },
-    "pending_decision_ids": { "type": "array", "items": { "type": "string", "pattern": "^DEC-" } },
+    "current_phase": {
+      "type": "string",
+      "enum": [
+        "INTAKE", "REQUIREMENTS", "REQUIREMENT_GATE", "ARCHITECTURE",
+        "ARCHITECTURE_GATE", "DEVELOPMENT", "CODE_REVIEW",
+        "DEVELOPER_REWORK", "TESTING", "TEST_CODE_REVIEW",
+        "FAILURE_TRIAGE", "RELEASE_VERIFICATION", "FINAL_REPORT"
+      ]
+    },
+    "state_revision": { "type": "integer", "minimum": 1 },
+    "task_ids": { "type": "array", "items": { "type": "string", "pattern": "^TASK-[A-Za-z0-9][A-Za-z0-9-]*$" } },
+    "pending_decision_ids": { "type": "array", "items": { "type": "string", "pattern": "^DEC-[A-Za-z0-9][A-Za-z0-9-]*$" } },
     "context_version": { "type": "integer", "minimum": 0 },
-    "rules_version": { "type": "string" },
+    "rules_version": { "type": "string", "minLength": 1 },
     "created_at": { "type": "string", "format": "date-time" },
     "updated_at": { "type": "string", "format": "date-time" }
   }

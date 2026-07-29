@@ -77,13 +77,49 @@ done
 for f in "$PROJECT_ROOT"/contracts/*.json; do jq empty "$(native_path "$f")" >/dev/null 2>&1 && check "contracts JSON: $(basename "$f")" PASS || check "contracts JSON: $(basename "$f")" FAIL; done
 for f in "$PROJECT_ROOT"/templates/*.json; do [ -e "$f" ] || continue; jq empty "$(native_path "$f")" >/dev/null 2>&1 && check "templates JSON: $(basename "$f")" PASS || check "templates JSON: $(basename "$f")" FAIL; done
 
+RUNTIME_GUARD="$PROJECT_ROOT/scripts/runtime-guard.mjs"
+RUNTIME_GUARD_TEST="$PROJECT_ROOT/tests/runtime-guard.test.mjs"
+if command -v node >/dev/null 2>&1; then
+  node "$RUNTIME_GUARD" self-check --project-root "$PROJECT_ROOT" >/dev/null 2>&1 && check "Runtime Guard contracts/templates 自检" PASS || check "Runtime Guard contracts/templates 自检" FAIL
+  node --test "$RUNTIME_GUARD_TEST" >/dev/null 2>&1 && check "Runtime Guard 行为测试" PASS || check "Runtime Guard 行为测试" FAIL
+else
+  check "Node.js 可用（Runtime Guard 必需）" FAIL "OpenClaw 运行环境应提供 Node.js"
+fi
+
 INSTALL_SH="$SCRIPT_DIR/install.sh"
 DRY_MANIFEST="$PROJECT_ROOT/artifacts/install-dryrun/install-manifest.dryrun.json"
 NONPROJ="$(mktemp -d)"
-(cd "$NONPROJ" && bash "$INSTALL_SH" --runtime-root runtime >/dev/null 2>&1) && check "install.sh 非项目 cwd dry-run 可执行" PASS "$NONPROJ" || check "install.sh 非项目 cwd dry-run 可执行" FAIL "$NONPROJ"
-rmdir "$NONPROJ" 2>/dev/null || true
+VALIDATION_OPENCLAW_BIN="$(mktemp -d)"
+VALIDATION_OPENCLAW="$VALIDATION_OPENCLAW_BIN/openclaw"
+cleanup_install_validation() {
+  rm -rf "$NONPROJ" "$VALIDATION_OPENCLAW_BIN"
+}
+trap cleanup_install_validation EXIT
 
-if [ -f "$DRY_MANIFEST" ]; then
+# 验证安装器的路径解析时不能读取宿主机 Agent 注册表：真实安装保留冲突保护，
+# 这里仅以受控、只读的 CLI 边界让 dry-run 的 agents list 返回空 catalog。
+cat > "$VALIDATION_OPENCLAW" <<'EOF'
+#!/usr/bin/env bash
+case "${1:-}" in
+  --version) printf 'validation-openclaw 0\n' ;;
+  config) printf '/tmp/validation-openclaw-config.json\n' ;;
+  agents) printf '[]\n' ;;
+  *) exit 0 ;;
+esac
+EOF
+chmod 700 "$VALIDATION_OPENCLAW"
+
+# 不允许失败安装遗留的旧 manifest 参与后续断言。
+rm -f "$DRY_MANIFEST"
+INSTALL_DRYRUN_EXIT=0
+(cd "$NONPROJ" && PATH="$VALIDATION_OPENCLAW_BIN:$PATH" bash "$INSTALL_SH" --runtime-root runtime >/dev/null 2>&1) || INSTALL_DRYRUN_EXIT=$?
+if [ "$INSTALL_DRYRUN_EXIT" -eq 0 ]; then
+  check "install.sh 非项目 cwd dry-run 可执行" PASS "$NONPROJ"
+else
+  check "install.sh 非项目 cwd dry-run 可执行" FAIL "$NONPROJ"
+fi
+
+if [ "$INSTALL_DRYRUN_EXIT" -eq 0 ] && [ -f "$DRY_MANIFEST" ]; then
   dry_jq="$(native_path "$DRY_MANIFEST")"
   schema="$(jq_clean -r '.schema_version' "$dry_jq")"; [ "$schema" = 2 ] && check "dry-run schema_version=2" PASS || check "dry-run schema_version=2" FAIL "$schema"
   count="$(jq_clean '.agents | length' "$dry_jq")"; [ "$count" -eq "$REGISTERED" ] && check "dry-run 数量来自 register=true packages" PASS "$count" || check "dry-run 数量来自 register=true packages" FAIL "$count/$REGISTERED"

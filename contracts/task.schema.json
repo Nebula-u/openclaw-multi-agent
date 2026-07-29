@@ -12,10 +12,10 @@
   ],
   "properties": {
     "schema_version": { "type": "integer", "minimum": 1 },
-    "workflow_id": { "type": "string", "pattern": "^WF-" },
-    "task_id": { "type": "string", "pattern": "^TASK-" },
-    "run_id": { "type": "string", "pattern": "^RUN-" },
-    "parent_task_id": { "type": ["string", "null"], "pattern": "^TASK-" },
+    "workflow_id": { "type": "string", "pattern": "^WF-[A-Za-z0-9][A-Za-z0-9-]*$" },
+    "task_id": { "type": "string", "pattern": "^TASK-[A-Za-z0-9][A-Za-z0-9-]*$" },
+    "run_id": { "type": "string", "pattern": "^RUN-[A-Za-z0-9][A-Za-z0-9-]*$" },
+    "parent_task_id": { "type": ["string", "null"], "pattern": "^TASK-[A-Za-z0-9][A-Za-z0-9-]*$" },
     "task_type": {
       "type": "string",
       "enum": [
@@ -41,7 +41,7 @@
         "SUPERSEDED", "LOST"
       ]
     },
-    "dependencies": { "type": "array", "items": { "type": "string", "pattern": "^TASK-" } },
+    "dependencies": { "type": "array", "items": { "type": "string", "pattern": "^TASK-[A-Za-z0-9][A-Za-z0-9-]*$" } },
     "acceptance_criteria_ids": { "type": "array", "items": { "type": "string" } },
     "attempt": { "type": "integer", "minimum": 1 },
     "max_attempts": { "type": "integer", "minimum": 1 },
@@ -53,7 +53,7 @@
     "allowed_write_paths_abs": { "type": "array", "items": { "type": "string" } },
     "forbidden_paths_abs": { "type": "array", "items": { "type": "string" } },
     "required_outputs": { "type": "array", "items": { "type": "string" } },
-    "approval_dependencies": { "type": "array", "items": { "type": "string", "pattern": "^DEC-" } },
+    "approval_dependencies": { "type": "array", "items": { "type": "string", "pattern": "^DEC-[A-Za-z0-9][A-Za-z0-9-]*$" } },
     "created_at": { "type": "string", "format": "date-time" },
     "updated_at": { "type": "string", "format": "date-time" }
   }

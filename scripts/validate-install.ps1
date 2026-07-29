@@ -62,20 +62,66 @@ Get-ChildItem -LiteralPath $contractsDir -Filter '*.json' -File | ForEach-Object
 $templatesDir = Join-Path $ProjectRoot 'templates'
 Get-ChildItem -LiteralPath $templatesDir -Filter '*.json' -File | ForEach-Object { Add-Check "templates JSON: $($_.Name)" (Test-Json $_.FullName) }
 
+$runtimeGuard = Join-Path $ProjectRoot 'scripts\runtime-guard.mjs'
+$runtimeGuardTest = Join-Path $ProjectRoot 'tests\runtime-guard.test.mjs'
+if (Get-Command node -ErrorAction SilentlyContinue) {
+  $guardOutput = & node $runtimeGuard self-check --project-root $ProjectRoot 2>&1
+  Add-Check 'Runtime Guard contracts/templates 自检' ($LASTEXITCODE -eq 0) ($guardOutput -join "`n")
+  $guardTestOutput = & node --test $runtimeGuardTest 2>&1
+  Add-Check 'Runtime Guard 行为测试' ($LASTEXITCODE -eq 0) (($guardTestOutput -join "`n") | Select-Object -Last 8)
+} else {
+  Add-Check 'Node.js 可用（Runtime Guard 必需）' $false 'OpenClaw 运行环境应提供 Node.js'
+}
+
 $installPs1 = Join-Path $ScriptDir 'install.ps1'
 $dryManifest = Join-Path $ProjectRoot 'artifacts\install-dryrun\install-manifest.dryrun.json'
 $nonProjectCwd = if ($env:SystemRoot -and (Test-Path (Join-Path $env:SystemRoot 'System32'))) { Join-Path $env:SystemRoot 'System32' } else { [System.IO.Path]::GetTempPath() }
+$validationBin = Join-Path ([System.IO.Path]::GetTempPath()) ("openclaw-install-validation-{0}" -f [guid]::NewGuid().Guid)
+$previousPath = $env:PATH
+$pushedLocation = $false
+$installDryRunSucceeded = $false
 try {
+  New-Item -ItemType Directory -Force -Path $validationBin | Out-Null
+  @'
+#!/usr/bin/env sh
+case "${1:-}" in
+  --version) printf 'validation-openclaw 0\n' ;;
+  config) printf '/tmp/validation-openclaw-config.json\n' ;;
+  agents) printf '[]\n' ;;
+  *) exit 0 ;;
+esac
+'@ | Set-Content -LiteralPath (Join-Path $validationBin 'openclaw') -NoNewline
+  @'
+@echo off
+if "%~1"=="--version" (echo validation-openclaw 0 & exit /b 0)
+if "%~1"=="config" (echo C:\validation-openclaw-config.json & exit /b 0)
+if "%~1"=="agents" (echo [] & exit /b 0)
+exit /b 0
+'@ | Set-Content -LiteralPath (Join-Path $validationBin 'openclaw.cmd') -NoNewline
+  if (-not $IsWindows) {
+    & chmod +x (Join-Path $validationBin 'openclaw')
+    if ($LASTEXITCODE -ne 0) { throw '无法为验证专用 fake openclaw 添加可执行权限。' }
+  }
+
+  # 真实安装器保留同名 Agent 冲突保护；验证器以受控空 catalog 验证路径解析。
+  # 先删除旧产物，失败的 dry-run 不得被旧 manifest 掩盖。
+  if (Test-Path -LiteralPath $dryManifest) { Remove-Item -LiteralPath $dryManifest -Force }
+  $env:PATH = "$validationBin$([System.IO.Path]::PathSeparator)$previousPath"
   Push-Location $nonProjectCwd
+  $pushedLocation = $true
   & pwsh -NoProfile -File $installPs1 -RuntimeRoot runtime | Out-Null
+  if ($LASTEXITCODE -ne 0) { throw "install.ps1 dry-run 退出码：$LASTEXITCODE" }
+  $installDryRunSucceeded = $true
   Add-Check 'install.ps1 非项目 cwd dry-run 可执行' $true $nonProjectCwd
 } catch {
   Add-Check 'install.ps1 非项目 cwd dry-run 可执行' $false $_.Exception.Message
 } finally {
-  Pop-Location
+  if ($pushedLocation) { Pop-Location }
+  $env:PATH = $previousPath
+  if (Test-Path -LiteralPath $validationBin) { Remove-Item -LiteralPath $validationBin -Recurse -Force }
 }
 
-if (Test-Path -LiteralPath $dryManifest) {
+if ($installDryRunSucceeded -and (Test-Path -LiteralPath $dryManifest)) {
   $manifest = Read-JsonFile $dryManifest
   Add-Check 'dry-run 清单 schema_version=2' ([int]$manifest.schema_version -eq 2)
   Add-Check 'dry-run runtime 路径与 cwd 无关' ([string]$manifest.runtime_root_abs -eq $RuntimeRootAbs) ([string]$manifest.runtime_root_abs)

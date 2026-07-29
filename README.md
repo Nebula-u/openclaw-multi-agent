@@ -37,6 +37,23 @@
 
 安装脚本**不会**自动安装任何依赖、不联网、不修改系统服务、不删除你已有的 OpenClaw Agent 或配置。
 
+## Runtime Guard
+
+仓库提供无状态的 Node.js Runtime Guard，用于在工作流边界验证文件、事件链与快照一致性。它不派发任务、不作为 daemon 运行，也不写 workflow 或 active-workflows 快照；`manager-agent` 仍是唯一编排者和控制文件写入者。
+
+```bash
+# 校验 Guard 的 contracts、状态机与受映射模板
+node scripts/runtime-guard.mjs self-check --project-root /abs/path/openclaw-sdlc-multi-agent
+
+# 在派发、合并、阶段推进、恢复或完成声明前后校验一个 workflow
+node scripts/runtime-guard.mjs check-workflow \
+  --project-root /abs/path/openclaw-sdlc-multi-agent \
+  --runtime-root /abs/path/openclaw-runtime \
+  --workflow-id WF-<uuid>
+```
+
+Guard 失败会以非零退出码和 `effective_status=HOLD` 阻止推进。事件链使用 JSONL、按 Unicode 码点（含数字形态键）递归排序的 canonical JSON 与 SHA-256；非终态快照与活动索引一致，终态则要求 0 条活动记录和非空 `final-report.md`。Review/Security Gate 的 PASS 需要能绑定 current candidate 的 `review-agent` 证据；旧 candidate 的 finding 只保留为历史。ReleaseReadinessGate 仍按 task/run 绑定 decision，但历史 release gate 只做自身内部一致性校验；release 终态必须恰好有一个 current candidate 的最新 release task/run gate，并只由它参与终态映射。
+
 ## 快速开始（Windows / PowerShell 7）
 
 安装脚本默认只做 **dry-run**，不会修改你的 OpenClaw 配置。可从任意目录调用——脚本会相对自身位置解析项目根目录并规范化为绝对路径。

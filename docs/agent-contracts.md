@@ -1,11 +1,11 @@
 # agent-contracts.md — 7 个 Agent 的输入校验与强制产物
 
 > 权威来源：`agents/common/COMMON_RULES.md`（第 2、8 节）、`contracts/result.schema.json`、重构 Prompt 第十二、十六节。
-> 文档日期：2026-07-23
+> 文档日期：2026-07-29
 
 ## 1. 本文用途
 
-本文规定 7 个 Agent 的**输入校验（Preflight Check）**与**强制产物**，给出 `result.json` 关键字段与 `result_status` 五值，并逐角色列出产物清单（**引用重构 Prompt §16 各 Agent 强制产物**，字段名以 `contracts/*.schema.json` 为准）。
+本文规定 7 个 Agent 的**输入校验（Preflight Check）**与**强制产物**，给出 `result.json` 关键字段与 `result_status` 五值，并逐角色列出产物清单（字段名以 `contracts/*.schema.json` 为准）。
 
 ## 2. 通用输入校验（Preflight Check，所有工作 Agent）
 
@@ -60,11 +60,13 @@
 
 工作 Agent **不擅自决定**审批节点；遇到时返回 `HUMAN_DECISION_REQUIRED` 并在 `decisions_required[]` 列出选项与影响，交由 `manager-agent` 发起审批。
 
+`HOLD` 不属于 `result_status`，不得写入 `result.json`。它是 workflow 的状态；任务等待人工决定用 `task.status=WAITING_HUMAN`，环境或权限阻塞用 `task.status=BLOCKED`。manager 将 Agent 结果、任务状态和 workflow 状态分别按 contracts 与 `config/workflow-state-machine.json` 处理。
+
 ## 6. 各角色产物清单（引用重构 Prompt §16）
 
 ### 6.0 manager-agent
 
-`manager-agent` 不产出 `result.json`，而是维护**控制层文件**（唯一写入者）：`workflow.json`、`events.jsonl`、`active-workflows.json`、`context-summary.md`、`rules-snapshot.md`、`tasks/`、`decisions/`（approval-request/response）、`gates/`（gate-result），以及工作流结束时的 `final-report.md`。它对每个工作 Agent 结果执行 §2/§4 校验与 Gate（见 `manager-orchestration.md`）。
+`manager-agent` 不产出 `result.json`，而是维护**控制层文件**（唯一写入者）：`workflow.json`、`events.jsonl`、`active-workflows.json`、`context-summary.md`、`rules-snapshot.md`、`tasks/`、`decisions/`（approval-request/response）、`gates/`（gate-result），以及工作流结束时的 `final-report.md`。它对每个工作 Agent 结果执行 §2/§4 校验与 Gate（见 `manager-orchestration.md`）。Runtime Guard 可对文件和工作流做 fail-closed 校验，却不写这些快照、也不调度工作 Agent。终态 workflow 必须有非空 `final-report.md` 且已从 `active-workflows.json` 移除。
 
 ### 6.A requirement-agent（§16.A）
 
@@ -85,6 +87,8 @@
 
 `code-review.md` 或 `test-code-review.md`、`review-findings.json`、`security-review.md`、`dependency-license-review.md`、`review-traceability.json`、`user-summary.md`、`manager-summary.md`、`result.json`。
 - `review-findings.json` 以 `contracts/review-findings.schema.json` 为准：`verdict ∈ APPROVE / REQUEST_CHANGES / BLOCKED`；每个 `findings[]` 含 `finding_id`（`^FIND-`）、`severity ∈ BLOCKER/CRITICAL/HIGH/MEDIUM/LOW/INFO`、`category`、`title`、`description`、`file`、`line`、`commit`、`evidence`、`remediation`、`blocking`、`status ∈ OPEN/RESOLVED/WONT_FIX/UNKNOWN/NOT_EXECUTED`。
+- 顶层 `workflow_id` / `task_id` / `reviewed_commit` 必须绑定承载该文件的 `CODE_REVIEW` 或 `TEST_CODE_REVIEW` / `review-agent` task，且 `reviewed_commit == task.input_commit`。schema 不增加 `run_id`；run authority 来自文件所在的精确 current task snapshot `artifact_root_abs`、该 snapshot 的 `task_id` / `run_id` 和已验证 task event。每条 finding 的 `evidence` 只能引用同 task/run 的 `evidence.jsonl`。
+- Gate 只聚合 current candidate 的 findings；同 candidate + `finding_id` 用 review task 的最后 event `seq` 选择唯一最新状态，允许后续 `RESOLVED` 覆盖旧 `OPEN`，歧义则 fail-closed。旧 candidate findings 只作历史记录。
 - 默认只读；静态工具未装/未执行标 `UNKNOWN` 或 `NOT_EXECUTED`，不能用"看起来没问题"代替证据。
 
 ### 6.E test-agent（§16.E）
@@ -96,7 +100,8 @@
 ### 6.F release-agent（§16.F）
 
 `release-decision.json`、`release-decision.md`、`release-notes.md`、`operations-handoff.md`、`deployment-prerequisites.md`、`rollback-plan.md`、`known-issues.md`、`artifact-manifest.json`、`build-verification.md`、`security-verification.md`、`checksums.sha256`、`user-summary.md`、`manager-summary.md`、`result.json`。
-- `release-decision.json` 以 `contracts/release-decision.schema.json` 为准：`verdict ∈ GO / NO_GO / HOLD`；`GO` 仅代表 `READY_FOR_OPERATIONS_HANDOFF`（非已部署）；含 `candidate_commit`、`commit_matches_review_and_test`、`checks[]`、`rollback_plan_present`、`ops_handoff_present`、`isolation_mode`。
+- `release-decision.json` 以 `contracts/release-decision.schema.json` 为准：必含 `workflow_id`、`task_id`、`run_id`、`candidate_commit`、`verdict ∈ GO / NO_GO / HOLD`、`checks[]` 与顶层 `evidence_refs`；每个 check 必含 `name`、`status ∈ PASS/FAIL/HOLD/UNKNOWN/NOT_APPLICABLE` 和非空 `evidence_refs`。这些 ID、candidate 与证据必须绑定承载该文件的 current `RELEASE_VERIFICATION` / `release-agent` task/run。
+- verdict 由 checks 保守重算：任一 `HOLD` / `UNKNOWN` / `NOT_APPLICABLE` → `HOLD`；否则任一 `FAIL` → `NO_GO`；非空且全 `PASS` → `GO`；空 checks → `HOLD`。`GO` 仅代表 `READY_FOR_OPERATIONS_HANDOFF`（非已部署）。
 - 缺关键证据不得给 `GO`（应 `HOLD`）；有失败测试/严重安全问题/无法验证的关键构建环节应 `NO_GO` 或 `HOLD`；不执行部署、不改生产环境、不访问生产凭证。
 
 ## 7. 命令记录与证据（配套产物字段）

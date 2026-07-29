@@ -6,7 +6,7 @@
 
 ## 1. 本文用途
 
-本文给出 `manager-agent` 的**原生调度算法**（编号步骤），说明它如何在**不运行任何本项目 Python 脚本**、**不启动独立控制平面**的前提下，仅凭文件协议 + OpenClaw 原生工具完成：接收请求 → 保存原始需求 → 建立 ID 与工作流文件 → 生成任务上下文包 → 用原生会话工具 `sessions_spawn(agentId)` 派发 → 原生 yield/wait 等待 → **实际校验**结果 → Gate → 向用户转述 → 决定继续/打回/暂停/恢复/审批。文末给出 `manager-agent` 的**禁止清单**。
+本文给出 `manager-agent` 的**原生调度算法**（编号步骤），说明它如何在**不运行任何本项目 Python 脚本**、**不启动独立控制平面**的前提下，仅凭文件协议 + OpenClaw 原生工具完成：接收请求 → 保存原始需求 → 建立 ID 与工作流文件 → 生成任务上下文包 → 用原生会话工具 `sessions_spawn(agentId)` 派发 → 原生 yield/wait 等待 → **实际校验**结果 → Gate → 向用户转述 → 决定继续/打回/暂停/恢复/审批。Runtime Guard 是无状态 Node.js 边界校验器，不是 daemon、dispatcher 或第二控制平面；manager 仍是唯一编排者和控制文件写入者。文末给出 `manager-agent` 的**禁止清单**。
 
 ## 2. 运行时定位（绝对路径，System32 防护）
 
@@ -49,6 +49,7 @@ artifacts        = <runtime_root_abs>\artifacts
 6. 派发提示只含：任务摘要、绝对 `context-manifest.json` 路径、绝对 `task.json` 路径、绝对输出目录、绝对 worktree 路径。
 7. `task.status` → `DISPATCHED` → `RUNNING`；append event；保存子会话 session/run 标识与完成公告引用。
 8. 用 OpenClaw 原生 **yield / wait / 完成通知**机制等待；**不用 `sleep`、不高频轮询**。
+9. 在 spawn 前以 `validate-file` 校验任务、上下文和将要使用的结构化文件；校验失败即停止派发。每次任务状态变化由 manager 通过 `append-event` 追加事件，或在阶段/合并边界以 `check-workflow` 复核。
 
 ## 5. 验证工作 Agent 返回（任何改动类任务，编号即必检项）
 
@@ -67,15 +68,18 @@ Agent 返回后，`manager-agent` **必须实际检查**以下各项，**任一�
 11. 文件哈希与 `checksums.sha256` 一致。
 12. 无明显凭证泄露（扫描 result/report/日志的敏感模式）。
 
-验证失败 → **不继续**；创建 `NEEDS_REWORK` / `FAILED` / `HOLD` 结果，append event，按第 7 节决策。**不得**因 Agent 回复"已完成"就跳过上述校验。
+验证失败 → **不继续**；任务按合法任务状态进入 `NEEDS_REWORK`、`FAILED`、`BLOCKED` 或 `WAITING_HUMAN`，workflow 视情形进入 `HOLD`，再 append event，按第 7 节决策。**不得**把 `HOLD` 写入 `result_status`，也不得因 Agent 回复"已完成"就跳过上述校验。
 
 ## 6. Gate 与阶段推进
 
 - 每阶段结束按 `docs/gate-checklists.md` 的**版本化检查清单**逐项写 `gates/<phase>-<n>.json`（见 `contracts/gate-result.schema.json`）；每项 ∈ `PASS` / `FAIL` / `HOLD` / `UNKNOWN` / `NOT_APPLICABLE`，`overall ∈ PASS / FAIL / HOLD`。
 - **只有 Gate 通过（无阻断项）才进入下一阶段**；**不得把 `UNKNOWN` 改写成 `PASS`**。
+- Review/Security/Release Gate 的 finding authority 只取 `reviewed_commit == workflow.current_candidate_commit` 的合法 review task artifact；同 `finding_id` 以该 task 已验证的最后 event `seq` 选择唯一最新状态，旧 candidate 不阻断，歧义即 HOLD。ReviewGate/SecurityGate 的 PASS 还必须引用 current candidate 的合法 review-agent 证据。
+- 每个 ReleaseReadinessGate（包括 `FAIL` / `HOLD`）必须用 `task_id` 绑定一个 `RELEASE_VERIFICATION` / `release-agent` task，并消费该 task snapshot 当前 `run_id` 下恰好一份 release decision。历史 release gate/decision 保留且只做自身一致性校验；只有 current candidate 的最新 release task/run 对应的 ReleaseReadinessGate 参与当前候选与已终态 workflow 状态裁决，同 candidate 的旧 rerun gate 也不参与。release 终态必须恰好有一个最新 release task/run gate；decision/check evidence 必须属于其绑定的 release run，verdict 与 checks、Gate overall 必须一致。
 - 每个 Agent 完成后，`manager-agent` **必须**向用户显示该 Agent 的自然语言总结（`output/user-summary.md`），**标注来源角色**，并**保留其中的 `UNKNOWN` / 风险 / 限制**。
 - 通过 Gate 的任务分支由 `manager-agent` 用 `--no-ff` 合并进 integration（合并前重跑第 5 节校验；conflict **不猜测**，退回对应 Agent，见 `git-worktree-strategy.md`）。
 - 每阶段结束更新 `context-summary.md`，只保留后续阶段需要的事实/决策/限制/证据引用。
+- 在 spawn、合并、阶段推进、恢复与宣布完成前后运行适用的 Guard 检查；任一 Guard 非零退出或 `effective_status=HOLD` 都 fail-closed：不派发、不合并、不推进、不宣布完成，直到 manager 按状态机处理并重新校验。
 
 ## 7. 决策、审批与状态机
 
@@ -93,6 +97,7 @@ Agent 返回后，`manager-agent` **必须实际检查**以下各项，**任一�
 - 是否已向用户转述本阶段 Agent 的原始总结并标注角色？
 - 是否把 `UNKNOWN` 当 `PASS`？是否跳过 commit/diff/日志/证据校验？
 - 待审批期间是否误调度了依赖任务？
+- 是否已用 `check-workflow` 核对事件链、快照、索引、审批、Gate 与候选 commit？宣布完成前是否已运行 `self-check`？
 
 任一不满足 → 修正后再继续。工作流结束后生成 `final-report.md`。
 
@@ -101,6 +106,7 @@ Agent 返回后，`manager-agent` **必须实际检查**以下各项，**任一�
 `manager-agent` **禁止**：
 
 - 通过执行本项目 Python 脚本完成上述流程（本系统**无** Python 控制平面）。
+- 把 Runtime Guard 当作编排器、状态存储、dispatcher 或控制文件写入者。
 - 因 Agent 回复"已完成"就直接进入下一阶段（必须校验 commit/diff/路径/日志/证据）。
 - 跳过 commit、diff、路径、日志或证据验证。
 - 修改工作 Agent 的历史 `result` 文件。
