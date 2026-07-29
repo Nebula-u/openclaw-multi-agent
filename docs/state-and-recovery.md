@@ -85,7 +85,7 @@ WF-<UUID> · TASK-<UUID> · RUN-<UUID> · DEC-<UUID> · FIND-<UUID> · EVD-<UUID
 
 - 已派发任务的 `input/` **不可变**；已完成 run 目录 **不可变**。
 - 重做 → 新 `run_id` + 新目录（`<wf>\<task>\<新 run>\`），**不覆盖**旧报告/日志/审批/结果；旧任务按状态机置 `SUPERSEDED`。
-- 历史 review/release artifact 保留不覆盖。Guard 只让 current candidate 的 review finding 参与阻断，并按可信 task event `seq` 处理 finding closure；ReleaseReadinessGate 只消费其 `task_id` 当前 task snapshot 所指 `run_id` 的唯一 release decision。
+- 历史 review/release artifact 保留不覆盖。Guard 只让 current candidate 的 review finding 参与阻断，并按可信 task event `seq` 处理 finding closure；ReviewGate/SecurityGate 的 PASS 必须引用 current candidate 的合法 review 证据。ReleaseReadinessGate 只消费其 `task_id` 当前 task snapshot 所指 `run_id` 的唯一 release decision；历史 release gate/decision 只做自身一致性校验，不参与当前候选或终态裁决。
 - 失败 / 脏状态 / 未合并 / 待审批的 worktree **默认保留**，不清理（见 `git-worktree-strategy.md`）。
 
 ## 7. 相关文档

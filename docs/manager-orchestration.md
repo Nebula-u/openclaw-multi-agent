@@ -74,8 +74,8 @@ Agent 返回后，`manager-agent` **必须实际检查**以下各项，**任一�
 
 - 每阶段结束按 `docs/gate-checklists.md` 的**版本化检查清单**逐项写 `gates/<phase>-<n>.json`（见 `contracts/gate-result.schema.json`）；每项 ∈ `PASS` / `FAIL` / `HOLD` / `UNKNOWN` / `NOT_APPLICABLE`，`overall ∈ PASS / FAIL / HOLD`。
 - **只有 Gate 通过（无阻断项）才进入下一阶段**；**不得把 `UNKNOWN` 改写成 `PASS`**。
-- Review/Security/Release Gate 的 finding authority 只取 `reviewed_commit == workflow.current_candidate_commit` 的合法 review task artifact；同 `finding_id` 以该 task 已验证的最后 event `seq` 选择唯一最新状态，旧 candidate 不阻断，歧义即 HOLD。
-- 每个 ReleaseReadinessGate（包括 `FAIL` / `HOLD`）必须用 `task_id` 绑定当前 `RELEASE_VERIFICATION` / `release-agent` task，并消费该 task snapshot 当前 `run_id` 下恰好一份 release decision。旧 run decision 保留但不参与；decision/check evidence 必须属于当前 release run，verdict 与 checks、Gate overall 以及已终态 workflow 状态必须一致。
+- Review/Security/Release Gate 的 finding authority 只取 `reviewed_commit == workflow.current_candidate_commit` 的合法 review task artifact；同 `finding_id` 以该 task 已验证的最后 event `seq` 选择唯一最新状态，旧 candidate 不阻断，歧义即 HOLD。ReviewGate/SecurityGate 的 PASS 还必须引用 current candidate 的合法 review-agent 证据。
+- 每个 ReleaseReadinessGate（包括 `FAIL` / `HOLD`）必须用 `task_id` 绑定一个 `RELEASE_VERIFICATION` / `release-agent` task，并消费该 task snapshot 当前 `run_id` 下恰好一份 release decision。历史 release gate/decision 保留且只做自身一致性校验；只有 current candidate 对应的 ReleaseReadinessGate 参与当前候选与已终态 workflow 状态裁决。decision/check evidence 必须属于其绑定的 release run，verdict 与 checks、Gate overall 必须一致。
 - 每个 Agent 完成后，`manager-agent` **必须**向用户显示该 Agent 的自然语言总结（`output/user-summary.md`），**标注来源角色**，并**保留其中的 `UNKNOWN` / 风险 / 限制**。
 - 通过 Gate 的任务分支由 `manager-agent` 用 `--no-ff` 合并进 integration（合并前重跑第 5 节校验；conflict **不猜测**，退回对应 Agent，见 `git-worktree-strategy.md`）。
 - 每阶段结束更新 `context-summary.md`，只保留后续阶段需要的事实/决策/限制/证据引用。

@@ -26,7 +26,7 @@
 
 manager 每次写入或接受 `gate-result.json` 前必须从 `items[]` 重新聚合，不能沿用先前的 `overall`：任一 item 为 `FAIL` → `FAIL`；否则任一 item 为 `HOLD` 或任一 `blocking=true` 的 item 为 `UNKNOWN` → `HOLD`；否则 → `PASS`。`NOT_APPLICABLE` 不阻断，但必须说明原因。
 
-此外，下列任一情况都禁止 `overall=PASS`：任何 `FAIL`/`HOLD` item、未决审批；对于 `ReviewGate`、`SecurityGate` 和 `ReleaseReadinessGate`，还包括任何开放的 `BLOCKER`/`CRITICAL`/`HIGH` finding（不依赖 finding 的 `blocking` 标记）。`overall` 非 `PASS` **不得**进入下一阶段；`overall_reason` 必须写明依据。Runtime Guard 在 `check-workflow` 中按此范围重新计算并 fail-closed。
+此外，下列任一情况都禁止 `overall=PASS`：任何 `FAIL`/`HOLD` item、未决审批；对于 `ReviewGate`、`SecurityGate` 和 `ReleaseReadinessGate`，还包括任何开放的 `BLOCKER`/`CRITICAL`/`HIGH` finding（不依赖 finding 的 `blocking` 标记）。`ReviewGate` / `SecurityGate` 的 PASS 还必须至少引用一条 current candidate 的合法 `review-agent` task/run 证据，旧 candidate 证据不能单独支撑 PASS。`overall` 非 `PASS` **不得**进入下一阶段；`overall_reason` 必须写明依据。Runtime Guard 在 `check-workflow` 中按此范围重新计算并 fail-closed。
 
 Finding 的阻断权威只来自 `reviewed_commit == workflow.current_candidate_commit` 的 review artifact。该 artifact 必须位于当前 review task/run 的精确 artifact root，绑定同一 `workflow_id` / `task_id`，由 `CODE_REVIEW` 或 `TEST_CODE_REVIEW` 的 `review-agent` 任务产生，且 `reviewed_commit == task.input_commit`；finding 的 `evidence` 也只能引用该 task/run 的证据。同一 current candidate 上重复出现的 `finding_id`，按各 review task 已验证的最后 task event `seq` 选择唯一最新状态，因此后续 `RESOLVED` 可关闭旧 `OPEN`；同 seq、缺失 seq 或同 task/run 重复记录一律 fail-closed。旧 candidate 的 finding 保留为历史，但不阻断当前 Gate。
 
@@ -136,9 +136,9 @@ Finding 的阻断权威只来自 `reviewed_commit == workflow.current_candidate_
 | REL-7 | 未越出阶段红线 | 未做真实部署 / 远程发布 / CI-CD / 生产迁移 / 服务控制 |
 | REL-8 | verdict 与证据一致 | release-agent 的 `verdict`（`GO` / `NO_GO` / `HOLD`）与判定规则一致；关键证据缺失未给 `GO` |
 
-> 说明：每个 ReleaseReadinessGate（无论 `overall` 为 `PASS` / `FAIL` / `HOLD`）都必须以非空 `task_id` 绑定当前 `RELEASE_VERIFICATION` / `release-agent` task，并且恰好存在一份绑定该 task 当前 `run_id`、当前 workflow 与 current candidate 的 `release-decision.json`；旧 run 的 decision 保留但不参与当前 Gate。decision 顶层 `evidence_refs` 与每个 `checks[].evidence_refs` 都只能引用该 release task/run 的证据。
+> 说明：每个 ReleaseReadinessGate（无论 `overall` 为 `PASS` / `FAIL` / `HOLD`）都必须以非空 `task_id` 绑定一个 `RELEASE_VERIFICATION` / `release-agent` task，并且恰好存在一份绑定该 task 当前 `run_id`、同一 workflow 与该 task input commit 的 `release-decision.json`。历史 release gate/decision 保留但只做自身 task/run 的内部一致性校验；只有 current candidate 对应的 ReleaseReadinessGate 参与当前候选与终态裁决。decision 顶层 `evidence_refs` 与每个 `checks[].evidence_refs` 都只能引用该 release task/run 的证据。
 >
-> Runtime Guard 从 checks 重算 verdict：任一 `HOLD` / `UNKNOWN` / `NOT_APPLICABLE` → `HOLD`；否则任一 `FAIL` → `NO_GO`；非空且全 `PASS` → `GO`；空 checks → `HOLD`。Gate 必须严格映射 `PASS` ↔ `GO`（仅表示 `READY_FOR_OPERATIONS_HANDOFF`）、`FAIL` ↔ `NO_GO`、`HOLD` ↔ `HOLD`；workflow 已进入终态时，其终态还必须与 verdict 一致。若 release-agent 给 `HOLD` 而用户欲继续，属审批节点（`RELEASE_HOLD_OVERRIDE`）。最终门禁决定权归 manager-agent。
+> Runtime Guard 从 checks 重算 verdict：任一 `HOLD` / `UNKNOWN` / `NOT_APPLICABLE` → `HOLD`；否则任一 `FAIL` → `NO_GO`；非空且全 `PASS` → `GO`；空 checks → `HOLD`。Gate 必须严格映射 `PASS` ↔ `GO`（仅表示 `READY_FOR_OPERATIONS_HANDOFF`）、`FAIL` ↔ `NO_GO`、`HOLD` ↔ `HOLD`；workflow 已进入终态时，只有 current candidate 对应的 release verdict 需要与终态一致。若 release-agent 给 `HOLD` 而用户欲继续，属审批节点（`RELEASE_HOLD_OVERRIDE`）。最终门禁决定权归 manager-agent。
 
 ---
 

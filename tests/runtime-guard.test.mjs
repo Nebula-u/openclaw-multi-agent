@@ -1467,7 +1467,7 @@ test('check-workflow rejects review finding evidence from another task or run', 
   }
 });
 
-test('check-workflow ignores an open finding reviewed against an older candidate', () => {
+test('check-workflow ignores an open finding reviewed against an older candidate for ordinary gates', () => {
   const fixture = makeRuntime({
     withCurrentCandidate: true,
     taskIds: [TASK_ID],
@@ -1485,6 +1485,59 @@ test('check-workflow ignores an open finding reviewed against an older candidate
     });
     writePassGate(fixture, {
       evidenceId: 'EVD-old-candidate-review',
+      gateName: 'DevelopmentGate',
+    });
+    const result = checkWorkflow(fixture);
+    assert.equal(result.status, 0, result.stdout || result.stderr);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('check-workflow rejects a PASS security gate without current-candidate review evidence', () => {
+  const fixture = makeRuntime({
+    withCurrentCandidate: true,
+    taskIds: [TASK_ID],
+  });
+  try {
+    const oldCommit = 'c'.repeat(40);
+    const task = scopedTask(fixture, { input_commit: oldCommit });
+    appendTaskLifecycle(fixture, task);
+    writeTaskResult(task);
+    writeTaskEvidence(task, ['EVD-old-candidate-review']);
+    writeReviewFindings(task, {
+      reviewed_commit: oldCommit,
+      verdict: 'REQUEST_CHANGES',
+      findings: [reviewFinding({ commit: oldCommit })],
+    });
+    writePassGate(fixture, {
+      evidenceId: 'EVD-old-candidate-review',
+      gateName: 'SecurityGate',
+    });
+    const result = checkWorkflow(fixture);
+    assert.equal(result.status, 1);
+    assert.match(result.stdout, /CURRENT_REVIEW_EVIDENCE_REQUIRED/);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('check-workflow accepts a PASS security gate backed by current-candidate clean review evidence', () => {
+  const fixture = makeRuntime({
+    withCurrentCandidate: true,
+    taskIds: [TASK_ID],
+  });
+  try {
+    const task = scopedTask(fixture);
+    appendTaskLifecycle(fixture, task);
+    writeTaskResult(task);
+    writeTaskEvidence(task, ['EVD-current-clean-review']);
+    writeReviewFindings(task, {
+      verdict: 'APPROVE',
+      findings: [],
+    });
+    writePassGate(fixture, {
+      evidenceId: 'EVD-current-clean-review',
       gateName: 'SecurityGate',
     });
     const result = checkWorkflow(fixture);
@@ -1806,6 +1859,58 @@ test('check-workflow uses only the release decision for the gate current task an
       evidenceId: 'EVD-current-release-run',
       overall: 'PASS',
     });
+    const result = checkWorkflow(fixture);
+    assert.equal(result.status, 0, result.stdout || result.stderr);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('check-workflow lets historical release gates keep their own noncurrent candidate verdicts', () => {
+  const fixture = makeRuntime({
+    status: 'READY_FOR_OPERATIONS_HANDOFF',
+    phase: 'FINAL_REPORT',
+    withCurrentCandidate: true,
+    taskIds: [TASK_ID, TASK_ID_2],
+  });
+  try {
+    const oldTask = releaseTask(fixture, { input_commit: 'c'.repeat(40) });
+    const currentTask = releaseTask(fixture, {
+      task_id: TASK_ID_2,
+      run_id: RUN_ID_2,
+    });
+    appendTaskLifecycle(fixture, oldTask);
+    appendTaskLifecycle(fixture, currentTask);
+    writeTaskResult(oldTask);
+    writeTaskResult(currentTask);
+    writeTaskEvidence(oldTask, ['EVD-old-release-run']);
+    writeTaskEvidence(currentTask, ['EVD-current-release-run']);
+    writeReleaseDecision(oldTask, {
+      evidenceId: 'EVD-old-release-run',
+      verdict: 'HOLD',
+      checks: [{
+        name: 'old candidate check',
+        status: 'HOLD',
+        evidence_refs: ['EVD-old-release-run'],
+        notes: 'historical hold',
+      }],
+    });
+    writeReleaseGate(fixture, {
+      taskId: oldTask.task_id,
+      evidenceId: 'EVD-old-release-run',
+      overall: 'HOLD',
+    });
+    writeReleaseDecision(currentTask, {
+      evidenceId: 'EVD-current-release-run',
+      verdict: 'GO',
+    });
+    writeReleaseGate(fixture, {
+      taskId: currentTask.task_id,
+      evidenceId: 'EVD-current-release-run',
+      overall: 'PASS',
+    });
+    clearActiveWorkflows(fixture);
+    writeFileSync(join(fixture.workflowDir, 'final-report.md'), '# Final report\n', 'utf8');
     const result = checkWorkflow(fixture);
     assert.equal(result.status, 0, result.stdout || result.stderr);
   } finally {
