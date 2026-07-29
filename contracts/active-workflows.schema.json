@@ -1,0 +1,54 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://openclaw-sdlc-multi-agent/contracts/active-workflows.schema.json",
+  "title": "ActiveWorkflows",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "workflows"],
+  "properties": {
+    "schema_version": { "type": "integer", "const": 1 },
+    "workflows": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "workflow_id",
+          "status",
+          "current_phase",
+          "current_candidate_commit",
+          "state_revision",
+          "updated_at",
+          "workflow_json_abs"
+        ],
+        "properties": {
+          "workflow_id": { "type": "string", "pattern": "^WF-[A-Za-z0-9][A-Za-z0-9-]*$" },
+          "status": {
+            "type": "string",
+            "enum": [
+              "CREATED", "ANALYZING_REQUIREMENTS", "WAITING_REQUIREMENT_APPROVAL",
+              "DESIGNING", "WAITING_ARCHITECTURE_APPROVAL", "IMPLEMENTING",
+              "REVIEWING_CODE", "TESTING", "REVIEWING_TESTS",
+              "VERIFYING_RELEASE_READINESS", "WAITING_RELEASE_APPROVAL",
+              "WAITING_HUMAN", "HOLD", "READY_FOR_OPERATIONS_HANDOFF",
+              "RELEASE_NO_GO", "RELEASE_HOLD", "FAILED", "CANCELLED"
+            ]
+          },
+          "current_phase": {
+            "type": "string",
+            "enum": [
+              "INTAKE", "REQUIREMENTS", "REQUIREMENT_GATE", "ARCHITECTURE",
+              "ARCHITECTURE_GATE", "DEVELOPMENT", "CODE_REVIEW",
+              "DEVELOPER_REWORK", "TESTING", "TEST_CODE_REVIEW",
+              "FAILURE_TRIAGE", "RELEASE_VERIFICATION", "FINAL_REPORT"
+            ]
+          },
+          "current_candidate_commit": { "type": ["string", "null"] },
+          "state_revision": { "type": "integer", "minimum": 1 },
+          "updated_at": { "type": "string", "format": "date-time" },
+          "workflow_json_abs": { "type": "string", "minLength": 1 }
+        }
+      }
+    }
+  }
+}

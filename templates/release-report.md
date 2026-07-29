@@ -6,6 +6,8 @@
 
 ## 元信息（Metadata）
 - workflow_id: `WF-00000000-0000-0000-0000-000000000000`
+- task_id: `TASK-00000000-0000-0000-0000-000000000000`
+- run_id: `RUN-00000000-0000-0000-0000-000000000000`
 - assigned_agent: `release-agent`
 - candidate_commit: `PLACEHOLDER_CANDIDATE_COMMIT_SHA`
 - evaluated_at: `2026-01-01T00:00:00Z`
@@ -13,6 +15,7 @@
 
 ## 证据汇总（Evidence Roll-up）
 > 汇总各阶段证据与门禁状态；status ∈ PASS | FAIL | HOLD | UNKNOWN | NOT_APPLICABLE。
+> `release-decision.json` 顶层 `evidence_refs` 与每个 `checks[].evidence_refs` 必须非空，并只引用本 task/run 的 `evidence.jsonl`。
 
 | 领域 | 来源报告 / gate | status | 证据 |
 |------|-----------------|--------|------|
@@ -47,6 +50,7 @@
 ## 判定（Verdict）
 - verdict: `<PLACEHOLDER: GO | NO_GO | HOLD>`
 - verdict_meaning: `GO == READY_FOR_OPERATIONS_HANDOFF (not deployed)`
+- 重算规则：任一 `HOLD` / `UNKNOWN` / `NOT_APPLICABLE` → `HOLD`；否则任一 `FAIL` → `NO_GO`；非空且全 `PASS` → `GO`；空 checks → `HOLD`。
 - 理由：<PLACEHOLDER: 基于证据汇总、commit 一致性、回滚与运维交接完备性给出判定理由。>
 
 ## 已知问题（Known Issues）

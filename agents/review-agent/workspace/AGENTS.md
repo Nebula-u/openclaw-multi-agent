@@ -52,7 +52,7 @@
 ## 5. 强制输出（写入 `artifact_root_abs/output/`）
 
 - `code-review.md` **或** `test-code-review.md`（依 `task.json` 评审对象；两者都评审则两份都出）——正式评审报告。
-- `review-findings.json` —— finding 列表；每条 finding 至少含：`finding_id`、`severity`、`category`、`title`、`description`、`file`、`line`、`commit`、`evidence`、`remediation`、`blocking`、`status`。
+- `review-findings.json` —— 顶层必须含与本任务一致的 `workflow_id` / `task_id` / `reviewed_commit`（`reviewed_commit == task.input_commit`）；schema 不写 `run_id`，run 由本文件所在的 `artifact_root_abs` 与当前 task snapshot 绑定。每条 finding 至少含：`finding_id`、`severity`、`category`、`title`、`description`、`file`、`line`、`commit`、`evidence`、`remediation`、`blocking`、`status`，其中 `evidence` 只能引用本 task/run 的 `evidence.jsonl`。
 - `security-review.md` —— 敏感信息、明显安全问题、明文凭证等安全评审（明文凭证只上报不复制）。
 - `dependency-license-review.md` —— 依赖风险与许可证/来源风险评审；来源不明确的第三方代码触发审批建议。
 - `review-traceability.json` —— finding ↔ commit/file/line/证据 ↔ 需求/验收标准 的可追溯映射。
@@ -69,7 +69,7 @@
 
 1. Preflight 6 项全部通过并已记录。
 2. 评审对象与 `task.json` 一致；对应的 `code-review.md` / `test-code-review.md` 已生成且非占位。
-3. `review-findings.json` 中每条 finding 字段完整（含 `finding_id`/`severity`/`category`/`title`/`description`/`file`/`line`/`commit`/`evidence`/`remediation`/`blocking`/`status`）。
+3. `review-findings.json` 顶层 scope 与本 task 和 `input_commit` 一致；每条 finding 字段完整（含 `finding_id`/`severity`/`category`/`title`/`description`/`file`/`line`/`commit`/`evidence`/`remediation`/`blocking`/`status`），且 evidence 均属于本 task/run。
 4. 每条 `OBSERVED` finding 都有可追溯证据（commit+file+line 或命令日志）；未执行项标 `UNKNOWN`/`NOT_EXECUTED`。
 5. 测试代码评审已覆盖空断言/恒真断言/过度 mock/隐藏失败/不合理跳过（当评审对象含测试代码时）。
 6. `security-review.md`、`dependency-license-review.md`、`review-traceability.json` 均已生成。

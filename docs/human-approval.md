@@ -6,7 +6,7 @@
 
 ## 1. 审批责任分工
 
-- **manager-agent** 是唯一的审批发起、记录与放行方：命中任一触发条件时，它生成 `approval-request.json` 并把工作流置为 `WAITING_HUMAN`。
+- **manager-agent** 是唯一的审批发起、记录与放行方：命中任一触发条件时，它生成 `approval-request.json` 并把工作流置为 `WAITING_HUMAN`。Runtime Guard 只校验审批关联，不发起、不代答也不放行。
 - **工作 Agent**（requirement / architect / developer / review / test / release）遇到需要审批的节点时**不擅自决定**，返回 `result_status = HUMAN_DECISION_REQUIRED`，在 `result.json.decisions_required[]` 列出选项、影响与可逆性，交 manager-agent 处理。
 
 ## 2. 15 个必须人工审批的触发条件
@@ -34,7 +34,7 @@
 - **不设自动超时同意。** 用户**沉默 ≠ 批准**；等待可以无限期持续，绝不因超时而默认放行。
 - 等待审批期间，**不得**继续调度依赖该决策的任务。
 - 用户回复后，保存 `approval-response.json` + 原始回复摘要（`raw_user_reply_summary`）。
-- 审批粒度**绑定**到具体 `decision_id` / `task_id` / `run_id`；一次审批**不自动延伸**到其他上下文或其他 workflow。
+- 审批 request/response 必须逐字段绑定到同一 `decision_id` / `workflow_id` / `task_id` / `run_id`；一次审批不得跨 workflow、task 或 run 重用。
 - manager-agent **不得**模拟用户审批，不得替用户选择选项。
 
 ## 4. approval-request.json 流程
@@ -46,6 +46,7 @@
 | `decision_id` | 唯一标识，形如 `DEC-...` |
 | `workflow_id` | 归属 workflow，形如 `WF-...` |
 | `task_id` | 归属 task（如适用），形如 `TASK-...` |
+| `run_id` | 归属 run（如适用），形如 `RUN-...` |
 | `trigger` | 第 2 节 15 类枚举之一 |
 | `summary` | 需要用户决定的事项摘要 |
 | `options[]` | 每项含 `option_id`、`description`、`impact`、`reversibility`（`reversible` / `hard_to_reverse` / `irreversible` / `unknown`） |
@@ -67,8 +68,9 @@
 |------|------|
 | `decision_id` | 与 request 对应 |
 | `workflow_id` | 归属 workflow |
+| `task_id` / `run_id` | 必须与 request 中的值逐字段相同（包括 `null`） |
 | `outcome` | `APPROVED` / `REJECTED` / `MODIFIED` |
-| `chosen_option_id` | 用户选择的 `option_id`（拒绝时可为 null） |
+| `chosen_option_id` | `APPROVED` 或 `MODIFIED` 时必须是 request `options[]` 中的 `option_id`；`REJECTED` 时必须为 `null` |
 | `raw_user_reply_summary` | 用户原始回复的摘要（不得篡改语义） |
 | `decided_by` | 人工决策者标识（非自动） |
 | `decided_at` | 决策时间（date-time） |
@@ -76,7 +78,7 @@
 
 流程：
 1. 用户回复后，manager-agent 保存 `decisions/<dec-id>.response.json` 与原始回复摘要，append event。
-2. request 的 `status` 更新为 `RESOLVED`。
+2. 先校验 response 的四个绑定 ID 与 request 一致，并校验 `outcome` 与 `chosen_option_id` 的组合；不匹配则拒绝该 response，不能拿其他 task/run 的响应放行。通过后 request 的 `status` 更新为 `RESOLVED`。
 3. 根据 `outcome`：
    - `APPROVED`：按 `chosen_option_id` 继续，并把该批准作为证据写入后续 Gate 与报告。
    - `REJECTED`：不执行被否决的操作，回到审批前的安全状态或改走非破坏性替代方案。

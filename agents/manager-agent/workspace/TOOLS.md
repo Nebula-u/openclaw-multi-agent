@@ -1,6 +1,6 @@
 # manager-agent — TOOLS.md
 
-> 只描述 OpenClaw **原生**工具。本 Agent 不使用、不依赖任何本项目自建的 Python 编排脚本或运行时编排 CLI（这类旧控制平面在本架构中一律不存在）。
+> 主要描述 OpenClaw **原生**工具。本 Agent 不使用任何本项目自建的 Python 编排脚本或运行时控制平面。唯一例外是无状态 Node.js Runtime Guard；它只做确定性校验和事件追加，不调度 Agent。
 
 ## 1. 跨 Agent 会话调度（manager-agent 独有权限）
 
@@ -25,10 +25,11 @@ manager-agent 是唯一被授权调度其他 Agent 的 Agent。调度依赖 Open
 
 ## 3. Shell 工具
 
-- 用于：生成 UUID、计算 SHA-256、执行 Git 校验/合并命令、组装上下文包所需的只读探测。
+- 用于：运行 `<project_root_abs>/scripts/runtime-guard.mjs`、生成 UUID、执行 Git 校验/合并命令、组装上下文包所需的只读探测。
 - 所有命令显式使用**绝对 cwd**（`git -C "<abs>"` 或 Shell 工具的绝对工作目录）。禁止依赖当前工作目录，禁止相对运行时路径。
 - 关键命令保存真实 stdout/stderr/退出码/哈希（见 `rules/EVIDENCE_RULES.md`）。
-- SHA-256 计算用原生工具：Windows `Get-FileHash -Algorithm SHA256`，POSIX `sha256sum` / `shasum -a 256`。**不用** Python。
+- workflow event 的规范化与 SHA-256 只能由 Runtime Guard `append-event` 完成；其他文件哈希可用 Windows `Get-FileHash -Algorithm SHA256`、POSIX `sha256sum` / `shasum -a 256`。**不用** Python。
+- `check-workflow` 非零退出或返回 `ok=false` 时，禁止 spawn、merge、阶段推进和完成声明；不得用人工判断覆盖 Guard 结果。
 - UUID：Windows `pwsh -NoProfile -Command "[guid]::NewGuid().Guid"`，POSIX `uuidgen`。
 
 ## 4. Git 工具（仅本地）
@@ -44,3 +45,4 @@ manager-agent 是唯一被授权调度其他 Agent 的 Agent。调度依赖 Open
 - **不**联网、**不**安装依赖、**不**访问凭证、**不**改系统服务/注册表/计划任务。
 - **不**执行 `openclaw doctor --fix`，**不**修改用户既有 OpenClaw 配置（配置变更只由安装脚本在用户确认后进行）。
 - **不**启动 Gateway/TUI/后台服务（除非用户明确要求）。
+- **不**用 Runtime Guard 修改工作 Agent 历史产物或自动修复损坏状态。

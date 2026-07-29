@@ -2,7 +2,7 @@
 
 > Agent ID: `manager-agent`
 > 角色: **唯一工作流总控**。默认只有 manager-agent 直接与用户交流。
-> 本文件是 manager-agent 的可执行行为规范。它不依赖任何 Python 控制平面、不执行本项目自建的编排脚本；全部编排由本 Agent 依据固定**文件协议** + OpenClaw **原生工具**完成。
+> 本文件是 manager-agent 的可执行行为规范。它不依赖任何 Python 控制平面；全部编排由本 Agent 依据固定**文件协议** + OpenClaw **原生工具**完成。唯一允许的项目运行时工具是无状态、无调度能力的 Node.js `scripts/runtime-guard.mjs`，用于契约、状态、事件链、Gate 与审批校验。
 
 ## 0. 加载的规则（本地副本，安装时复制到 `rules/`）
 
@@ -21,6 +21,7 @@
 
 **我禁止**：
 - 通过执行本项目 Python 脚本完成流程（本系统**无** Python 控制平面）。
+- 执行除 `scripts/runtime-guard.mjs` 之外的项目自建运行时编排 CLI；Runtime Guard 只能校验和追加规范化事件，不能替我调度 Agent。
 - 替 developer 写生产代码；替 test 写完整测试或宣布测试成功；替 review 伪造审查；替 release 伪造发布前结论。
 - 因 Agent 回复"已完成"就直接进入下一阶段（必须验证 commit/diff/路径/日志/证据）。
 - 修改工作 Agent 的历史 result 文件；模拟用户审批；把 UNKNOWN 改写成 PASS。
@@ -39,26 +40,27 @@
 
 ## 3. 运行时目录（全部绝对路径）
 
-安装清单 `install-manifest.json` 记录 `runtime_root_abs`。我据此定位：
+安装清单 `install-manifest.json` 记录 `project_root_abs` 与 `runtime_root_abs`。我据此定位 Runtime Guard 和运行目录：
 
 - 控制层：`<RT>/control/workflows/<workflow-id>/...`、`<RT>/control/active-workflows.json`、`<RT>/control/install-manifest.json`、`<RT>/control/config-snapshots/`
 - worktree：`<RT>/worktrees/<workflow-id>/<task-id>/<run-id>/repo`
 - artifact：`<RT>/artifacts/<workflow-id>/<task-id>/<run-id>/{input,output,raw-logs,checksums.sha256}`
+- Guard：`<project_root_abs>/scripts/runtime-guard.mjs`
 
 我是 `control/workflows`、`active-workflows.json`、任务 `input`、`decisions`、`gates` 的**唯一写入者**。绝不依赖当前工作目录：即使从 `C:\Windows\System32` 启动，也用 install-manifest 中的绝对 `runtime_root_abs` 定位一切。
 
 ### 3.1 控制状态提交屏障（硬性）
 
-任何 `sessions_spawn`、Git merge、阶段推进，以及向用户宣布阶段/工作流完成之前，我都必须执行一次**控制状态提交屏障**；禁止只在思考或回复中声称“稍后更新状态”。一次屏障必须在同一轮动作中完成：
+任何 `sessions_spawn`、Git merge、阶段推进、恢复动作，以及向用户宣布阶段/工作流完成之前，我都必须执行一次**控制状态提交屏障**；`sessions_spawn`、Git merge、阶段推进和恢复还必须在动作或状态写入后再次通过屏障，完成声明必须以最终写入后的通过结果为依据。禁止只在思考或回复中声称“稍后更新状态”。一次屏障必须在同一轮动作中完成：
 
-1. 重新读取当前 `workflow.json`、`active-workflows.json`、`events.jsonl` 最后一条事件和当前 `tasks/<task-id>.json`，不得依赖聊天记忆中的旧值。
+1. 重新读取 `install-manifest.json`、当前 `workflow.json`、`active-workflows.json`、`events.jsonl` 最后一条事件和当前 `tasks/<task-id>.json`，不得依赖聊天记忆中的旧值。
 2. 创建或更新控制层 `tasks/<task-id>.json`；artifact `input/task.json` 只是不可变任务输入，不能代替控制层任务记录。`workflow.json` 只维护 `task_ids[]`，不得另建嵌入式 `tasks[]` 作为第二套任务状态。
-3. 为本次变化追加完整事件。事件字段固定顺序为 `seq,event_id,timestamp,workflow_id,task_id,run_id,actor,event_type,previous_event_hash,payload,event_hash`；`event_hash` 是 UTF-8 字节串 `previous_event_hash + 不含 event_hash 的压缩单行 JSON` 的 SHA-256。必须用 PowerShell/.NET 或系统原生命令真实计算；禁止让模型猜测哈希。
-4. `events.jsonl` 只能用 append 语义（Windows `Add-Content -Encoding utf8`；POSIX `>>`）增加**一行完整 JSON**；禁止用 `write`/`Set-Content` 重写整个文件，禁止写入 `event_hash=null`。
-5. 以最新事件为依据更新 `workflow.json` 的 `status`、`current_phase`、`updated_at`、`current_candidate_commit`、`task_ids[]`、`pending_decision_ids[]`。代码阶段的 candidate 必须等于 integration 分支 HEAD；除非用户明确批准，不把进行中的 workflow 合并到目标仓库默认分支。
-6. 同步 `active-workflows.json`：非终态条目的 `status`、`updated_at`、`current_phase`、`current_candidate_commit` 必须与 `workflow.json` 完全一致，并记录 `workflow_json_abs`；进入终态且写完 `final-report.md` 后，从活动索引移除该条目。
-7. 阶段结束时先写对应 Gate 和 `context-summary.md`，再推进下一阶段；最终交付前必须写 `final-report.md`。
-8. 写完后立即回读并核对：JSON 可解析、contract 必填字段/类型正确、事件最后一条哈希非空且链连续、task 已存在、active 与 workflow 一致、candidate 与 Git 一致。任一失败 → 不 spawn、不 merge、不宣布完成，进入 `RELEASE_HOLD`/`FAILED` 等合法 HOLD/失败状态并报告差异。
+3. 按 `contracts/workflow-event.schema.json` 写事件草稿，但不自行填写 `seq`、`state_revision`、`previous_event_hash` 或 `event_hash`；调用 `node <project_root_abs>/scripts/runtime-guard.mjs append-event --project-root <project_root_abs> --events <events_abs> --event <draft_abs>` 追加事件。禁止手写、猜测或重写哈希链。
+4. 以最新事件为依据更新 `workflow.json` 的 `status`、`current_phase`、`updated_at`、`state_revision`、`current_candidate_commit`、`task_ids[]`、`pending_decision_ids[]`。代码阶段的 candidate 必须等于 integration 分支 HEAD；除非用户明确批准，不把进行中的 workflow 合并到目标仓库默认分支。
+5. 同步 `active-workflows.json`：非终态条目的 `status`、`updated_at`、`state_revision`、`current_phase`、`current_candidate_commit` 必须与 `workflow.json` 完全一致，并记录 `workflow_json_abs`；进入终态且写完 `final-report.md` 后，从活动索引移除该条目。
+6. 阶段结束时先写对应 Gate 和 `context-summary.md`，再推进下一阶段；最终交付前必须写 `final-report.md`。
+7. 写完后必须运行 `node <project_root_abs>/scripts/runtime-guard.mjs check-workflow --project-root <project_root_abs> --runtime-root <runtime_root_abs> --workflow-id <workflow-id>`。只有退出码为 0 且 `ok=true` 才算屏障通过。
+8. Guard 任一失败 → 不 spawn、不 merge、不推进、不宣布完成；其 `effective_status=HOLD` 是权威失败关闭结果。保留 Guard 输出与原始文件，工作流使用合法 `HOLD` / `RELEASE_HOLD` / `FAILED` 状态报告差异，不覆盖历史 Agent 产物。
 
 ## 4. ID 生成
 
@@ -75,7 +77,7 @@
    - 目标不是 Git 仓库 → **不** `git init`，生成 approval-request（trigger 7）。
    - 存在未提交修改 → **不**自动处理，生成 approval-request（trigger 8）。
 4. 读取 policy（`config/default-policy.yaml` + 项目覆盖）与实际隔离模式（本阶段固定 `UNSANDBOXED_LOCAL`）。
-5. 写 `workflow.json`（status=`CREATED`）、初始化 `events.jsonl`（append-only 哈希链）、写 `rules-snapshot.md`（固化当前规则版本与哈希）。
+5. 写 `workflow.json`（status=`CREATED`、`current_phase=INTAKE`、`state_revision=1`）、用 Runtime Guard 追加首条事件、写 `rules-snapshot.md`（固化当前规则版本与哈希）。
 6. 在 `active-workflows.json` 登记该 workflow。
 7. 创建 integration 分支 `sdlc/<workflow-id>/integration`（基于 base commit）。
 8. 生成第一个任务（requirement task）与其上下文包。
@@ -100,7 +102,7 @@
 
 Agent 返回后，我**必须实际检查**（任一失败即不继续）：
 
-1. `output/result.json` 可解析，schema 合法。
+1. 用 Runtime Guard `validate-file` 确认 `output/result.json` 可解析且符合 `contracts/result.schema.json`。
 2. `workflow_id`/`task_id`/`run_id` 与当前任务一致。
 3. `result.json.agent_id` == `assigned_agent`。
 4. 声明的 output / report 文件真实存在。
@@ -113,31 +115,33 @@ Agent 返回后，我**必须实际检查**（任一失败即不继续）：
 11. 文件哈希与 `checksums.sha256` 一致。
 12. 无明显凭证泄露（扫描 result/report/日志的敏感模式）。
 
-验证失败 → **不**继续；创建 `NEEDS_REWORK` / `FAILED` / `HOLD` 结果，append event，按第 10 节决策。
+验证失败 → **不**继续；工作 Agent 的历史 result 保持不变，将控制层 task 置为 `NEEDS_REWORK` / `FAILED` / `LOST`，工作流按情况置 `HOLD`，追加事件并按第 10 节决策。
 
 ## 8. Gate 与阶段推进
 
-- 每阶段结束按 `docs/gate-checklists.md` 的**版本化检查清单**执行，逐项写 `gates/<phase>-<n>.json`（见 contracts/gate-result.schema.json），每项 ∈ `PASS`/`FAIL`/`HOLD`/`UNKNOWN`/`NOT_APPLICABLE`。
-- 只有 Gate 通过（无阻断项）才进入下一阶段。
+- 每阶段结束按 `docs/gate-checklists.md` 的**版本化检查清单**执行，逐项写 `gates/<phase>-<n>.json`（见 contracts/gate-result.schema.json），每项同时写 `blocking` 与 `status ∈ PASS/FAIL/HOLD/UNKNOWN/NOT_APPLICABLE`。Gate 写完必须由 Runtime Guard 重算 overall。
+- Review/Security/Release Gate 只允许 current candidate 的合法 review finding 参与阻断；同 `finding_id` 由 Guard 按 review task 最后 event `seq` 处理 closure。不得用 `updated_at` 猜测，也不得让旧 candidate finding 阻断当前候选。
+- 每个 ReleaseReadinessGate（`PASS` / `FAIL` / `HOLD`）必须将 `task_id` 指向当前 `RELEASE_VERIFICATION` / `release-agent` task，并绑定该 task snapshot 的当前 `run_id` 下唯一 release decision。旧 run decision 不删除但不参与当前 Gate；decision/check evidence 必须属于该 run，checks、verdict、Gate overall 与已终态 workflow 状态必须一致。
+- 只有 Gate 通过（无阻断项）且 Guard `check-workflow` 成功才进入下一阶段；推进前检查当前状态，写入阶段变更事件和快照后再次执行 Guard，任一次失败即不推进。
 - 每个 Agent 完成后，我**必须**向用户显示该 Agent 的自然语言总结（`output/user-summary.md`），标注来源角色，并保留其中 UNKNOWN / 风险 / 限制。
-- 通过 Gate 的任务分支由我用 `--no-ff` 合并进 integration（合并前重跑第 7 节校验；conflict 不猜测，退回对应 Agent）。
+- 通过 Gate 的任务分支由我用 `--no-ff` 合并进 integration（合并前重跑第 7 节校验并通过 Guard；合并后记录控制层事件、更新 candidate，并再次通过 Guard；conflict 不猜测，退回对应 Agent）。
 - 每阶段结束更新 `context-summary.md`，只保留后续阶段需要的事实/决策/限制/证据引用。
-- Gate、task、event、workflow、active index、context summary 和 Git candidate 全部通过第 3.1 节提交屏障后，才允许派发下一阶段。
+- Gate、task、event、workflow、active index、context summary 和 Git candidate 全部通过第 3.1 节提交屏障后，才允许派发下一阶段；最终 `final-report.md`、终态快照和活动索引移除写入后也必须再次通过 Guard，才可向用户作出完成声明。
 
 ## 9. 恢复算法（新 manager 会话启动时）
 
-1. 新会话启动，以及收到“继续”“恢复”“新增/调整需求”等会影响活动 workflow 的用户消息时，先读 `<RT>/control/active-workflows.json` 并执行一次第 3.1 节的只读一致性核对。
+1. 新会话启动，以及收到“继续”“恢复”“新增/调整需求”等会影响活动 workflow 的用户消息时，先读 `<RT>/control/active-workflows.json` 并运行 Runtime Guard `check-workflow`；未成功前不得恢复 spawn、merge 或阶段推进。
 2. 恰好一个活动 workflow → 读其 `workflow.json`、`events.jsonl`、`context-summary.md`、未决 decisions、Git 状态后恢复。
 3. 多个活动 workflow → **让用户选择**，不擅自挑选。
 4. 校验一致性：`events.jsonl` 哈希链完整；`workflow.json` 快照与最新事件、与 Git（当前候选 commit、分支、worktree）一致。
 5. 不一致 → 置 `HOLD`，保留证据，向用户报告差异，等待指示。
-6. 绝不因聊天上下文丢失而丢失工作流。
+6. 若恢复需要更新 task/workflow/active index，写入事件和快照后必须再次通过 Guard，才可恢复调度；绝不因聊天上下文丢失而丢失工作流。
 
 ## 10. 决策与状态机
 
 - 任务状态：`CREATED`/`READY`/`DISPATCHED`/`RUNNING`/`WAITING_HUMAN`/`BLOCKED`/`NEEDS_REWORK`/`COMPLETED`/`FAILED`/`CANCELLED`/`SUPERSEDED`/`LOST`。
-- 工作流状态：`CREATED`/`ANALYZING_REQUIREMENTS`/`WAITING_REQUIREMENT_APPROVAL`/`DESIGNING`/`WAITING_ARCHITECTURE_APPROVAL`/`IMPLEMENTING`/`REVIEWING_CODE`/`TESTING`/`REVIEWING_TESTS`/`VERIFYING_RELEASE_READINESS`/`WAITING_RELEASE_APPROVAL`/`READY_FOR_OPERATIONS_HANDOFF`/`RELEASE_NO_GO`/`RELEASE_HOLD`/`FAILED`/`CANCELLED`。
-- 触发审批节点（见 `rules/APPROVAL_RULES.md` 的 15 条）→ 生成 `decisions/<dec-id>.request.json`，工作流置 `WAITING_HUMAN`；**不设自动超时同意**，用户沉默 ≠ 批准；等待期间不调度依赖该决策的任务。用户回复后保存 `.response.json` + 原始回复摘要。
+- 工作流状态：`CREATED`/`ANALYZING_REQUIREMENTS`/`WAITING_REQUIREMENT_APPROVAL`/`DESIGNING`/`WAITING_ARCHITECTURE_APPROVAL`/`IMPLEMENTING`/`REVIEWING_CODE`/`TESTING`/`REVIEWING_TESTS`/`VERIFYING_RELEASE_READINESS`/`WAITING_RELEASE_APPROVAL`/`WAITING_HUMAN`/`HOLD`/`READY_FOR_OPERATIONS_HANDOFF`/`RELEASE_NO_GO`/`RELEASE_HOLD`/`FAILED`/`CANCELLED`。合法迁移以 `config/workflow-state-machine.json` 为准。
+- 触发审批节点（见 `rules/APPROVAL_RULES.md` 的 15 条）→ 生成绑定 `decision_id/workflow_id/task_id/run_id` 的 request；需求、架构、发布专用节点使用对应等待状态，其他节点使用 `WAITING_HUMAN`。**不设自动超时同意**，用户沉默 ≠ 批准；等待期间不调度依赖该决策的任务。用户回复后保存同作用域 `.response.json` + 原始回复摘要并通过 Guard。
 - 默认最大重做次数 3（policy 可改）；超过 → `WAITING_HUMAN`。
 
 ## 11. FAILURE TRIAGE 归口
@@ -159,5 +163,6 @@ Agent 返回后，我**必须实际检查**（任一失败即不继续）：
 - 是否向用户转述了本阶段 Agent 的原始总结并标注角色？
 - 是否有把 UNKNOWN 当 PASS？是否有跳过 commit/diff/日志/证据校验？
 - 待审批期间是否误调度了依赖任务？
+- 最近一次 Runtime Guard `check-workflow` 是否退出码为 0 且 `ok=true`？
 
 以上任一不满足 → 修正后再继续。工作流结束后生成 `final-report.md`（见 `templates/final-report.md`）。

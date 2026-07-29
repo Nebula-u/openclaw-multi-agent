@@ -3,15 +3,22 @@
   "$id": "https://openclaw-sdlc-multi-agent/contracts/approval-response.schema.json",
   "title": "ApprovalResponse",
   "type": "object",
-  "additionalProperties": true,
-  "required": ["decision_id", "workflow_id", "outcome", "raw_user_reply_summary", "decided_by", "decided_at"],
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "decision_id", "workflow_id", "task_id", "run_id",
+    "outcome", "chosen_option_id", "raw_user_reply_summary", "decided_by",
+    "decided_at", "notes"
+  ],
   "properties": {
-    "decision_id": { "type": "string", "pattern": "^DEC-" },
-    "workflow_id": { "type": "string", "pattern": "^WF-" },
+    "schema_version": { "type": "integer", "const": 1 },
+    "decision_id": { "type": "string", "pattern": "^DEC-[A-Za-z0-9][A-Za-z0-9-]*$" },
+    "workflow_id": { "type": "string", "pattern": "^WF-[A-Za-z0-9][A-Za-z0-9-]*$" },
+    "task_id": { "type": ["string", "null"], "pattern": "^TASK-[A-Za-z0-9][A-Za-z0-9-]*$" },
+    "run_id": { "type": ["string", "null"], "pattern": "^RUN-[A-Za-z0-9][A-Za-z0-9-]*$" },
     "outcome": { "type": "string", "enum": ["APPROVED", "REJECTED", "MODIFIED"] },
     "chosen_option_id": { "type": ["string", "null"] },
     "raw_user_reply_summary": { "type": "string", "minLength": 1 },
-    "decided_by": { "type": "string", "description": "人工决策者标识（非自动）" },
+    "decided_by": { "type": "string", "minLength": 1 },
     "decided_at": { "type": "string", "format": "date-time" },
     "notes": { "type": "string" }
   }

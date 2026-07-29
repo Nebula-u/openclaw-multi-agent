@@ -5,7 +5,7 @@
 
 ## 1. 必须人工审批的节点
 
-出现以下任一情况，manager-agent 生成 `approval-request.json` 并将工作流置为 `WAITING_HUMAN`：
+出现以下任一情况，manager-agent 生成 `approval-request.json`。需求、架构、发布专用节点分别进入 `WAITING_REQUIREMENT_APPROVAL`、`WAITING_ARCHITECTURE_APPROVAL`、`WAITING_RELEASE_APPROVAL`；其他节点进入通用 `WAITING_HUMAN`：
 
 1. 需求存在影响范围或验收方式的关键歧义。
 2. 实现存在明显不同取舍的方向（成本/风险/兼容性/维护差异大）。
@@ -29,14 +29,16 @@
 - 等待审批期间，不得继续调度依赖该决策的任务。
 - 用户回复后，保存 `approval-response.json` + 原始回复摘要。
 - 审批粒度绑定到具体 `decision_id` / `task_id` / `run_id`；一次审批不自动延伸到其他上下文。
+- request/response 必须同时记录并逐字段匹配 `workflow_id`、可空 `task_id` 和可空 `run_id`；Runtime Guard 校验失败即有效 HOLD。
+- `HOLD` 是 workflow / Gate 的合法阻塞状态，不是工作 Agent 的 `result_status`；不得重写历史 `result.json` 为 `HOLD`。保留原 result，由 manager 在控制层记录 `HOLD`、差异和后续人工决策。
 
 ## 3. approval-request.json（见 contracts/approval-request.schema.json）
 
-至少含：`decision_id`、`workflow_id`、`task_id`（如适用）、`trigger`（上面 1–15 之一）、`summary`、`options`（每项含 id/描述/影响/可逆性）、`recommended_option`（可选，带理由）、`evidence_refs`、`created_at`、`status`（`PENDING`）。
+至少含：`schema_version`、`decision_id`、`workflow_id`、`task_id`（可为 null）、`run_id`（可为 null）、`trigger`（上面 1–15 之一）、`summary`、`options`（每项含 id/描述/影响/可逆性）、`recommended_option`（可为 null，非空时带理由）、`evidence_refs`、`created_at`、`status`（`PENDING`）。
 
 ## 4. approval-response.json（见 contracts/approval-response.schema.json）
 
-至少含：`decision_id`、`workflow_id`、`chosen_option_id` 或 `REJECTED`、`raw_user_reply_summary`、`decided_by`、`decided_at`、`notes`。
+至少含：`schema_version`、与 request 完全相同的 `decision_id`/`workflow_id`/`task_id`/`run_id`、`outcome`、`chosen_option_id`、`raw_user_reply_summary`、`decided_by`、`decided_at`、`notes`。`APPROVED`/`MODIFIED` 必须选择 request 中存在的 option；`REJECTED` 的 chosen option 必须为 null。
 
 ## 5. 工作 Agent 侧
 

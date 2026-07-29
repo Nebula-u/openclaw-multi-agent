@@ -1,11 +1,11 @@
 # workflow.md — 主流程与状态机
 
-> 权威来源：重构 Prompt 第十一、十五节；`agents/manager-agent/workspace/AGENTS.md`；`contracts/workflow.schema.json`、`contracts/task.schema.json`。
+> 权威来源：`config/workflow-state-machine.json`、`contracts/workflow.schema.json`、`contracts/task.schema.json`。
 > 文档日期：2026-07-23
 
 ## 1. 本文用途
 
-本文说明标准 SDLC 主流程的 **13 个阶段**（每阶段职责与产出），并列出**任务状态机**与**工作流状态机**的**全部枚举值**（与 contracts 完全一致）。同时给出默认最大重做次数与超限处理。主流程由 `manager-agent` 驱动，不运行任何本项目 Python 脚本。
+本文说明标准 SDLC 主流程的 **13 个阶段**（每阶段职责与产出），并列出**任务状态机**与**工作流状态机**的**全部枚举值**。状态枚举、合法迁移和阶段—状态约束以 `config/workflow-state-machine.json` 为准，contracts 约束快照字段。主流程由 `manager-agent` 驱动；Runtime Guard 只在边界 fail-closed 校验，不编排也不写控制快照。
 
 ## 2. 13 阶段主流程
 
@@ -36,7 +36,7 @@ CREATED · READY · DISPATCHED · RUNNING · WAITING_HUMAN · BLOCKED ·
 NEEDS_REWORK · COMPLETED · FAILED · CANCELLED · SUPERSEDED · LOST
 ```
 
-典型迁移：
+合法迁移只能采用状态机的 `task.transitions`；下列是关键语义，而非“任意状态可迁移”的简写：
 
 ```text
 CREATED → READY → DISPATCHED → RUNNING →
@@ -45,9 +45,9 @@ CREATED → READY → DISPATCHED → RUNNING →
     ├─ BLOCKED          （环境/工具/权限阻塞）
     ├─ WAITING_HUMAN    （触发人工审批节点）
     └─ FAILED
-被替代：任意 → SUPERSEDED（改规则/改上下文后新建 attempt 取代旧任务）
-用户取消：任意 → CANCELLED
-恢复时不一致/丢失：→ LOST（进入 HOLD 处理）
+`WAITING_HUMAN` 只能从 `READY` 或 `RUNNING` 进入，并可回到 `READY`/`RUNNING`，或进入 `BLOCKED`、`CANCELLED`、`SUPERSEDED`。
+`BLOCKED` 表示任务受环境、工具或权限阻塞；只能回到 `READY`、转 `WAITING_HUMAN`、`FAILED`、`CANCELLED` 或 `SUPERSEDED`。
+`LOST` 只能从 `DISPATCHED` 或 `RUNNING` 进入；之后只能转 `BLOCKED`、`FAILED`、`CANCELLED` 或 `SUPERSEDED`。`SUPERSEDED` 只可由状态机列出的非终态进入，不能以“任意状态”概括。
 ```
 
 `task_type` 枚举（来源同上）：`REQUIREMENTS`、`ARCHITECTURE`、`DEVELOPMENT`、`CODE_REVIEW`、`DEVELOPER_REWORK`、`TEST_IMPLEMENTATION`、`TEST_CODE_REVIEW`、`FAILURE_TRIAGE`、`RELEASE_VERIFICATION`。
@@ -62,7 +62,7 @@ CREATED · ANALYZING_REQUIREMENTS · WAITING_REQUIREMENT_APPROVAL ·
 DESIGNING · WAITING_ARCHITECTURE_APPROVAL · IMPLEMENTING ·
 REVIEWING_CODE · TESTING · REVIEWING_TESTS ·
 VERIFYING_RELEASE_READINESS · WAITING_RELEASE_APPROVAL ·
-READY_FOR_OPERATIONS_HANDOFF · RELEASE_NO_GO · RELEASE_HOLD ·
+WAITING_HUMAN · HOLD · READY_FOR_OPERATIONS_HANDOFF · RELEASE_NO_GO · RELEASE_HOLD ·
 FAILED · CANCELLED
 ```
 
@@ -85,6 +85,10 @@ release NO_GO                  → RELEASE_NO_GO
 release HOLD                   → RELEASE_HOLD
 异常终止 / 用户取消             → FAILED / CANCELLED
 ```
+
+`WAITING_HUMAN` 是等待明确人工决定的 workflow 状态；`HOLD` 是 manager 因一致性、证据或安全边界无法继续而暂停的 workflow 状态。两者都属于 workflow 状态，**不是** Agent `result_status`。`result_status` 的合法值仅为 `COMPLETED`、`NEEDS_REWORK`、`BLOCKED`、`HUMAN_DECISION_REQUIRED`、`FAILED`。`RELEASE_HOLD` 仅适用于发布阶段。
+
+工作流合法迁移、包括 `WAITING_HUMAN`/`HOLD` 的可恢复去向，以及每个 `current_phase` 可搭配的状态，均以状态机的 `workflow.transitions` 与 `workflow.phase_statuses` 为准；manager 不得自行创造迁移。每次接受状态变化时，`state_revision` 必须递增，并与最新 `events.jsonl` 事件、`workflow.json` 和 `active-workflows.json` 的值一致。
 
 ## 5. FAILURE TRIAGE 归口（阶段 11）
 
