@@ -22,8 +22,12 @@ const GUARD = join(ROOT, 'scripts', 'runtime-guard.mjs');
 const WORKFLOW_ID = 'WF-00000000-0000-0000-0000-000000000001';
 const TASK_ID = 'TASK-00000000-0000-0000-0000-000000000001';
 const RUN_ID = 'RUN-00000000-0000-0000-0000-000000000001';
+const TASK_ID_2 = 'TASK-00000000-0000-0000-0000-000000000002';
+const RUN_ID_2 = 'RUN-00000000-0000-0000-0000-000000000002';
 const ZERO_HASH = '0'.repeat(64);
 const FIRST_EVENT_HASH = 'd42a3dbcacd494ced033f30a4818ca3a4941f8e76e44ce459782ef534dbe15e8';
+const NUMERIC_KEY_CANONICAL = '{"actor":"manager-agent","candidate_commit":null,"event_id":"EVT-00000000-0000-0000-0000-000000000001","event_type":"WORKFLOW_CREATED","from_phase":null,"from_status":null,"payload":{"10":"ten","2":"two","nested":{"10":"nested-ten","2":"nested-two"}},"previous_event_hash":"0000000000000000000000000000000000000000000000000000000000000000","run_id":null,"schema_version":1,"seq":1,"state_revision":1,"task_id":null,"task_status_after":null,"task_status_before":null,"timestamp":"2026-07-29T00:00:00Z","to_phase":"INTAKE","to_status":"CREATED","workflow_id":"WF-00000000-0000-0000-0000-000000000001"}';
+const NUMERIC_KEY_EVENT_HASH = '518202028b4743c8422327055a6a3812324648ca634edb67f4adf72e382b5da9';
 
 function runGuard(args) {
   return spawnSync(process.execPath, [GUARD, ...args], {
@@ -77,7 +81,7 @@ function signedEvent(fields) {
     seq: fields.seq,
     state_revision: fields.seq,
     event_id: `EVT-00000000-0000-0000-0000-${String(fields.seq).padStart(12, '0')}`,
-    timestamp: `2026-07-29T00:00:0${fields.seq - 1}Z`,
+    timestamp: `2026-07-29T00:00:${String(fields.seq - 1).padStart(2, '0')}Z`,
     workflow_id: WORKFLOW_ID,
     task_id: fields.task_id ?? null,
     run_id: fields.run_id ?? null,
@@ -107,6 +111,7 @@ function makeRuntime({
   events,
   taskIds = [],
   pendingDecisionIds = [],
+  withCurrentCandidate = false,
 } = {}) {
   const root = mkdtempSync(join(tmpdir(), 'openclaw-runtime-guard-'));
   const runtimeRoot = join(root, 'runtime');
@@ -123,6 +128,9 @@ function makeRuntime({
   git(['-C', targetRoot, 'add', 'README.md']);
   git(['-C', targetRoot, '-c', 'user.name=Runtime Guard Test', '-c', 'user.email=guard@example.test', 'commit', '-qm', 'fixture']);
   git(['-C', targetRoot, 'branch', '-M', `sdlc/${WORKFLOW_ID}/integration`]);
+  const currentCandidateCommit = withCurrentCandidate
+    ? git(['-C', targetRoot, 'rev-parse', 'HEAD'])
+    : null;
   mkdirSync(join(workflowDir, 'tasks'), { recursive: true });
   mkdirSync(join(workflowDir, 'decisions'), { recursive: true });
   mkdirSync(join(workflowDir, 'gates'), { recursive: true });
@@ -138,7 +146,7 @@ function makeRuntime({
     runtime_root_abs: runtimeRoot,
     integration_branch: `sdlc/${WORKFLOW_ID}/integration`,
     base_commit: 'a'.repeat(40),
-    current_candidate_commit: null,
+    current_candidate_commit: currentCandidateCommit,
     current_phase: phase,
     state_revision: revision,
     task_ids: taskIds,
@@ -156,7 +164,7 @@ function makeRuntime({
         workflow_id: WORKFLOW_ID,
         status,
         current_phase: phase,
-        current_candidate_commit: null,
+        current_candidate_commit: currentCandidateCommit,
         state_revision: revision,
         updated_at: workflow.updated_at,
         workflow_json_abs: join(workflowDir, 'workflow.json'),
@@ -170,6 +178,7 @@ function makeRuntime({
       event_type: 'WORKFLOW_CREATED',
       to_status: status,
       to_phase: phase,
+      candidate_commit: currentCandidateCommit,
     }),
   ];
   writeFileSync(
@@ -184,6 +193,7 @@ function makeRuntime({
     targetRoot,
     workflowDir,
     workflow,
+    currentCandidateCommit,
     cleanup: () => rmSync(root, { recursive: true, force: true }),
   };
 }
@@ -197,13 +207,22 @@ function checkWorkflow(fixture) {
   ]);
 }
 
+function clearActiveWorkflows(fixture) {
+  writeJson(join(fixture.runtimeRoot, 'control', 'active-workflows.json'), {
+    schema_version: 1,
+    workflows: [],
+  });
+}
+
 function minimalTask(fixture, overrides = {}) {
-  const artifactRoot = join(fixture.runtimeRoot, 'artifacts', WORKFLOW_ID, TASK_ID, RUN_ID);
+  const taskId = overrides.task_id ?? TASK_ID;
+  const runId = overrides.run_id ?? RUN_ID;
+  const artifactRoot = join(fixture.runtimeRoot, 'artifacts', WORKFLOW_ID, taskId, runId);
   const task = {
     schema_version: 1,
     workflow_id: WORKFLOW_ID,
-    task_id: TASK_ID,
-    run_id: RUN_ID,
+    task_id: taskId,
+    run_id: runId,
     parent_task_id: null,
     task_type: 'CODE_REVIEW',
     assigned_agent: 'review-agent',
@@ -227,8 +246,228 @@ function minimalTask(fixture, overrides = {}) {
     updated_at: '2026-07-29T00:00:01Z',
     ...overrides,
   };
-  writeJson(join(fixture.workflowDir, 'tasks', `${TASK_ID}.json`), task);
+  writeJson(join(fixture.workflowDir, 'tasks', `${task.task_id}.json`), task);
   return task;
+}
+
+function appendTaskLifecycle(fixture, task, finalStatus = task.status) {
+  const statusPath = ['CREATED', 'READY', 'DISPATCHED', 'RUNNING', 'COMPLETED'];
+  const finalIndex = statusPath.indexOf(finalStatus);
+  assert.ok(finalIndex > 0, `unsupported fixture task status: ${finalStatus}`);
+  const eventsPath = join(fixture.workflowDir, 'events.jsonl');
+  const events = readFileSync(eventsPath, 'utf8')
+    .trim()
+    .split(/\r?\n/u)
+    .filter(Boolean)
+    .map((line) => JSON.parse(line));
+  for (let index = 0; index < finalIndex; index += 1) {
+    const previous = events.at(-1);
+    const after = statusPath[index + 1];
+    events.push(signedEvent({
+      seq: events.length + 1,
+      event_type: `TASK_${after}`,
+      from_status: previous.to_status,
+      to_status: previous.to_status,
+      from_phase: previous.to_phase,
+      to_phase: previous.to_phase,
+      task_id: task.task_id,
+      run_id: task.run_id,
+      task_status_before: statusPath[index],
+      task_status_after: after,
+      candidate_commit: fixture.currentCandidateCommit,
+      previous_event_hash: previous.event_hash,
+    }));
+  }
+  writeFileSync(eventsPath, `${events.map((event) => JSON.stringify(event)).join('\n')}\n`, 'utf8');
+  const latest = events.at(-1);
+  fixture.workflow.state_revision = latest.seq;
+  fixture.workflow.updated_at = latest.timestamp;
+  writeJson(join(fixture.workflowDir, 'workflow.json'), fixture.workflow);
+  const activePath = join(fixture.runtimeRoot, 'control', 'active-workflows.json');
+  const active = JSON.parse(readFileSync(activePath, 'utf8'));
+  const entry = active.workflows.find((candidate) => candidate.workflow_id === WORKFLOW_ID);
+  if (entry) {
+    entry.state_revision = latest.seq;
+    entry.updated_at = latest.timestamp;
+  }
+  writeJson(activePath, active);
+  return latest.seq;
+}
+
+function scopedTask(fixture, overrides = {}) {
+  const taskId = overrides.task_id ?? TASK_ID;
+  const runId = overrides.run_id ?? RUN_ID;
+  const artifactRoot = join(fixture.runtimeRoot, 'artifacts', WORKFLOW_ID, taskId, runId);
+  const worktree = join(fixture.runtimeRoot, 'worktrees', WORKFLOW_ID, taskId, runId, 'repo');
+  mkdirSync(join(artifactRoot, 'output'), { recursive: true });
+  mkdirSync(worktree, { recursive: true });
+  return minimalTask(fixture, {
+    status: 'COMPLETED',
+    input_commit: fixture.currentCandidateCommit,
+    worktree_path_abs: worktree,
+    artifact_root_abs: artifactRoot,
+    context_manifest_path_abs: join(artifactRoot, 'input', 'context-manifest.json'),
+    ...overrides,
+  });
+}
+
+function writeTaskResult(task) {
+  writeJson(join(task.artifact_root_abs, 'output', 'result.json'), {
+    schema_version: 1,
+    workflow_id: task.workflow_id,
+    task_id: task.task_id,
+    run_id: task.run_id,
+    agent_id: task.assigned_agent,
+    role: task.task_type.toLowerCase(),
+    attempt: task.attempt,
+    started_at: '2026-07-29T00:00:00Z',
+    finished_at: '2026-07-29T00:00:01Z',
+    result_status: 'COMPLETED',
+    summary_for_user: 'task complete',
+    summary_for_manager: 'task complete',
+    input_commit: task.input_commit,
+    output_commit: null,
+    branch: null,
+    worktree_path_abs: task.worktree_path_abs,
+    artifact_root_abs: task.artifact_root_abs,
+    command_record_refs: [],
+    evidence_refs: [],
+    claims: [],
+    isolation_mode: 'UNSANDBOXED_LOCAL',
+    self_validation: { preflight_passed: true, checks: [] },
+  });
+}
+
+function writeTaskEvidence(task, evidenceIds) {
+  writeFileSync(
+    join(task.artifact_root_abs, 'output', 'evidence.jsonl'),
+    `${evidenceIds.map((evidenceId) => JSON.stringify({
+      evidence_id: evidenceId,
+      source_type: 'file',
+      locator_abs: join(task.artifact_root_abs, 'output', 'result.json'),
+      collected_at: '2026-07-29T00:00:01Z',
+      collector: task.assigned_agent,
+    })).join('\n')}\n`,
+    'utf8',
+  );
+}
+
+function writeReviewFindings(task, overrides = {}) {
+  writeJson(join(task.artifact_root_abs, 'output', 'review-findings.json'), {
+    schema_version: 1,
+    workflow_id: task.workflow_id,
+    task_id: task.task_id,
+    reviewed_commit: task.input_commit,
+    review_scope: 'PRODUCTION_CODE',
+    verdict: 'APPROVE',
+    findings: [],
+    ...overrides,
+  });
+}
+
+function reviewFinding(overrides = {}) {
+  return {
+    finding_id: 'FIND-lineage',
+    severity: 'HIGH',
+    category: 'correctness',
+    title: 'authoritative finding',
+    description: 'candidate behavior requires review',
+    file: 'src/example.js',
+    line: 1,
+    commit: null,
+    evidence: [],
+    remediation: 'address and re-review',
+    blocking: true,
+    status: 'OPEN',
+    ...overrides,
+  };
+}
+
+function writePassGate(fixture, { taskId = null, evidenceId, gateName = 'SecurityGate' }) {
+  writeJson(join(fixture.workflowDir, 'gates', `${gateName}.json`), {
+    schema_version: 1,
+    gate_id: `GATE-${gateName}`,
+    gate_name: gateName,
+    workflow_id: WORKFLOW_ID,
+    task_id: taskId,
+    checklist_version: 'gate-checklists v1',
+    evaluated_at: '2026-07-29T00:00:30Z',
+    items: [{
+      item_id: `${gateName}-1`,
+      description: 'authoritative evidence is complete',
+      status: 'PASS',
+      blocking: true,
+      evidence_refs: [evidenceId],
+      notes: 'verified',
+    }],
+    evidence_refs: [evidenceId],
+    approved_decision_ids: [],
+    overall: 'PASS',
+    overall_reason: 'all authoritative checks passed',
+  });
+}
+
+function writeReleaseDecision(task, overrides = {}) {
+  const evidenceId = overrides.evidenceId ?? 'EVD-release-decision';
+  const value = {
+    schema_version: 1,
+    workflow_id: task.workflow_id,
+    task_id: task.task_id,
+    run_id: task.run_id,
+    candidate_commit: task.input_commit,
+    verdict: 'GO',
+    verdict_meaning: 'GO == READY_FOR_OPERATIONS_HANDOFF (not deployed)',
+    evaluated_at: '2026-07-29T00:00:20Z',
+    commit_matches_review_and_test: true,
+    checks: [{
+      name: 'candidate integrity',
+      status: 'PASS',
+      evidence_refs: [evidenceId],
+      notes: 'verified',
+    }],
+    evidence_refs: [evidenceId],
+    known_issues: [],
+    rollback_plan_present: true,
+    ops_handoff_present: true,
+    isolation_mode: 'UNSANDBOXED_LOCAL',
+    ...overrides,
+  };
+  delete value.evidenceId;
+  writeJson(join(task.artifact_root_abs, 'output', 'release-decision.json'), value);
+}
+
+function writeReleaseGate(fixture, { taskId, evidenceId, overall }) {
+  const itemStatus = { PASS: 'PASS', FAIL: 'FAIL', HOLD: 'HOLD' }[overall];
+  writeJson(join(fixture.workflowDir, 'gates', `release-${overall}.json`), {
+    schema_version: 1,
+    gate_id: `GATE-Release-${overall}`,
+    gate_name: 'ReleaseReadinessGate',
+    workflow_id: WORKFLOW_ID,
+    task_id: taskId,
+    checklist_version: 'gate-checklists v1',
+    evaluated_at: '2026-07-29T00:00:30Z',
+    items: [{
+      item_id: `REL-${overall}`,
+      description: 'release decision is authoritative',
+      status: itemStatus,
+      blocking: true,
+      evidence_refs: [evidenceId],
+      notes: 'verified',
+    }],
+    evidence_refs: [evidenceId],
+    approved_decision_ids: [],
+    overall,
+    overall_reason: `release decision requires ${overall}`,
+  });
+}
+
+function releaseTask(fixture, overrides = {}) {
+  return scopedTask(fixture, {
+    task_type: 'RELEASE_VERIFICATION',
+    assigned_agent: 'release-agent',
+    title: 'verify release candidate',
+    ...overrides,
+  });
 }
 
 test('validate-file rejects malformed JSON', () => {
@@ -395,6 +634,50 @@ test('append-event canonicalizes object keys by Unicode code point', () => {
   }
 });
 
+test('append-event canonicalizes numeric-looking object keys lexically, including nested keys', () => {
+  const fixture = makeRuntime();
+  try {
+    const eventsPath = join(fixture.workflowDir, 'numeric-key-events.jsonl');
+    const draftPath = join(fixture.root, 'numeric-key-event-draft.json');
+    writeJson(draftPath, {
+      event_id: 'EVT-00000000-0000-0000-0000-000000000001',
+      timestamp: '2026-07-29T00:00:00Z',
+      workflow_id: WORKFLOW_ID,
+      task_id: null,
+      run_id: null,
+      actor: 'manager-agent',
+      event_type: 'WORKFLOW_CREATED',
+      from_status: null,
+      to_status: 'CREATED',
+      from_phase: null,
+      to_phase: 'INTAKE',
+      task_status_before: null,
+      task_status_after: null,
+      candidate_commit: null,
+      payload: {
+        2: 'two',
+        10: 'ten',
+        nested: { 2: 'nested-two', 10: 'nested-ten' },
+      },
+    });
+    assert.equal(
+      createHash('sha256').update(NUMERIC_KEY_CANONICAL, 'utf8').digest('hex'),
+      NUMERIC_KEY_EVENT_HASH,
+    );
+    const result = runGuard([
+      'append-event',
+      '--project-root', ROOT,
+      '--events', eventsPath,
+      '--event', draftPath,
+    ]);
+    assert.equal(result.status, 0, result.stdout || result.stderr);
+    const event = JSON.parse(readFileSync(eventsPath, 'utf8').trim());
+    assert.equal(event.event_hash, NUMERIC_KEY_EVENT_HASH);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
 test('append-event refuses to extend a tampered event chain', () => {
   const fixture = makeRuntime();
   try {
@@ -475,6 +758,67 @@ test('check-workflow rejects active index revision drift', () => {
     const result = checkWorkflow(fixture);
     assert.equal(result.status, 1);
     assert.match(result.stdout, /ACTIVE_WORKFLOW_MISMATCH/);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('check-workflow accepts a terminal workflow removed from the active index with a final report', () => {
+  const fixture = makeRuntime({
+    status: 'READY_FOR_OPERATIONS_HANDOFF',
+    phase: 'FINAL_REPORT',
+  });
+  try {
+    clearActiveWorkflows(fixture);
+    writeFileSync(join(fixture.workflowDir, 'final-report.md'), '# Final report\n', 'utf8');
+    const result = checkWorkflow(fixture);
+    assert.equal(result.status, 0, result.stdout || result.stderr);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('check-workflow rejects a terminal workflow that remains in the active index', () => {
+  const fixture = makeRuntime({
+    status: 'READY_FOR_OPERATIONS_HANDOFF',
+    phase: 'FINAL_REPORT',
+  });
+  try {
+    writeFileSync(join(fixture.workflowDir, 'final-report.md'), '# Final report\n', 'utf8');
+    const result = checkWorkflow(fixture);
+    assert.equal(result.status, 1);
+    assert.match(result.stdout, /TERMINAL_ACTIVE_WORKFLOW_ENTRY/);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('check-workflow rejects a terminal workflow without a final report', () => {
+  const fixture = makeRuntime({
+    status: 'READY_FOR_OPERATIONS_HANDOFF',
+    phase: 'FINAL_REPORT',
+  });
+  try {
+    clearActiveWorkflows(fixture);
+    const result = checkWorkflow(fixture);
+    assert.equal(result.status, 1);
+    assert.match(result.stdout, /FINAL_REPORT_REQUIRED/);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('check-workflow rejects a terminal workflow with an empty final report', () => {
+  const fixture = makeRuntime({
+    status: 'READY_FOR_OPERATIONS_HANDOFF',
+    phase: 'FINAL_REPORT',
+  });
+  try {
+    clearActiveWorkflows(fixture);
+    writeFileSync(join(fixture.workflowDir, 'final-report.md'), ' \n', 'utf8');
+    const result = checkWorkflow(fixture);
+    assert.equal(result.status, 1);
+    assert.match(result.stdout, /FINAL_REPORT_REQUIRED/);
   } finally {
     fixture.cleanup();
   }
@@ -811,54 +1155,45 @@ test('check-workflow rejects a gate approval requested for another workflow', ()
 });
 
 test('check-workflow rejects release PASS with open HIGH findings', () => {
-  const fixture = makeRuntime({ taskIds: [TASK_ID] });
+  const fixture = makeRuntime({
+    status: 'VERIFYING_RELEASE_READINESS',
+    phase: 'RELEASE_VERIFICATION',
+    withCurrentCandidate: true,
+    taskIds: [TASK_ID, TASK_ID_2],
+  });
   try {
-    const task = minimalTask(fixture);
-    writeJson(join(task.artifact_root_abs, 'output', 'review-findings.json'), {
-      schema_version: 1,
-      workflow_id: WORKFLOW_ID,
-      task_id: TASK_ID,
-      reviewed_commit: 'b'.repeat(40),
-      review_scope: 'PRODUCTION_CODE',
+    const reviewTask = scopedTask(fixture);
+    const currentReleaseTask = releaseTask(fixture, {
+      task_id: TASK_ID_2,
+      run_id: RUN_ID_2,
+    });
+    appendTaskLifecycle(fixture, reviewTask);
+    appendTaskLifecycle(fixture, currentReleaseTask);
+    writeTaskResult(reviewTask);
+    writeTaskResult(currentReleaseTask);
+    writeTaskEvidence(currentReleaseTask, ['EVD-release-open-finding']);
+    writeReviewFindings(reviewTask, {
       verdict: 'REQUEST_CHANGES',
       findings: [
-        {
+        reviewFinding({
           finding_id: 'FIND-0001',
-          severity: 'HIGH',
           category: 'security',
           title: 'unsafe token storage',
           description: 'token stored in localStorage',
           file: 'src/auth.js',
           line: 10,
-          commit: 'b'.repeat(40),
-          evidence: [],
+          commit: fixture.currentCandidateCommit,
           remediation: 'use an HttpOnly cookie',
-          blocking: true,
-          status: 'OPEN',
-        },
+        }),
       ],
     });
-    writeJson(join(fixture.workflowDir, 'gates', 'release-1.json'), {
-      schema_version: 1,
-      gate_id: 'GATE-REL-001',
-      gate_name: 'ReleaseReadinessGate',
-      workflow_id: WORKFLOW_ID,
-      task_id: TASK_ID,
-      checklist_version: 'gate-checklists v1',
-      evaluated_at: '2026-07-29T00:00:01Z',
-      items: [
-        {
-          item_id: 'REL-1',
-          description: 'candidate matches',
-          status: 'PASS',
-          blocking: true,
-          evidence_refs: [],
-          notes: 'matched',
-        },
-      ],
-      approved_decision_ids: [],
+    writeReleaseDecision(currentReleaseTask, {
+      evidenceId: 'EVD-release-open-finding',
+    });
+    writeReleaseGate(fixture, {
+      taskId: currentReleaseTask.task_id,
+      evidenceId: 'EVD-release-open-finding',
       overall: 'PASS',
-      overall_reason: 'incorrectly ignored finding',
     });
     const result = checkWorkflow(fixture);
     assert.equal(result.status, 1);
@@ -911,11 +1246,27 @@ test('check-workflow rejects a cancelled approval reused by a gate', () => {
 });
 
 test('check-workflow blocks an open HIGH finding even when nonblocking', () => {
-  const fixture = makeRuntime({ taskIds: [TASK_ID] });
+  const fixture = makeRuntime({
+    withCurrentCandidate: true,
+    taskIds: [TASK_ID],
+  });
   try {
-    const task = minimalTask(fixture, { status: 'READY' });
-    writeJson(join(task.artifact_root_abs, 'output', 'review-findings.json'), { schema_version: 1, workflow_id: WORKFLOW_ID, task_id: TASK_ID, reviewed_commit: 'b'.repeat(40), review_scope: 'PRODUCTION_CODE', verdict: 'REQUEST_CHANGES', findings: [{ finding_id: 'FIND-1', severity: 'HIGH', category: 'security', title: 't', description: 'd', blocking: false, status: 'OPEN' }] });
-    writeJson(join(fixture.workflowDir, 'gates', 'gate.json'), { schema_version: 1, gate_id: 'GATE-001', gate_name: 'SecurityGate', workflow_id: WORKFLOW_ID, task_id: null, checklist_version: 'v1', evaluated_at: '2026-07-29T00:00:01Z', items: [{ item_id: 'I', description: 'd', status: 'PASS', blocking: false, evidence_refs: [], notes: '' }], approved_decision_ids: [], overall: 'PASS', overall_reason: 'x' });
+    const task = scopedTask(fixture);
+    appendTaskLifecycle(fixture, task);
+    writeTaskResult(task);
+    writeTaskEvidence(task, ['EVD-nonblocking-high']);
+    writeReviewFindings(task, {
+      verdict: 'REQUEST_CHANGES',
+      findings: [reviewFinding({
+        finding_id: 'FIND-1',
+        category: 'security',
+        blocking: false,
+      })],
+    });
+    writePassGate(fixture, {
+      evidenceId: 'EVD-nonblocking-high',
+      gateName: 'SecurityGate',
+    });
     const result = checkWorkflow(fixture);
     assert.equal(result.status, 1);
     assert.match(result.stdout, /OPEN_BLOCKING_FINDING/);
@@ -1046,4 +1397,472 @@ test('check-workflow rejects a control workflows parent symlink outside runtime 
     assert.equal(result.status, 1);
     assert.match(result.stdout, /RUNTIME_ROOT_ESCAPE/);
   } finally { fixture.cleanup(); }
+});
+
+test('check-workflow rejects review findings outside workflow, task, commit, or agent authority', async (t) => {
+  const cases = [
+    {
+      name: 'workflow mismatch',
+      reviewOverrides: { workflow_id: 'WF-00000000-0000-0000-0000-000000000999' },
+    },
+    {
+      name: 'task mismatch',
+      reviewOverrides: { task_id: 'TASK-00000000-0000-0000-0000-000000000999' },
+    },
+    {
+      name: 'reviewed commit differs from task input',
+      reviewOverrides: { reviewed_commit: 'f'.repeat(40) },
+    },
+    {
+      name: 'task is assigned to another agent',
+      taskOverrides: { assigned_agent: 'developer-agent' },
+    },
+  ];
+  for (const testCase of cases) {
+    await t.test(testCase.name, () => {
+      const fixture = makeRuntime({
+        withCurrentCandidate: true,
+        taskIds: [TASK_ID],
+      });
+      try {
+        const task = scopedTask(fixture, testCase.taskOverrides);
+        appendTaskLifecycle(fixture, task);
+        writeTaskResult(task);
+        writeReviewFindings(task, testCase.reviewOverrides);
+        const result = checkWorkflow(fixture);
+        assert.equal(result.status, 1);
+        assert.match(result.stdout, /REVIEW_SCOPE_MISMATCH/);
+      } finally {
+        fixture.cleanup();
+      }
+    });
+  }
+});
+
+test('check-workflow rejects review finding evidence from another task or run', () => {
+  const fixture = makeRuntime({
+    withCurrentCandidate: true,
+    taskIds: [TASK_ID, TASK_ID_2],
+  });
+  try {
+    const reviewTask = scopedTask(fixture);
+    const otherTask = scopedTask(fixture, {
+      task_id: TASK_ID_2,
+      run_id: RUN_ID_2,
+    });
+    appendTaskLifecycle(fixture, reviewTask);
+    appendTaskLifecycle(fixture, otherTask);
+    writeTaskResult(reviewTask);
+    writeTaskResult(otherTask);
+    writeTaskEvidence(otherTask, ['EVD-other-review-run']);
+    writeReviewFindings(reviewTask, {
+      verdict: 'REQUEST_CHANGES',
+      findings: [reviewFinding({ evidence: ['EVD-other-review-run'] })],
+    });
+    const result = checkWorkflow(fixture);
+    assert.equal(result.status, 1);
+    assert.match(result.stdout, /EVIDENCE_REFERENCE_NOT_FOUND/);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('check-workflow ignores an open finding reviewed against an older candidate', () => {
+  const fixture = makeRuntime({
+    withCurrentCandidate: true,
+    taskIds: [TASK_ID],
+  });
+  try {
+    const oldCommit = 'c'.repeat(40);
+    const task = scopedTask(fixture, { input_commit: oldCommit });
+    appendTaskLifecycle(fixture, task);
+    writeTaskResult(task);
+    writeTaskEvidence(task, ['EVD-old-candidate-review']);
+    writeReviewFindings(task, {
+      reviewed_commit: oldCommit,
+      verdict: 'REQUEST_CHANGES',
+      findings: [reviewFinding({ commit: oldCommit })],
+    });
+    writePassGate(fixture, {
+      evidenceId: 'EVD-old-candidate-review',
+      gateName: 'SecurityGate',
+    });
+    const result = checkWorkflow(fixture);
+    assert.equal(result.status, 0, result.stdout || result.stderr);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('check-workflow lets a later current-candidate RESOLVED finding close an earlier OPEN finding', () => {
+  const fixture = makeRuntime({
+    withCurrentCandidate: true,
+    taskIds: [TASK_ID, TASK_ID_2],
+  });
+  try {
+    const firstReview = scopedTask(fixture);
+    const laterReview = scopedTask(fixture, {
+      task_id: TASK_ID_2,
+      run_id: RUN_ID_2,
+    });
+    appendTaskLifecycle(fixture, firstReview);
+    appendTaskLifecycle(fixture, laterReview);
+    writeTaskResult(firstReview);
+    writeTaskResult(laterReview);
+    writeTaskEvidence(laterReview, ['EVD-current-candidate-resolution']);
+    writeReviewFindings(firstReview, {
+      verdict: 'REQUEST_CHANGES',
+      findings: [reviewFinding()],
+    });
+    writeReviewFindings(laterReview, {
+      verdict: 'APPROVE',
+      findings: [reviewFinding({ status: 'RESOLVED' })],
+    });
+    writePassGate(fixture, {
+      evidenceId: 'EVD-current-candidate-resolution',
+      gateName: 'SecurityGate',
+    });
+    const result = checkWorkflow(fixture);
+    assert.equal(result.status, 0, result.stdout || result.stderr);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('check-workflow fails closed when current-candidate finding lineage is ambiguous', () => {
+  const fixture = makeRuntime({
+    withCurrentCandidate: true,
+    taskIds: [TASK_ID],
+  });
+  try {
+    const task = scopedTask(fixture);
+    appendTaskLifecycle(fixture, task);
+    writeTaskResult(task);
+    writeReviewFindings(task, {
+      verdict: 'REQUEST_CHANGES',
+      findings: [
+        reviewFinding({ status: 'OPEN' }),
+        reviewFinding({ status: 'RESOLVED' }),
+      ],
+    });
+    const result = checkWorkflow(fixture);
+    assert.equal(result.status, 1);
+    assert.match(result.stdout, /REVIEW_FINDING_LINEAGE_AMBIGUOUS/);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('check-workflow rejects FAIL or HOLD release gates without the current task/run decision', async (t) => {
+  for (const overall of ['FAIL', 'HOLD']) {
+    await t.test(overall, () => {
+      const fixture = makeRuntime({
+        status: 'VERIFYING_RELEASE_READINESS',
+        phase: 'RELEASE_VERIFICATION',
+        withCurrentCandidate: true,
+        taskIds: [TASK_ID],
+      });
+      try {
+        const task = releaseTask(fixture);
+        appendTaskLifecycle(fixture, task);
+        writeTaskResult(task);
+        writeTaskEvidence(task, ['EVD-release-gate']);
+        writeReleaseGate(fixture, {
+          taskId: task.task_id,
+          evidenceId: 'EVD-release-gate',
+          overall,
+        });
+        const result = checkWorkflow(fixture);
+        assert.equal(result.status, 1);
+        assert.match(result.stdout, /RELEASE_DECISION_REQUIRED/);
+      } finally {
+        fixture.cleanup();
+      }
+    });
+  }
+});
+
+test('check-workflow rejects a release decision with the wrong task, run, or assigned agent', async (t) => {
+  const cases = [
+    {
+      name: 'task mismatch',
+      decisionOverrides: { task_id: 'TASK-00000000-0000-0000-0000-000000000999' },
+    },
+    {
+      name: 'run mismatch',
+      decisionOverrides: { run_id: 'RUN-00000000-0000-0000-0000-000000000999' },
+    },
+    {
+      name: 'assigned agent mismatch',
+      taskOverrides: { assigned_agent: 'review-agent' },
+    },
+  ];
+  for (const testCase of cases) {
+    await t.test(testCase.name, () => {
+      const fixture = makeRuntime({
+        status: 'VERIFYING_RELEASE_READINESS',
+        phase: 'RELEASE_VERIFICATION',
+        withCurrentCandidate: true,
+        taskIds: [TASK_ID],
+      });
+      try {
+        const task = releaseTask(fixture, testCase.taskOverrides);
+        appendTaskLifecycle(fixture, task);
+        writeTaskResult(task);
+        writeTaskEvidence(task, ['EVD-release-scope']);
+        writeReleaseDecision(task, {
+          evidenceId: 'EVD-release-scope',
+          ...testCase.decisionOverrides,
+        });
+        writeReleaseGate(fixture, {
+          taskId: task.task_id,
+          evidenceId: 'EVD-release-scope',
+          overall: 'PASS',
+        });
+        const result = checkWorkflow(fixture);
+        assert.equal(result.status, 1);
+        assert.match(result.stdout, /RELEASE_TASK_SCOPE_MISMATCH/);
+      } finally {
+        fixture.cleanup();
+      }
+    });
+  }
+});
+
+test('check-workflow rejects release decision or check evidence from another task or run', async (t) => {
+  const cases = [
+    {
+      name: 'decision evidence',
+      decisionOverrides: { evidence_refs: ['EVD-other-release-run'] },
+    },
+    {
+      name: 'check evidence',
+      decisionOverrides: {
+        checks: [{
+          name: 'candidate integrity',
+          status: 'PASS',
+          evidence_refs: ['EVD-other-release-run'],
+          notes: 'wrong scope',
+        }],
+      },
+    },
+  ];
+  for (const testCase of cases) {
+    await t.test(testCase.name, () => {
+      const fixture = makeRuntime({
+        status: 'VERIFYING_RELEASE_READINESS',
+        phase: 'RELEASE_VERIFICATION',
+        withCurrentCandidate: true,
+        taskIds: [TASK_ID, TASK_ID_2],
+      });
+      try {
+        const task = releaseTask(fixture);
+        const otherTask = releaseTask(fixture, {
+          task_id: TASK_ID_2,
+          run_id: RUN_ID_2,
+        });
+        appendTaskLifecycle(fixture, task);
+        appendTaskLifecycle(fixture, otherTask);
+        writeTaskResult(task);
+        writeTaskResult(otherTask);
+        writeTaskEvidence(task, ['EVD-current-release-run']);
+        writeTaskEvidence(otherTask, ['EVD-other-release-run']);
+        writeReleaseDecision(task, {
+          evidenceId: 'EVD-current-release-run',
+          ...testCase.decisionOverrides,
+        });
+        writeReleaseGate(fixture, {
+          taskId: task.task_id,
+          evidenceId: 'EVD-current-release-run',
+          overall: 'PASS',
+        });
+        const result = checkWorkflow(fixture);
+        assert.equal(result.status, 1);
+        assert.match(result.stdout, /EVIDENCE_REFERENCE_NOT_FOUND/);
+      } finally {
+        fixture.cleanup();
+      }
+    });
+  }
+});
+
+test('check-workflow rejects release checks that contradict the declared verdict', () => {
+  const fixture = makeRuntime({
+    status: 'VERIFYING_RELEASE_READINESS',
+    phase: 'RELEASE_VERIFICATION',
+    withCurrentCandidate: true,
+    taskIds: [TASK_ID],
+  });
+  try {
+    const task = releaseTask(fixture);
+    appendTaskLifecycle(fixture, task);
+    writeTaskResult(task);
+    writeTaskEvidence(task, ['EVD-release-verdict']);
+    writeReleaseDecision(task, {
+      evidenceId: 'EVD-release-verdict',
+      verdict: 'GO',
+      checks: [{
+        name: 'candidate integrity',
+        status: 'FAIL',
+        evidence_refs: ['EVD-release-verdict'],
+        notes: 'failed',
+      }],
+    });
+    writeReleaseGate(fixture, {
+      taskId: task.task_id,
+      evidenceId: 'EVD-release-verdict',
+      overall: 'PASS',
+    });
+    const result = checkWorkflow(fixture);
+    assert.equal(result.status, 1);
+    assert.match(result.stdout, /RELEASE_VERDICT_RECOMPUTE_MISMATCH/);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('check-workflow recomputes release verdicts conservatively for every check status and empty checks', async (t) => {
+  const cases = [
+    { name: 'all PASS', statuses: ['PASS'], verdict: 'GO', overall: 'PASS' },
+    { name: 'any FAIL', statuses: ['PASS', 'FAIL'], verdict: 'NO_GO', overall: 'FAIL' },
+    { name: 'UNKNOWN overrides FAIL', statuses: ['FAIL', 'UNKNOWN'], verdict: 'HOLD', overall: 'HOLD' },
+    { name: 'HOLD', statuses: ['HOLD'], verdict: 'HOLD', overall: 'HOLD' },
+    { name: 'UNKNOWN', statuses: ['UNKNOWN'], verdict: 'HOLD', overall: 'HOLD' },
+    { name: 'NOT_APPLICABLE', statuses: ['NOT_APPLICABLE'], verdict: 'HOLD', overall: 'HOLD' },
+    { name: 'empty checks', statuses: [], verdict: 'HOLD', overall: 'HOLD' },
+  ];
+  for (const testCase of cases) {
+    await t.test(testCase.name, () => {
+      const fixture = makeRuntime({
+        status: 'VERIFYING_RELEASE_READINESS',
+        phase: 'RELEASE_VERIFICATION',
+        withCurrentCandidate: true,
+        taskIds: [TASK_ID],
+      });
+      try {
+        const task = releaseTask(fixture);
+        appendTaskLifecycle(fixture, task);
+        writeTaskResult(task);
+        writeTaskEvidence(task, ['EVD-release-status']);
+        writeReleaseDecision(task, {
+          evidenceId: 'EVD-release-status',
+          verdict: testCase.verdict,
+          checks: testCase.statuses.map((status, index) => ({
+            name: `check ${index + 1}`,
+            status,
+            evidence_refs: ['EVD-release-status'],
+            notes: status,
+          })),
+        });
+        writeReleaseGate(fixture, {
+          taskId: task.task_id,
+          evidenceId: 'EVD-release-status',
+          overall: testCase.overall,
+        });
+        const result = checkWorkflow(fixture);
+        assert.equal(result.status, 0, result.stdout || result.stderr);
+      } finally {
+        fixture.cleanup();
+      }
+    });
+  }
+});
+
+test('check-workflow uses only the release decision for the gate current task and run', () => {
+  const fixture = makeRuntime({
+    status: 'VERIFYING_RELEASE_READINESS',
+    phase: 'RELEASE_VERIFICATION',
+    withCurrentCandidate: true,
+    taskIds: [TASK_ID, TASK_ID_2],
+  });
+  try {
+    const oldTask = releaseTask(fixture);
+    const currentTask = releaseTask(fixture, {
+      task_id: TASK_ID_2,
+      run_id: RUN_ID_2,
+    });
+    appendTaskLifecycle(fixture, oldTask);
+    appendTaskLifecycle(fixture, currentTask);
+    writeTaskResult(oldTask);
+    writeTaskResult(currentTask);
+    writeTaskEvidence(oldTask, ['EVD-old-release-run']);
+    writeTaskEvidence(currentTask, ['EVD-current-release-run']);
+    writeReleaseDecision(oldTask, {
+      evidenceId: 'EVD-old-release-run',
+      verdict: 'NO_GO',
+      checks: [{
+        name: 'old candidate check',
+        status: 'FAIL',
+        evidence_refs: ['EVD-old-release-run'],
+        notes: 'historical failure',
+      }],
+    });
+    writeReleaseDecision(currentTask, {
+      evidenceId: 'EVD-current-release-run',
+      verdict: 'GO',
+    });
+    writeReleaseGate(fixture, {
+      taskId: currentTask.task_id,
+      evidenceId: 'EVD-current-release-run',
+      overall: 'PASS',
+    });
+    const result = checkWorkflow(fixture);
+    assert.equal(result.status, 0, result.stdout || result.stderr);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('check-workflow requires a ReleaseReadinessGate to bind a release task', () => {
+  const fixture = makeRuntime({
+    status: 'VERIFYING_RELEASE_READINESS',
+    phase: 'RELEASE_VERIFICATION',
+    withCurrentCandidate: true,
+    taskIds: [TASK_ID],
+  });
+  try {
+    const task = releaseTask(fixture);
+    appendTaskLifecycle(fixture, task);
+    writeTaskResult(task);
+    writeTaskEvidence(task, ['EVD-release-task']);
+    writeReleaseDecision(task, { evidenceId: 'EVD-release-task' });
+    writeReleaseGate(fixture, {
+      taskId: null,
+      evidenceId: 'EVD-release-task',
+      overall: 'PASS',
+    });
+    const result = checkWorkflow(fixture);
+    assert.equal(result.status, 1);
+    assert.match(result.stdout, /RELEASE_GATE_TASK_REQUIRED/);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('check-workflow rejects a release verdict that conflicts with an already terminal workflow status', () => {
+  const fixture = makeRuntime({
+    status: 'RELEASE_NO_GO',
+    phase: 'FINAL_REPORT',
+    withCurrentCandidate: true,
+    taskIds: [TASK_ID],
+  });
+  try {
+    const task = releaseTask(fixture);
+    appendTaskLifecycle(fixture, task);
+    writeTaskResult(task);
+    writeTaskEvidence(task, ['EVD-terminal-release']);
+    writeReleaseDecision(task, { evidenceId: 'EVD-terminal-release', verdict: 'GO' });
+    writeReleaseGate(fixture, {
+      taskId: task.task_id,
+      evidenceId: 'EVD-terminal-release',
+      overall: 'PASS',
+    });
+    clearActiveWorkflows(fixture);
+    writeFileSync(join(fixture.workflowDir, 'final-report.md'), '# Final report\n', 'utf8');
+    const result = checkWorkflow(fixture);
+    assert.equal(result.status, 1);
+    assert.match(result.stdout, /RELEASE_WORKFLOW_STATUS_MISMATCH/);
+  } finally {
+    fixture.cleanup();
+  }
 });

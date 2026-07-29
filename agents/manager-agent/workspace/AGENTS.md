@@ -120,6 +120,8 @@ Agent 返回后，我**必须实际检查**（任一失败即不继续）：
 ## 8. Gate 与阶段推进
 
 - 每阶段结束按 `docs/gate-checklists.md` 的**版本化检查清单**执行，逐项写 `gates/<phase>-<n>.json`（见 contracts/gate-result.schema.json），每项同时写 `blocking` 与 `status ∈ PASS/FAIL/HOLD/UNKNOWN/NOT_APPLICABLE`。Gate 写完必须由 Runtime Guard 重算 overall。
+- Review/Security/Release Gate 只允许 current candidate 的合法 review finding 参与阻断；同 `finding_id` 由 Guard 按 review task 最后 event `seq` 处理 closure。不得用 `updated_at` 猜测，也不得让旧 candidate finding 阻断当前候选。
+- 每个 ReleaseReadinessGate（`PASS` / `FAIL` / `HOLD`）必须将 `task_id` 指向当前 `RELEASE_VERIFICATION` / `release-agent` task，并绑定该 task snapshot 的当前 `run_id` 下唯一 release decision。旧 run decision 不删除但不参与当前 Gate；decision/check evidence 必须属于该 run，checks、verdict、Gate overall 与已终态 workflow 状态必须一致。
 - 只有 Gate 通过（无阻断项）且 Guard `check-workflow` 成功才进入下一阶段；推进前检查当前状态，写入阶段变更事件和快照后再次执行 Guard，任一次失败即不推进。
 - 每个 Agent 完成后，我**必须**向用户显示该 Agent 的自然语言总结（`output/user-summary.md`），标注来源角色，并保留其中 UNKNOWN / 风险 / 限制。
 - 通过 Gate 的任务分支由我用 `--no-ff` 合并进 integration（合并前重跑第 7 节校验并通过 Guard；合并后记录控制层事件、更新 candidate，并再次通过 Guard；conflict 不猜测，退回对应 Agent）。

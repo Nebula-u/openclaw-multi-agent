@@ -578,6 +578,7 @@ function validateTasks({ workflow, workflowDir, projectRoot, eventRecords, error
   const taskFiles = jsonFiles(join(workflowDir, 'tasks'));
   const tasks = [];
   const blockingFindings = [];
+  const currentCandidateFindings = [];
   const releaseDecisions = [];
   const evidenceByScope = new Map();
   const allEvidenceIds = new Set();
@@ -600,12 +601,15 @@ function validateTasks({ workflow, workflowDir, projectRoot, eventRecords, error
     if (!isRealPathWithin(join(workflow.runtime_root_abs, 'worktrees'), task.worktree_path_abs)) {
       errors.push(issue('WORKTREE_PATH_ESCAPE', taskFile, 'worktree_path_abs must exist under runtime worktrees without symlink escape'));
     }
-    const latestTaskEvent = [...eventRecords]
+    const latestTaskEventForTask = [...eventRecords]
       .reverse()
       .find((event) => event.task_id === task.task_id && event.task_status_after !== null);
+    const latestTaskEvent = [...eventRecords]
+      .reverse()
+      .find((event) => event.task_id === task.task_id && event.run_id === task.run_id && event.task_status_after !== null);
     if (!latestTaskEvent) {
       errors.push(issue('TASK_EVENT_REQUIRED', taskFile, 'task snapshot has no task state event'));
-    } else if (latestTaskEvent.task_status_after !== task.status || latestTaskEvent.run_id !== task.run_id) {
+    } else if (latestTaskEventForTask !== latestTaskEvent || latestTaskEvent.task_status_after !== task.status) {
       errors.push(issue('TASK_EVENT_MISMATCH', taskFile, 'latest task event does not match task snapshot'));
     }
 
@@ -675,9 +679,26 @@ function validateTasks({ workflow, workflowDir, projectRoot, eventRecords, error
       const review = readJsonForCheck(reviewPath, errors);
       if (review) {
         addSchemaErrors(errors, review, reviewSchema, reviewPath);
+        const reviewScopeMatches = review.workflow_id === workflow.workflow_id
+          && review.task_id === task.task_id
+          && ['CODE_REVIEW', 'TEST_CODE_REVIEW'].includes(task.task_type)
+          && task.assigned_agent === 'review-agent'
+          && review.reviewed_commit === task.input_commit;
+        if (!reviewScopeMatches) {
+          errors.push(issue('REVIEW_SCOPE_MISMATCH', reviewPath, 'review must bind its review-agent task, workflow, and task input commit'));
+        }
         for (const finding of review.findings ?? []) {
-          if (['BLOCKER', 'CRITICAL', 'HIGH'].includes(finding.severity) && finding.status === 'OPEN') {
-            blockingFindings.push({ task_id: task.task_id, finding_id: finding.finding_id, severity: finding.severity });
+          validateEvidenceRefs(finding.evidence, evidenceIds, reviewPath, errors);
+          if (reviewScopeMatches && review.reviewed_commit === workflow.current_candidate_commit) {
+            currentCandidateFindings.push({
+              task_id: task.task_id,
+              run_id: task.run_id,
+              event_seq: latestTaskEvent?.seq ?? null,
+              finding_id: finding.finding_id,
+              severity: finding.severity,
+              status: finding.status,
+              source: reviewPath,
+            });
           }
         }
       }
@@ -688,14 +709,73 @@ function validateTasks({ workflow, workflowDir, projectRoot, eventRecords, error
       const release = readJsonForCheck(releasePath, errors);
       if (release) {
         addSchemaErrors(errors, release, releaseSchema, releasePath);
+        const releaseTaskScopeMatches = task.task_type === 'RELEASE_VERIFICATION'
+          && task.assigned_agent === 'release-agent'
+          && release.task_id === task.task_id
+          && release.run_id === task.run_id;
+        if (!releaseTaskScopeMatches) {
+          errors.push(issue('RELEASE_TASK_SCOPE_MISMATCH', releasePath, 'release decision must bind the current release verification task and run'));
+        }
         if (release.workflow_id !== workflow.workflow_id) {
           errors.push(issue('RELEASE_WORKFLOW_MISMATCH', releasePath, 'release decision workflow_id does not match workflow'));
         }
-        if (release.candidate_commit !== workflow.current_candidate_commit) {
-          errors.push(issue('RELEASE_CANDIDATE_MISMATCH', releasePath, 'release decision candidate does not match current candidate'));
+        if (release.candidate_commit !== task.input_commit
+          || release.candidate_commit !== workflow.current_candidate_commit) {
+          errors.push(issue('RELEASE_CANDIDATE_MISMATCH', releasePath, 'release decision candidate must match the task input and current workflow candidate'));
         }
-        releaseDecisions.push(release);
+        validateEvidenceRefs(release.evidence_refs, evidenceIds, releasePath, errors);
+        for (const check of release.checks ?? []) {
+          validateEvidenceRefs(check.evidence_refs, evidenceIds, releasePath, errors);
+        }
+        const statuses = (release.checks ?? []).map((check) => check.status);
+        const computedVerdict = statuses.some((status) => ['HOLD', 'UNKNOWN', 'NOT_APPLICABLE'].includes(status)) ? 'HOLD'
+          : statuses.some((status) => status === 'FAIL') ? 'NO_GO'
+            : statuses.length > 0 && statuses.every((status) => status === 'PASS') ? 'GO' : 'HOLD';
+        if (release.verdict !== computedVerdict) {
+          errors.push(issue('RELEASE_VERDICT_RECOMPUTE_MISMATCH', releasePath, `checks require ${computedVerdict}, found ${release.verdict}`));
+        }
+        releaseDecisions.push({
+          decision: release,
+          task_id: task.task_id,
+          run_id: task.run_id,
+          source: releasePath,
+        });
       }
+    }
+  }
+  const findingsById = new Map();
+  for (const finding of currentCandidateFindings) {
+    if (!findingsById.has(finding.finding_id)) findingsById.set(finding.finding_id, []);
+    findingsById.get(finding.finding_id).push(finding);
+  }
+  for (const [findingId, findings] of findingsById) {
+    const seenScopes = new Set();
+    const seenSequences = new Set();
+    let ambiguous = false;
+    for (const finding of findings) {
+      const findingScope = scopeKey(finding.task_id, finding.run_id);
+      if (!Number.isInteger(finding.event_seq)
+        || seenScopes.has(findingScope)
+        || seenSequences.has(finding.event_seq)) {
+        ambiguous = true;
+      }
+      seenScopes.add(findingScope);
+      if (Number.isInteger(finding.event_seq)) seenSequences.add(finding.event_seq);
+    }
+    if (ambiguous) {
+      errors.push(issue('REVIEW_FINDING_LINEAGE_AMBIGUOUS', findings[0]?.source ?? '$.findings', `finding ${findingId} cannot be ordered uniquely by review task event seq`));
+      continue;
+    }
+    const latest = findings.reduce((selected, finding) => (
+      selected === null || finding.event_seq > selected.event_seq ? finding : selected
+    ), null);
+    if (latest && ['BLOCKER', 'CRITICAL', 'HIGH'].includes(latest.severity) && latest.status === 'OPEN') {
+      blockingFindings.push({
+        task_id: latest.task_id,
+        run_id: latest.run_id,
+        finding_id: latest.finding_id,
+        severity: latest.severity,
+      });
     }
   }
   if (!sameStringSet(tasks.map((task) => task.task_id), workflow.task_ids)) {
@@ -777,7 +857,7 @@ function expectedGateOverall(items) {
   return 'PASS';
 }
 
-function validateGates({ workflow, workflowDir, projectRoot, approvals, taskState, errors }) {
+function validateGates({ workflow, workflowDir, projectRoot, machine, approvals, taskState, errors }) {
   const gateSchema = readJson(join(projectRoot, 'contracts', 'gate-result.schema.json'));
   const gateFiles = jsonFiles(join(workflowDir, 'gates'));
   for (const gateFile of gateFiles) {
@@ -818,21 +898,36 @@ function validateGates({ workflow, workflowDir, projectRoot, approvals, taskStat
       errors.push(issue('OPEN_BLOCKING_FINDING', gateFile, 'gate cannot PASS with open BLOCKER, CRITICAL, or HIGH findings'));
     }
     if (gate.gate_name === 'ReleaseReadinessGate') {
-      const matchingDecisions = taskState.releaseDecisions.filter((decision) => decision.workflow_id === workflow.workflow_id
+      const gateTasks = gate.task_id === null
+        ? []
+        : taskState.tasks.filter((task) => task.task_id === gate.task_id);
+      const gateTask = gateTasks.length === 1 ? gateTasks[0] : null;
+      if (gate.task_id === null) {
+        errors.push(issue('RELEASE_GATE_TASK_REQUIRED', gateFile, 'ReleaseReadinessGate must bind a release verification task'));
+      } else if (!gateTask
+        || gateTask.task_type !== 'RELEASE_VERIFICATION'
+        || gateTask.assigned_agent !== 'release-agent') {
+        errors.push(issue('RELEASE_GATE_TASK_SCOPE_MISMATCH', gateFile, 'ReleaseReadinessGate task must be the current release-agent verification task'));
+      }
+      const matchingDecisions = taskState.releaseDecisions.filter(({ decision }) => gateTask
+        && decision.workflow_id === workflow.workflow_id
+        && decision.task_id === gateTask.task_id
+        && decision.run_id === gateTask.run_id
         && decision.candidate_commit === workflow.current_candidate_commit);
-      if (gate.overall === 'PASS' && matchingDecisions.length !== 1) {
-        errors.push(issue('RELEASE_DECISION_REQUIRED', gateFile, 'PASS release gate requires exactly one matching release decision'));
+      if (matchingDecisions.length !== 1) {
+        errors.push(issue('RELEASE_DECISION_REQUIRED', gateFile, 'release gate requires exactly one decision for its current release task and run'));
       }
       if (matchingDecisions.length > 1) {
-        errors.push(issue('AMBIGUOUS_RELEASE_DECISION', gateFile, 'multiple release decisions match the current candidate'));
+        errors.push(issue('AMBIGUOUS_RELEASE_DECISION', gateFile, 'multiple release decisions match the gate current task and run'));
       }
-      const verdict = matchingDecisions[0]?.verdict;
+      const verdict = matchingDecisions[0]?.decision.verdict;
       const verdictOverall = { GO: 'PASS', NO_GO: 'FAIL', HOLD: 'HOLD' }[verdict];
       if (verdictOverall && gate.overall !== verdictOverall) {
         errors.push(issue('RELEASE_VERDICT_MISMATCH', gateFile, `release verdict ${verdict} requires ${verdictOverall}`));
       }
       const expectedStatus = { GO: 'READY_FOR_OPERATIONS_HANDOFF', NO_GO: 'RELEASE_NO_GO', HOLD: 'RELEASE_HOLD' }[verdict];
-      if (expectedStatus && workflow.status !== expectedStatus) {
+      const isTerminal = new Set(machine.workflow?.terminal_statuses ?? []).has(workflow.status);
+      if (isTerminal && expectedStatus && workflow.status !== expectedStatus) {
         errors.push(issue('RELEASE_WORKFLOW_STATUS_MISMATCH', gateFile, `release verdict ${verdict} requires workflow status ${expectedStatus}`));
       }
     }
@@ -932,7 +1027,7 @@ function checkWorkflowCommand(options) {
   validateEventChain(eventRecords, workflow, machine, eventSchema, errors);
   const taskState = validateTasks({ workflow, workflowDir, projectRoot, eventRecords, errors });
   const approvals = validateApprovals({ workflow, workflowDir, projectRoot, taskState, errors });
-  validateGates({ workflow, workflowDir, projectRoot, approvals, taskState, errors });
+  validateGates({ workflow, workflowDir, projectRoot, machine, approvals, taskState, errors });
   validateGitCandidate(workflow, errors);
 
   if (errors.length > 0) {

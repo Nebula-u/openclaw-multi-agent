@@ -54,7 +54,7 @@
 
 ## 5. 强制输出（写入 `artifact_root_abs/output/`）
 
-- `release-decision.json` —— 结构化发布判断；含 `verdict`（`GO`/`NO_GO`/`HOLD`）、支撑与阻塞理由、证据引用、最终候选 commit 与一致性校验结果。
+- `release-decision.json` —— 结构化发布判断；必含与本任务一致的 `workflow_id` / `task_id` / `run_id` / `candidate_commit`、`verdict`（`GO`/`NO_GO`/`HOLD`）、顶层非空 `evidence_refs` 与 `checks[]`。每个 check 必含 `status ∈ PASS/FAIL/HOLD/UNKNOWN/NOT_APPLICABLE` 和非空 `evidence_refs`，所有证据只能引用本 task/run 的 `evidence.jsonl`。
 - `release-decision.md` —— 人类可读发布判断说明。
 - `release-notes.md` —— 本候选的发布说明。
 - `operations-handoff.md` —— 运维交接说明（交接边界、`GO=READY_FOR_OPERATIONS_HANDOFF` 的明确声明）。
@@ -78,7 +78,7 @@
 
 1. Preflight 6 项全部通过并已记录，含最终候选 commit 与 review/test commit 一致性校验。
 2. 已聚合并核对：构建结果、测试证据、安全检查、敏感信息、依赖风险、构建工件、校验和、已知问题、部署前置、回滚计划。
-3. `verdict` 已给出，且与判定规则一致：关键证据缺失未给 GO；测试失败/严重安全问题/关键构建不可验证未给 GO。
+3. `verdict` 已给出且与 checks 保守重算一致：任一 `HOLD` / `UNKNOWN` / `NOT_APPLICABLE` → `HOLD`；否则任一 `FAIL` → `NO_GO`；非空且全 `PASS` → `GO`；空 checks → `HOLD`。关键证据缺失未给 GO；测试失败/严重安全问题/关键构建不可验证未给 GO。
 4. `GO` 的含义已在 `release-decision.md` 与 `operations-handoff.md` 中明确限定为 `READY_FOR_OPERATIONS_HANDOFF`，未表述为"已部署/已上线"。
 5. `known-issues.md` 明确记录 `UNSANDBOXED_LOCAL` 测试为已披露已知风险，未声称"已完全隔离"。
 6. 所有强制输出（第 5 节）均已生成且非占位；`artifact-manifest.json` 与 `checksums.sha256` 中的工件哈希已核对。

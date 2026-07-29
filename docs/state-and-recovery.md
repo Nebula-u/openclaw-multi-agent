@@ -1,7 +1,7 @@
 # state-and-recovery.md — 文件化状态模型与恢复
 
 > 权威来源：`agents/manager-agent/workspace/AGENTS.md`（第 2、9 节）、`agents/common/EVIDENCE_RULES.md`（第 6 节）、`contracts/workflow.schema.json`、重构 Prompt 第十一节。
-> 文档日期：2026-07-23
+> 文档日期：2026-07-29
 
 ## 1. 本文用途
 
@@ -39,7 +39,7 @@
 
 ### 3.1 `active-workflows.json`
 
-恢复入口。登记每个活动 workflow 的 `workflow_id`、状态摘要与其 `workflow.json` 绝对路径。新会话启动时**先读它**。
+恢复入口。只登记非终态 workflow 的 `workflow_id`、状态摘要与其 `workflow.json` 绝对路径。新会话启动时**先读它**；workflow 进入终态后必须先写非空 `final-report.md`，再从活动索引移除，Guard 要求终态恰好有 0 条活动记录。
 
 ### 3.2 `workflow.json`（字段以 contract 为准）
 
@@ -49,7 +49,7 @@
 
 `events.jsonl` 是 JSONL 的 append-only 哈希链。manager 每次状态变化创建事件草稿；`append-event` 写入 `schema_version=1`、连续的 `seq` 和 `state_revision`、前一行的 `previous_event_hash`（首行是 64 个 `0`），并在 fsync 后追加，既有行永不改写。每条事件还含 `event_id`、`timestamp`、`workflow_id`、`task_id`、`run_id`、`actor`、`event_type`、状态/阶段前后值、候选 commit、`payload` 与 `event_hash`。
 
-哈希规则：移除 `event_hash` 后，递归按键名字典序排序 JSON 对象（数组顺序不变），将其 canonical JSON 用 UTF-8 编码并计算 SHA-256。`previous_event_hash → event_hash` 形成连续链；第 *n* 条的 `seq` 和 `state_revision` 均为 *n*。最新事件的 `to_status`、`to_phase`、`candidate_commit` 与 `state_revision` 必须分别等于 `workflow.json` 的 `status`、`current_phase`、`current_candidate_commit` 与 `state_revision`，而 `active-workflows.json` 的同名快照字段必须再与 workflow 一致。
+哈希规则：移除 `event_hash` 后，递归按 Unicode 码点排序 JSON 对象键（数组顺序不变），直接序列化排序后的键值对，将 canonical JSON 用 UTF-8 编码并计算 SHA-256。数字形态的键仍按字符串排序，例如 `"10"` 必须位于 `"2"` 之前，且嵌套对象遵守同一规则；不得先构造普通 JavaScript 对象再依赖 `JSON.stringify` 的整数键重排。`previous_event_hash → event_hash` 形成连续链；第 *n* 条的 `seq` 和 `state_revision` 均为 *n*。最新事件的 `to_status`、`to_phase`、`candidate_commit` 与 `state_revision` 必须分别等于 `workflow.json` 的 `status`、`current_phase`、`current_candidate_commit` 与 `state_revision`；非终态的 `active-workflows.json` 同名快照字段再与 workflow 一致。
 
 ### 3.4 `context-summary.md` / `rules-snapshot.md` / `decisions` / `gates`
 
@@ -85,6 +85,7 @@ WF-<UUID> · TASK-<UUID> · RUN-<UUID> · DEC-<UUID> · FIND-<UUID> · EVD-<UUID
 
 - 已派发任务的 `input/` **不可变**；已完成 run 目录 **不可变**。
 - 重做 → 新 `run_id` + 新目录（`<wf>\<task>\<新 run>\`），**不覆盖**旧报告/日志/审批/结果；旧任务按状态机置 `SUPERSEDED`。
+- 历史 review/release artifact 保留不覆盖。Guard 只让 current candidate 的 review finding 参与阻断，并按可信 task event `seq` 处理 finding closure；ReleaseReadinessGate 只消费其 `task_id` 当前 task snapshot 所指 `run_id` 的唯一 release decision。
 - 失败 / 脏状态 / 未合并 / 待审批的 worktree **默认保留**，不清理（见 `git-worktree-strategy.md`）。
 
 ## 7. 相关文档
