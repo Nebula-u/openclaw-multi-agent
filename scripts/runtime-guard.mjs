@@ -285,8 +285,17 @@ function compareUnicodeCodePoints(left, right) {
 
 function eventHash(event) {
   const { event_hash: ignored, ...unsigned } = event;
-  const canonical = JSON.stringify(canonicalize(unsigned));
+  const canonical = canonicalJson(unsigned);
   return createHash('sha256').update(canonical, 'utf8').digest('hex');
+}
+
+function canonicalJson(value) {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
+  if (isObject(value)) {
+    return `{${Object.keys(value).sort(compareUnicodeCodePoints)
+      .map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`).join(',')}}`;
+  }
+  return JSON.stringify(value);
 }
 
 function sortedUnique(values) {
@@ -896,8 +905,16 @@ function checkWorkflowCommand(options) {
     errors.push(issue('RUNTIME_ROOT_MISMATCH', '$.runtime_root_abs', 'workflow runtime root does not match command runtime root'));
   }
   const activeEntries = (active.workflows ?? []).filter((entry) => entry.workflow_id === workflowId);
-  if (activeEntries.length !== 1) {
-    errors.push(issue('ACTIVE_WORKFLOW_ENTRY_COUNT', activePath, `expected one active entry, found ${activeEntries.length}`));
+  const isTerminal = new Set(machine.workflow?.terminal_statuses ?? []).has(workflow.status);
+  if (isTerminal && activeEntries.length !== 0) {
+    errors.push(issue('TERMINAL_ACTIVE_WORKFLOW_ENTRY', activePath, `terminal workflow must have zero active entries, found ${activeEntries.length}`));
+  } else if (!isTerminal && activeEntries.length !== 1) {
+    errors.push(issue('ACTIVE_WORKFLOW_ENTRY_COUNT', activePath, `nonterminal workflow requires one active entry, found ${activeEntries.length}`));
+  } else if (isTerminal) {
+    const finalReport = join(workflowDir, 'final-report.md');
+    if (!existsSync(finalReport) || !readFileSync(finalReport, 'utf8').trim()) {
+      errors.push(issue('FINAL_REPORT_REQUIRED', finalReport, 'terminal workflow requires a non-empty final-report.md'));
+    }
   } else {
     const entry = activeEntries[0];
     const fields = ['status', 'current_phase', 'current_candidate_commit', 'state_revision', 'updated_at'];

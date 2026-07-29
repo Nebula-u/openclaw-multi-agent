@@ -4,10 +4,12 @@
   "title": "ReleaseDecision",
   "type": "object",
   "additionalProperties": true,
-  "required": ["schema_version", "workflow_id", "candidate_commit", "verdict", "evaluated_at", "checks"],
+  "required": ["schema_version", "workflow_id", "task_id", "run_id", "candidate_commit", "verdict", "evaluated_at", "checks"],
   "properties": {
     "schema_version": { "type": "integer", "minimum": 1 },
     "workflow_id": { "type": "string", "pattern": "^WF-" },
+    "task_id": { "type": "string", "pattern": "^TASK-[A-Za-z0-9][A-Za-z0-9-]*$" },
+    "run_id": { "type": "string", "pattern": "^RUN-[A-Za-z0-9][A-Za-z0-9-]*$" },
     "candidate_commit": { "type": "string", "minLength": 1 },
     "verdict": { "type": "string", "enum": ["GO", "NO_GO", "HOLD"] },
     "verdict_meaning": {
