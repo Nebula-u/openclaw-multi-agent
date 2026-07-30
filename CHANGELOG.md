@@ -2,6 +2,29 @@
 
 本项目遵循语义化的变更记录风格。日期格式 `YYYY-MM-DD`。
 
+## [0.2.2] - 2026-07-30
+
+### 改动了什么
+
+- Runtime Guard 的 JSON Schema 校验从自研子集校验改为 Ajv / ajv-formats，本地支持 Draft-07 与 Draft 2020-12 schema。
+- 新增 `contracts/json-validation-error.schema.json` 与 `templates/json-regeneration-retry-prompt.md`，约束 JSON 校验失败日志和一次 JSON-only retry 提示。
+- 所有内置工作 Agent、生成 Agent 模板和 manager 调度规则新增 JSON / JSONL 强校验要求：Agent 自检时校验，manager 在派发和接收边界再次校验。
+- `validate-file` 失败输出增加 `validator: "ajv"`，可通过 `--log-file`、`--stage`、`--agent-id`、`--workflow-id`、`--task-id`、`--run-id`、`--attempt` 等参数记录错误主体和错误内容。
+- 安装校验脚本增加 Ajv 依赖检查；README 与架构/契约/编排文档同步说明 `npm install`、Ajv validator、错误日志和 JSON-only retry。
+
+### 为什么要改
+
+- 让 JSON Schema 校验覆盖完整标准能力，避免自研子集遗漏 schema 语义。
+- 防止 LLM 生成的 JSON 在 Agent 自检或 Agent 通信边界以“格式大致正确”通过。
+- 在 JSON 失败时保留可追溯日志，并限制重试范围，避免一次格式修复被误做成重新分析或改变既有结论。
+
+### 改后的效果
+
+- 所有 JSON / JSONL 产物必须先本地 Ajv 强校验，再由 manager 在边界复检。
+- 首次 JSON 校验失败只允许一次重试，且重试只能重新生成失败 JSON / JSONL，不得重新完整分析任务。
+- 校验失败会保留结构化 JSONL 日志，包含失败主体、schema、validator errors、失败内容摘要、内容哈希、重试次数和最终状态。
+- `runtime-guard self-check` 现在会用 Ajv strict mode 编译 contracts，并校验 19 个 contract 与 10 个模板。
+
 ## [0.2.1] - 2026-07-29
 
 ### 改动了什么
