@@ -13,6 +13,7 @@ artifacts/preflight/*.tmp
 # ---- Regenerable run outputs (reproduce by re-running scripts/validate-install.* or install.* dry-run) ----
 artifacts/validation/
 artifacts/install-dryrun/
+artifacts/agent-json-real/
 
 # ---- OS / editor noise ----
 .worktrees/

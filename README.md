@@ -63,6 +63,26 @@ Guard 使用 Ajv / ajv-formats 作为本地 JSON Schema validator。Guard 失败
 
 所有 JSON / JSONL 输出错误必须记录到 `raw-logs/json-validation-errors.jsonl` 或 workflow 级 `validation-errors.jsonl`，记录格式见 `contracts/json-validation-error.schema.json`。首次 JSON 校验失败只允许一次 JSON-only retry：只重新生成失败的 JSON / JSONL，不重新完整分析任务。
 
+## 真实 Agent JSON 合约测试
+
+离线检查只验证测试规划、真实调用状态机和失败包完整性，不调用模型：
+
+```bash
+npm run test:agent-json:offline
+```
+
+全量真实测试会通过已注册角色执行 `openclaw agent`：19 个 JSON/JSONL 契约场景各 30 条不同需求（570 次首轮调用），每个首次校验失败的真实产物在同一 Agent 会话内仅打回重写一次。测试产物全部写在被 Git 忽略的 `artifacts/agent-json-real/<run-id>/`；正常输出无需人工阅读，重写后仍不通过的每一例会完整保留两次输出、原始回复、两次 Guard 报告和重写提示，并由 `report.md` 汇总。
+
+```bash
+npm run agent-json:real
+
+# 中断后继续同一次运行；只会跳过已有 case 元数据的用例
+npm run agent-json:real -- --run-id <run-id> --resume
+
+# 调试单个场景（场景名见 report.md / scripts/agent-json-harness/real-scenarios.mjs）
+npm run agent-json:real -- --scenario result --timeout-seconds 600
+```
+
 ## 快速开始（Windows / PowerShell 7）
 
 安装脚本默认只做 **dry-run**，不会修改你的 OpenClaw 配置。可从任意目录调用——脚本会相对自身位置解析项目根目录并规范化为绝对路径。

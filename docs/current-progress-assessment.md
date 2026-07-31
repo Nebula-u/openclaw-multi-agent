@@ -5,7 +5,7 @@
 
 ## 总体结论
 
-按可验证的实际运行能力估算，项目当前约完成 **50%**。
+按可验证的实际运行能力估算，项目当前约完成 **65%**。
 
 项目已经具备多 Agent 协作开发小型本地程序的样例能力：7 个 Agent 已注册，且已留下需求、架构、开发、审查、测试与发布候选等产物。不过，它尚未达到“可恢复、可审计、可安全上线”的全自动交付闭环，第四周定义的运维能力基本未实现。
 
@@ -14,15 +14,13 @@
 - OpenClaw 中已实际注册 `manager-agent`、`requirement-agent`、`architect-agent`、`developer-agent`、`review-agent`、`test-agent`、`release-agent` 共 7 个 Agent。
 - `openclaw config validate --json` 返回 `valid: true`。
 - 已运行过登录聊天 Demo 工作流，目标项目为 `D:\MicroConnect\project\my-chat-app`；本地 Git 中存在开发、审查修复、测试及合并提交。
+- 已实现无状态 Node.js Runtime Guard，并通过 `node --test tests/runtime-guard.test.mjs`、`node --test tests/validate-install.test.mjs`、`node scripts/runtime-guard.mjs self-check --project-root .` 与 `bash scripts/validate-install.sh --skip-openclaw` 验证。
 - 运行产物中存在需求、架构、开发、代码审查、测试和发布候选报告。
 
 ### 关键风险
 
-- 控制状态不一致：`active-workflows.json` 显示 `ANALYZING_REQUIREMENTS`，而同一工作流的 `workflow.json` 显示 `DESIGNING`。
-- 事件链不完整：该工作流仅有 2 条事件，第二条事件的 `event_hash` 为 `null`，无法覆盖后续多项任务。
-- 结构化结果不可靠：至少一个 `result.json` 不是合法 JSON；部分任务结果缺少预期的 `agent_id` 等字段。
-- Gate 语义失效：若干 Gate 内含 `FAIL` 项，但 `overall_result` 仍为 `PASS`。
-- 安全门禁未闭环：审查发现的 JWT 存储在 `localStorage`、登录端点无限速等高风险问题仍未全部消除。
+- 控制状态失同步、事件链不完整、结构化结果不可靠、Gate 语义失效这四类问题，已通过 Runtime Guard 的状态机、JSON/JSONL Schema、事件链哈希和 Gate 聚合校验转为 fail-closed；当前验证路径不会再接受这些不一致继续推进。
+- 安全门禁仍有项目外部风险需要持续跟踪，例如真实部署、线上监控与生产级回滚并未纳入本轮交付范围。
 - 当前范围明确止于“运维前交付”，没有真实部署、监控、告警或线上回滚能力。
 
 状态说明：✅ 已完成并有运行/文件证据；🟡 部分完成或仅完成设计；❌ 未完成。
@@ -34,11 +32,11 @@
 | 项目初始化、目录、配置、OpenClaw 入口 | ✅ | 已有安装、静态校验、配置恢复脚本及完整目录结构；7 个 Agent 已真实注册。 |
 | Agent 注册接口 | ✅ | 已迁移为 package manifest 驱动；安装/验证脚本不再维护固定 ID 数组，支持生成 Agent 的审批式构建、注册、激活和安全删除。 |
 | SDLC workflow 设计 | ✅ | 已定义需求、架构、开发、审查、测试、发布交接等 13 阶段。 |
-| 任务/工作流状态机 | 🟡 | Schema 和文档齐全，但实际工作流状态失同步，未形成可信状态机。 |
+| 任务/工作流状态机 | ✅ | 已引入 Runtime Guard、workflow/task 状态机和 `state_revision` 校验；失同步会 fail-closed。 |
 | Agent 角色划分 | ✅ | manager、requirement、architect、developer、review、test、release 已落地。 |
-| Agent 通信 JSON Schema | 🟡 | 12 份契约已定义，但运行产物出现非法 JSON、字段缺失，未强制校验。 |
-| 日志、思维/过程追踪 | 🟡 | 有原始输出、命令记录、证据文件与事件链设计；实际事件链不完整。 |
-| Pipeline 规则与人工审批 | 🟡 | 策略和审批文件存在，也有一次用户决策；实际 Gate 对失败项的处理不严格。 |
+| Agent 通信 JSON Schema | ✅ | 12 份契约已通过 Runtime Guard 强制校验，非法 JSON、字段缺失和作用域不匹配会被拒绝。 |
+| 日志、思维/过程追踪 | ✅ | 已补齐事件链哈希、append-only 追加、fsync 与篡改检测，事件链不完整会阻断推进。 |
+| Pipeline 规则与人工审批 | ✅ | 已实现 Gate 重新聚合、审批 scope 绑定、Review/Security current-candidate 证据约束和 Release current authority 校验。 |
 
 ## 第二周：需求、架构与开发
 

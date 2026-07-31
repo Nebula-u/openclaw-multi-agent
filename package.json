@@ -4,7 +4,11 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test:runtime-guard": "node --test tests/runtime-guard.test.mjs"
+    "test:runtime-guard": "node --test tests/runtime-guard.test.mjs",
+    "test:agent-json:offline": "node --test tests/real-agent-json-harness.test.mjs",
+    "test:agent-json": "npm run test:agent-json:offline",
+    "agent-json:real": "node scripts/agent-json-harness/collect-real-failures.mjs",
+    "agent-json:collect": "npm run agent-json:real"
   },
   "dependencies": {
     "ajv": "^8.17.1",
