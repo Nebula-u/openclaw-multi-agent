@@ -6,23 +6,37 @@
 
 ### 改动了什么
 
+- 新增 `check-task-package` Guard 命令，在写入 `TASK_DISPATCHED` 事件和创建 Agent 会话前校验完整 input package、manifest 哈希、规范 artifact 路径与规范 worktree 路径。
+- 新增 `QUARANTINED` 工作流终态。该终态要求 append-only 隔离事件、`quarantine-report.md`、`final-report.md` 和活动索引移除；Guard 只在审计边界通过后允许其结束，不会改写历史 task/run 证据。
+- `task.json` 新增 `structured_outputs[]`。Manager 必须声明跨 Agent JSON/JSONL 的产出路径、Schema、格式、是否必需和产出 Agent；完成任务由 Guard 再次以 Ajv 校验声明产物。
+- 新增 `config/manager-session-policy.json`，保持 `thinking=high` 和 200k 模型窗口，同时将 Manager 会话软预算设为 80%（160k token），达到预算后从文件化状态创建新会话恢复。
+- 已将运行中的 `WF-ef1c5f87-93c5-4ec7-a074-3dea54831ca1` 正式隔离为 `QUARANTINED`，保留原始控制面、artifact 与 Guard 错误证据，不再参与恢复。
 - 清除了 `manager-agent` 父会话及当时两个 TUI 会话遗留的 `providerOverride`、`modelOverride` 与 `modelOverrideSource`。这些会话级字段曾将 Manager 的实际调用模型固定为 DeepSeek。
 - 保持 OpenClaw Agent 配置的 Manager 默认模型为 `newapi-responses/gpt-5.6-luna`，未改动其余 6 个项目 Agent、平台 `main` Agent、模型凭据或历史工作流会话。
 - 规定后续项目改动须在用户完成检查/验收后，同步更新本文件、`README.md` 与 `docs/current-progress-assessment.md`，记录变更、验证结果、完成状态与遗留风险。
 
 ### 为什么要改
 
+- 历史 workflow 在 manifest、输入哈希、任务事件和 worktree 路径上发生不一致，导致 Guard 正确 fail-closed；此前缺少派发前预检与可审计的隔离出口。
+- 同一 Manager 会话持续携带完整工具日志和失败记录，造成 token 消耗与流中断风险；当前实际使用未触及 200k 上限，因此扩大窗口不能解决问题。
+- 既有 Ajv 校验未把所有任务声明的结构化产物纳入控制面复检。
 - `openclaw models status --agent manager-agent --check` 显示的 Agent 默认模型已正确配置为 Luna，但 TUI 创建的新会话会继承父会话保存的 DeepSeek 覆盖，导致界面和实际调用与项目模型路由不一致。
 - 仅修正运行时配置不足以防止会话层覆盖重新造成误判；项目状态、用户可见操作说明和变更历史也需要在验收后保持一致。
 
 ### 改后的效果
 
+- 新任务在派发前即可因缺失 input、哈希不符或路径异常被拒绝，不会先写入不一致的 `DISPATCHED` 状态。
+- 无法在不篡改不可变历史的前提下修复的 workflow 可以被隔离并从恢复索引移除；新任务必须从新的 workflow 重建。
+- 已声明 JSON/JSONL 产物在完成时必须通过其受信任 contract；聊天文本和 Markdown 摘要不能单独推动状态。
+- Manager 在 160k token 时换新会话并由 `recovery-check` 从文件恢复，避免用扩大窗口掩盖上下文累积。
 - 重新启动 Manager TUI 后，新会话会使用 `newapi-responses/gpt-5.6-luna`，不再继承 `deepseek/deepseek-v4-flash`。
 - 已存在的历史会话和工作流产物保留原始记录；本次只移除了会改变后续调用路由的覆盖字段。
 - 后续状态不会在未完成用户检查时提前标记为已验证；验收后将由三份项目文档共同反映实际状态。
 
 ### 验证
 
+- `npm test` 通过：82 项 Runtime Guard 测试通过，2 项因当前 Windows 会话无符号链接权限跳过；离线 LLM harness 8 项和安装验证 2 项通过。
+- `check-workflow` 已对被隔离 workflow 返回 `effective_status=QUARANTINED`、`state_revision=9`、`event_count=9`。
 - Manager 父会话及相关 TUI 会话均已确认不存在 provider/model override。
 - `openclaw models status --agent manager-agent --check` 确认有效 Agent 默认模型为 `newapi-responses/gpt-5.6-luna`。
 

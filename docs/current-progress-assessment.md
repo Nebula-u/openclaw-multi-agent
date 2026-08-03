@@ -5,7 +5,7 @@
 
 ## 总体结论
 
-按可验证的平台能力估算，项目当前约完成 **72%**；历史 Demo 仍未迁移到当前文件协议，因此不能把它作为端到端闭环已验证的证据。
+按可验证的平台能力估算，项目当前约完成 **76%**；历史 Demo 已被正式隔离而非迁移，新的可信 workflow 尚未完成端到端演练，因此不能把它作为闭环已验证的证据。
 
 项目已经具备多 Agent 协作开发小型本地程序的样例能力：7 个 Agent 已注册，且已留下需求、架构、开发、审查、测试与发布候选等产物。本分支补齐了任务控制/产物对应、上下文哈希、审批评估、恢复检查和安装回归；不过，尚未以新协议重新完成一次真实工作流，第四周定义的运维能力也未实现。
 
@@ -16,7 +16,10 @@
 - 已运行过登录聊天 Demo 工作流，目标项目为 `D:\MicroConnect\project\my-chat-app`；本地 Git 中存在开发、审查修复、测试及合并提交。
 - 已实现无状态 Node.js Runtime Guard：控制任务/artifact 一一对应、摘要、依赖、重试上限、上下文输入 SHA-256、规则/上下文快照哈希、15 项审批评估和 ArchitectureGate 审批引用均 fail-closed。
 - 已新增 `recovery-check`，在单一活动工作流时复用完整 Guard 校验；多个 workflow 时要求用户选择。旧 Demo 的旧版活动索引会返回结构化 schema 诊断并保持 `HOLD`。
-- 当前分支 `npm test` 通过：Runtime Guard 78 通过、2 个 Windows 无符号链接权限的测试跳过；离线 LLM harness 8 通过；Bash/PowerShell 安装验证 2 通过。
+- 当前分支 `npm test` 通过：Runtime Guard 82 通过、2 个 Windows 无符号链接权限的测试跳过；离线 LLM harness 8 通过；Bash/PowerShell 安装验证 2 通过。
+- `WF-ef1c5f87-93c5-4ec7-a074-3dea54831ca1` 已以 `QUARANTINED` 终态隔离：Guard 校验其终态事件链、报告和活动索引移除，原始不一致 task/run 仅作审计证据，不参与恢复。
+- `check-task-package` 已在派发前校验上下文包；`structured_outputs[]` 已将已声明的跨 Agent JSON/JSONL 纳入 Guard 的 Ajv 复检。
+- Manager 会话策略固定为 200k 窗口的 80% 软预算（160k token）；达到预算后必须新建会话并从文件化控制面恢复。
 - 运行产物中存在需求、架构、开发、代码审查、测试和发布候选报告。
 - 已核对 Manager 的有效 Agent 默认模型为 `newapi-responses/gpt-5.6-luna`。2026-08-03 已清除父会话与当时 TUI 会话遗留的 DeepSeek 模型覆盖；重新启动 TUI 后的新 Manager 会话不再继承 DeepSeek。
 
@@ -25,6 +28,7 @@
 - 控制状态失同步、事件链不完整、结构化结果不可靠、Gate 语义失效这四类问题，已通过 Runtime Guard 的状态机、JSON/JSONL Schema、事件链哈希和 Gate 聚合校验转为 fail-closed；当前验证路径不会再接受这些不一致继续推进。
 - 安全门禁仍有项目外部风险需要持续跟踪，例如真实部署、线上监控与生产级回滚并未纳入本轮交付范围。
 - 当前范围明确止于“运维前交付”，没有真实部署、监控、告警或线上回滚能力。
+- Gateway 当前 `chat.send` 仍不支持项目可用的逐请求 `response_format` / strict JSON Schema 参数；本地 Ajv 强校验已覆盖声明产物，但 API 级结构化输出仍是待解决问题，不能标记为完成。
 
 状态说明：✅ 已完成并有运行/文件证据；🟡 部分完成或仅完成设计；❌ 未完成。
 
@@ -51,10 +55,10 @@
 
 | 任务 | 状态 | 评估 |
 |---|---|---|
-| Manager 交互、分派、汇总 | 🟡 | Guard 现已拒绝 orphan artifact、缺失控制任务、依赖异常及缺失 user/manager summary；但历史 Demo 未迁移，且尚未重新演练真实多 Agent 闭环。 |
+| Manager 交互、分派、汇总 | 🟡 | Guard 现已拒绝 orphan artifact、缺失控制任务、依赖异常及缺失 user/manager summary；新增派发前 `check-task-package`。历史 Demo 已隔离，仍需新 workflow 真实演练闭环。 |
 | 需求到架构 | ✅ | 已产出需求、验收标准、架构、ADR、接口、数据模型和实现计划。 |
 | 单开发 Agent 实现小型程序 | ✅ | 已在 `my-chat-app` 生成登录聊天 Demo，并提交到本地 Git。 |
-| 上下文管理与规则传递 | 🟡 | Guard 已读取 context manifest、重算输入/规则 SHA-256 并校验 workflow 快照；`recovery-check` 已提供可执行入口，但尚未完成一次真实中断后续跑演练。 |
+| 上下文管理与规则传递 | 🟡 | Guard 已读取 context manifest、重算输入/规则 SHA-256 并校验 workflow 快照；新增 160k token 会话软预算与文件化换会话规则。仍未完成一次真实中断后续跑演练。 |
 | 架构/大改动人工审批 | ✅ | intake、任务和架构阶段均有 15 项 trigger assessment；命中项必须绑定批准 decision，ArchitectureGate PASS 必须引用全部命中 decision。 |
 
 ## 第三周：测试、发布与质量闭环
@@ -64,7 +68,7 @@
 | 测试 Agent、测试报告 | 🟡 | 已有 40 通过、0 失败、1 跳过的 API 测试报告；前端构建测试在测试 worktree 中未执行。 |
 | 测试代码审查 | ❌ | 未见独立的“测试代码审查”阶段产物。 |
 | 发布 Agent、变更/发布检查 | 🟡 | 已有发布候选 `GO` 和运维交接材料，但不是实际发布。 |
-| 多 Agent 闭环、失败重试 | 🟡 | 控制面已对状态、任务、输入、结果、摘要和审批 fail-closed；仍缺一次按新协议完成的真实多 Agent 工作流演练。 |
+| 多 Agent 闭环、失败重试 | 🟡 | 控制面已对状态、任务、输入、结果、摘要、声明的结构化产物和审批 fail-closed；仍缺一次按新协议完成的真实多 Agent 工作流演练。 |
 | 质量门禁 | ✅ | Guard 重算 Gate overall，并对未决审批、阻断 finding、current-candidate 证据与 release task/run authority fail-closed；历史 Demo 的旧 Gate 不作为当前协议通过证据。 |
 | 最终综合报告 | ❌ | 有需求、架构、开发、测试、发布报告，但未生成统一的 `final-report.md`。 |
 

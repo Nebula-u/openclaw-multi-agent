@@ -58,6 +58,14 @@ node scripts/runtime-guard.mjs check-workflow \
   --runtime-root /abs/path/openclaw-runtime \
   --workflow-id WF-<uuid>
 
+# 写入 TASK_DISPATCHED 事件前校验一个完整任务包
+node scripts/runtime-guard.mjs check-task-package \
+  --project-root /abs/path/openclaw-sdlc-multi-agent \
+  --runtime-root /abs/path/openclaw-runtime \
+  --workflow-id WF-<uuid> \
+  --task-id TASK-<uuid> \
+  --task-file /abs/path/openclaw-runtime/control/workflows/WF-<uuid>/tasks/TASK-<uuid>.json
+
 # 恢复入口：未指定 workflow ID 时仅允许恰好一个活动工作流
 node scripts/runtime-guard.mjs recovery-check \
   --project-root /abs/path/openclaw-sdlc-multi-agent \
@@ -66,6 +74,8 @@ node scripts/runtime-guard.mjs recovery-check \
 ```
 
 Guard 使用 Ajv / ajv-formats 作为本地 JSON Schema validator。Guard 失败会以非零退出码和 `effective_status=HOLD` 阻止推进。它校验控制任务与 canonical artifact task/run 一一对应、任务依赖与最大尝试次数、完成任务的 `user-summary.md` / `manager-summary.md`、上下文 manifest 绑定与逐文件 SHA-256、`rules.md` 哈希，以及 workflow 的规则/上下文快照哈希。事件链使用 JSONL、按 Unicode 码点（含数字形态键）递归排序的 canonical JSON 与 SHA-256；非终态快照与活动索引一致，终态则要求 0 条活动记录和非空 `final-report.md`。每个 intake 与已派发任务还必须完成 15 项审批 trigger 评估；ArchitectureGate PASS 必须引用该阶段所有命中的已批准 decision。Review/Security Gate 的 PASS 需要能绑定 current candidate 的 `review-agent` 证据；旧 candidate 的 finding 只保留为历史。ReleaseReadinessGate 仍按 task/run 绑定 decision，但历史 release gate 只做自身内部一致性校验；release 终态必须恰好有一个 current candidate 的最新 release task/run gate，并只由它参与终态映射。
+
+`check-task-package` 是派发前必经检查：它要求完整 input package、canonical artifact/worktree 路径与 manifest SHA-256 均正确，才允许写入派发事件。每份任务还必须在 `structured_outputs[]` 声明跨 Agent JSON/JSONL 的路径、受信任 Schema、格式和产出者；完成任务时 Guard 再次校验这些文件。`QUARANTINED` 是不可恢复的审计终态，必须保留 `quarantine-report.md` 和 `final-report.md`，且不得重写历史 input、event 或 artifact。
 
 所有 JSON / JSONL 输出错误必须记录到 `raw-logs/json-validation-errors.jsonl` 或 workflow 级 `validation-errors.jsonl`，记录格式见 `contracts/json-validation-error.schema.json`。首次 JSON 校验失败只允许一次 JSON-only retry：只重新生成失败的 JSON / JSONL，不重新完整分析任务。
 
@@ -76,6 +86,8 @@ Guard 使用 Ajv / ajv-formats 作为本地 JSON Schema validator。Guard 失败
 `manager-agent` 的默认模型为 `newapi-responses/gpt-5.6-luna`。如果 TUI 显示的模型与此不一致，应先执行 `openclaw models status --agent manager-agent --check`；当默认项正确而 TUI 仍显示其他模型时，检查并清除 Manager 父会话的会话级 `providerOverride` / `modelOverride`，然后重新启动 TUI。不要把模型凭据或完整认证输出写入项目文档、日志或 Issue。
 
 每一项项目改动都必须在用户完成检查/验收后同步更新 [CHANGELOG.md](CHANGELOG.md)、本 README 和 [docs/current-progress-assessment.md](docs/current-progress-assessment.md)：Changelog 记录实际改动、原因、效果和验证；README 记录用户可见的操作或配置变化；完成度评估记录状态、证据、风险和未完成项。未完成用户检查的工作不得标记为已验证或已完成。
+
+Manager 保持 `newapi-responses/gpt-5.6-luna` 和 `thinking=high`。其模型窗口为 200k token，项目软预算为 80%（160k token），配置见 `config/manager-session-policy.json`。达到预算后必须由新 Manager 会话结合 `recovery-check` 和 `context-summary.md` 恢复；不要通过增大 `contextTokens`、复制完整聊天记录或把完整工具日志放入 prompt 规避预算。
 
 ## Agent LLM JSON 合约测试
 
