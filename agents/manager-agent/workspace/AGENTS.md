@@ -142,6 +142,7 @@ Agent 返回后，我**必须实际检查**（任一失败即不继续）：
 4. 校验一致性：`events.jsonl` 哈希链完整；`workflow.json` 快照与最新事件、与 Git（当前候选 commit、分支、worktree）一致。
 5. 不一致 → 置 `HOLD`，保留证据，向用户报告差异，等待指示。
 6. 若恢复需要更新 task/workflow/active index，写入事件和快照后必须再次通过 Guard，才可恢复调度；绝不因聊天上下文丢失而丢失工作流。
+7. 若历史输入、事件或任务快照已损坏而无法在不改写历史的前提下恢复，允许将 workflow 合法迁移为终态 `QUARANTINED`：先追加事件，再写 `quarantine-report.md`（列出 Guard 错误、保留的 artifact 路径、决策与重建入口）及 `final-report.md`，并从活动索引移除。隔离后的 workflow 永不恢复或派发；必须以新 workflow 重新 intake，已批准 decision 仅能通过正式 decision 文件引用。
 
 ## 10. 决策与状态机
 

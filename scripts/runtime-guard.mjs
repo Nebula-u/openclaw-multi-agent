@@ -1318,6 +1318,12 @@ function checkWorkflowCommand(options, command = 'check-workflow') {
     if (!existsSync(finalReport) || !readFileSync(finalReport, 'utf8').trim()) {
       errors.push(issue('FINAL_REPORT_REQUIRED', finalReport, 'terminal workflow requires a non-empty final-report.md'));
     }
+    if (workflow.status === 'QUARANTINED') {
+      const quarantineReport = join(workflowDir, 'quarantine-report.md');
+      if (!existsSync(quarantineReport) || !readFileSync(quarantineReport, 'utf8').trim()) {
+        errors.push(issue('QUARANTINE_REPORT_REQUIRED', quarantineReport, 'quarantined workflow requires a non-empty quarantine-report.md'));
+      }
+    }
   } else {
     const entry = activeEntries[0];
     const fields = ['status', 'current_phase', 'current_candidate_commit', 'state_revision', 'updated_at'];

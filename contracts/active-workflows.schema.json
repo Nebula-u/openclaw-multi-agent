@@ -31,7 +31,7 @@
               "REVIEWING_CODE", "TESTING", "REVIEWING_TESTS",
               "VERIFYING_RELEASE_READINESS", "WAITING_RELEASE_APPROVAL",
               "WAITING_HUMAN", "HOLD", "READY_FOR_OPERATIONS_HANDOFF",
-              "RELEASE_NO_GO", "RELEASE_HOLD", "FAILED", "CANCELLED"
+              "RELEASE_NO_GO", "RELEASE_HOLD", "FAILED", "CANCELLED", "QUARANTINED"
             ]
           },
           "current_phase": {
