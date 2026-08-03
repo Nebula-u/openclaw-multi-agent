@@ -222,6 +222,12 @@ function checkWorkflow(fixture) {
   ]);
 }
 
+function recoveryCheck(fixture, workflowId = null) {
+  const args = ['recovery-check', '--project-root', ROOT, '--runtime-root', fixture.runtimeRoot];
+  if (workflowId) args.push('--workflow-id', workflowId);
+  return runGuard(args);
+}
+
 function fixtureLike(runtimeRoot, workflowDir) {
   return { runtimeRoot, workflowDir };
 }
@@ -262,6 +268,15 @@ test('check-workflow reports a legacy snapshot as structured schema errors', () 
     assert.equal(result.status, 1);
     assert.match(result.stdout, /SCHEMA_(REQUIRED|TYPE|CONST)/);
     assert.doesNotMatch(result.stdout, /GUARD_USAGE_ERROR/);
+  } finally { fixture.cleanup(); }
+});
+
+test('recovery-check selects the sole active workflow and runs the full guard', () => {
+  const fixture = makeRuntime();
+  try {
+    const result = recoveryCheck(fixture);
+    assert.equal(result.status, 0, result.stdout);
+    assert.match(result.stdout, /"command": "recovery-check"/);
   } finally { fixture.cleanup(); }
 });
 

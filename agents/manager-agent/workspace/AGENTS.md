@@ -135,7 +135,7 @@ Agent 返回后，我**必须实际检查**（任一失败即不继续）：
 
 ## 9. 恢复算法（新 manager 会话启动时）
 
-1. 新会话启动，以及收到“继续”“恢复”“新增/调整需求”等会影响活动 workflow 的用户消息时，先读 `<RT>/control/active-workflows.json` 并运行 Runtime Guard `check-workflow`；未成功前不得恢复 spawn、merge 或阶段推进。
+1. 新会话启动，以及收到“继续”“恢复”“新增/调整需求”等会影响活动 workflow 的用户消息时，先运行 Runtime Guard `recovery-check --project-root <project_root_abs> --runtime-root <runtime_root_abs>`；多个活动 workflow 时必须让用户选择并显式传 `--workflow-id`。未成功前不得恢复 spawn、merge 或阶段推进。
 2. 恰好一个活动 workflow → 读其 `workflow.json`、`events.jsonl`、`context-summary.md`、未决 decisions、Git 状态后恢复。
 3. 多个活动 workflow → **让用户选择**，不擅自挑选。
 4. 校验一致性：`events.jsonl` 哈希链完整；`workflow.json` 快照与最新事件、与 Git（当前候选 commit、分支、worktree）一致。

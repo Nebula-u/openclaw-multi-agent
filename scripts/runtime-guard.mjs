@@ -1233,31 +1233,31 @@ function validateGitCandidate(workflow, errors) {
   }
 }
 
-function checkWorkflowCommand(options) {
+function checkWorkflowCommand(options, command = 'check-workflow') {
   const projectRoot = resolve(requireOption(options, 'project-root'));
   const runtimeRoot = resolve(requireOption(options, 'runtime-root'));
   const workflowId = requireOption(options, 'workflow-id');
   if (!/^WF-[A-Za-z0-9][A-Za-z0-9-]*$/u.test(workflowId)) {
-    emit({ ok: false, command: 'check-workflow', workflow_id: workflowId, effective_status: 'HOLD', errors: [issue('INVALID_WORKFLOW_ID', '$.workflow-id', 'workflow-id must be a complete safe WF identifier')] }, 1);
+    emit({ ok: false, command, workflow_id: workflowId, effective_status: 'HOLD', errors: [issue('INVALID_WORKFLOW_ID', '$.workflow-id', 'workflow-id must be a complete safe WF identifier')] }, 1);
     return;
   }
   let trustedRuntimeRoot;
   try {
     trustedRuntimeRoot = realpathSync(runtimeRoot);
   } catch (error) {
-    emit({ ok: false, command: 'check-workflow', workflow_id: workflowId, effective_status: 'HOLD', errors: [issue('RUNTIME_ROOT_UNREADABLE', runtimeRoot, error.message)] }, 1);
+    emit({ ok: false, command, workflow_id: workflowId, effective_status: 'HOLD', errors: [issue('RUNTIME_ROOT_UNREADABLE', runtimeRoot, error.message)] }, 1);
     return;
   }
   for (const runtimeSubtree of [['control', 'workflows'], ['artifacts'], ['worktrees']]) {
     const root = join(runtimeRoot, ...runtimeSubtree);
     if (!isRealPathWithin(trustedRuntimeRoot, root)) {
-      emit({ ok: false, command: 'check-workflow', workflow_id: workflowId, effective_status: 'HOLD', errors: [issue('RUNTIME_ROOT_ESCAPE', root, `${runtimeSubtree.join(sep)} must resolve below the trusted runtime root`)] }, 1);
+      emit({ ok: false, command, workflow_id: workflowId, effective_status: 'HOLD', errors: [issue('RUNTIME_ROOT_ESCAPE', root, `${runtimeSubtree.join(sep)} must resolve below the trusted runtime root`)] }, 1);
       return;
     }
   }
   const workflowDir = join(runtimeRoot, 'control', 'workflows', workflowId);
   if (!isRealPathWithin(join(runtimeRoot, 'control', 'workflows'), workflowDir)) {
-    emit({ ok: false, command: 'check-workflow', workflow_id: workflowId, effective_status: 'HOLD', errors: [issue('WORKFLOW_DIR_ESCAPE', workflowDir, 'workflow directory must resolve inside runtime control/workflows')] }, 1);
+    emit({ ok: false, command, workflow_id: workflowId, effective_status: 'HOLD', errors: [issue('WORKFLOW_DIR_ESCAPE', workflowDir, 'workflow directory must resolve inside runtime control/workflows')] }, 1);
     return;
   }
   const errors = [];
@@ -1273,7 +1273,7 @@ function checkWorkflowCommand(options) {
   const workflow = readJsonForCheck(workflowPath, errors);
   const active = readJsonForCheck(activePath, errors);
   if (!workflow || !active) {
-    emit({ ok: false, command: 'check-workflow', workflow_id: workflowId, effective_status: 'HOLD', errors }, 1);
+    emit({ ok: false, command, workflow_id: workflowId, effective_status: 'HOLD', errors }, 1);
     return;
   }
   addSchemaErrors(errors, workflow, workflowSchema, workflowPath);
@@ -1285,7 +1285,7 @@ function checkWorkflowCommand(options) {
     appendGuardFailureLog(options, workflowPath, errors);
     emit({
       ok: false,
-      command: 'check-workflow',
+      command,
       workflow_id: workflowId,
       effective_status: 'HOLD',
       errors,
@@ -1335,7 +1335,7 @@ function checkWorkflowCommand(options) {
     appendGuardFailureLog(options, workflowPath, errors);
     emit({
       ok: false,
-      command: 'check-workflow',
+      command,
       workflow_id: workflowId,
       effective_status: 'HOLD',
       errors,
@@ -1344,7 +1344,7 @@ function checkWorkflowCommand(options) {
   }
   emit({
     ok: true,
-    command: 'check-workflow',
+    command,
     workflow_id: workflowId,
     effective_status: workflow.status,
     state_revision: workflow.state_revision,
@@ -1352,6 +1352,30 @@ function checkWorkflowCommand(options) {
     task_count: taskState.tasks.length,
     pending_decision_count: approvals.pendingIds.length,
   });
+}
+
+function recoveryCheckCommand(options) {
+  const runtimeRoot = resolve(requireOption(options, 'runtime-root'));
+  const activePath = join(runtimeRoot, 'control', 'active-workflows.json');
+  const errors = [];
+  const active = readJsonForCheck(activePath, errors);
+  if (!active || !Array.isArray(active.workflows)) {
+    emit({ ok: false, command: 'recovery-check', effective_status: 'HOLD', errors: errors.length > 0 ? errors : [issue('ACTIVE_WORKFLOW_INDEX_INVALID', activePath, 'active workflow index is invalid')] }, 1);
+    return;
+  }
+  let workflowId = options['workflow-id'];
+  if (!workflowId) {
+    if (active.workflows.length === 0) {
+      emit({ ok: false, command: 'recovery-check', effective_status: 'HOLD', errors: [issue('NO_ACTIVE_WORKFLOW', activePath, 'no active workflow is available for recovery')] }, 1);
+      return;
+    }
+    if (active.workflows.length > 1) {
+      emit({ ok: false, command: 'recovery-check', effective_status: 'HOLD', active_workflow_ids: active.workflows.map((entry) => entry.workflow_id), errors: [issue('RECOVERY_SELECTION_REQUIRED', activePath, 'multiple active workflows require an explicit --workflow-id')] }, 1);
+      return;
+    }
+    workflowId = active.workflows[0].workflow_id;
+  }
+  checkWorkflowCommand({ ...options, 'workflow-id': workflowId }, 'recovery-check');
 }
 
 function selfCheckCommand(options) {
@@ -1411,6 +1435,10 @@ function main() {
     }
     if (command === 'check-workflow') {
       checkWorkflowCommand(options);
+      return;
+    }
+    if (command === 'recovery-check') {
+      recoveryCheckCommand(options);
       return;
     }
     if (command === 'self-check') {

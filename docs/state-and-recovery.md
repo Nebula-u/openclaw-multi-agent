@@ -77,7 +77,7 @@ WF-<UUID> · TASK-<UUID> · RUN-<UUID> · DEC-<UUID> · FIND-<UUID> · EVD-<UUID
 1. 读 `<runtime_root_abs>\control\active-workflows.json`。
 2. **恰好一个**活动 workflow → 读其 `workflow.json`、`events.jsonl`、`context-summary.md`、未决 `decisions/`、Git 状态后恢复。
 3. **多个**活动 workflow → **让用户选择**，不擅自挑选。
-4. 运行 `check-workflow --project-root <project> --runtime-root <runtime> --workflow-id <WF-...>`，校验事件链、状态机迁移、最新快照、任务/结果、审批、Gate 与 Git 候选 commit。
+4. 运行 `recovery-check --project-root <project> --runtime-root <runtime> [--workflow-id <WF-...>]`。未指定 ID 时仅允许恰好一个活动 workflow；该命令执行完整 `check-workflow` 校验，涵盖事件链、状态机迁移、最新快照、任务/结果、审批、Gate 与 Git 候选 commit。
 5. Guard 失败或发现不一致 → manager 将 workflow 按合法迁移置 **`HOLD`**（Guard 本身不写快照），保留证据，向用户报告差异，等待指示；**不擅自修复**。
 6. **绝不因聊天上下文丢失而丢失工作流。**
 
