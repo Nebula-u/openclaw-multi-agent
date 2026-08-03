@@ -18,6 +18,7 @@ const SCHEMA_SPECS = [
   ['acceptance-criteria.schema.json', 'requirement-agent', false],
   ['active-workflows.schema.json', 'manager-agent', false],
   ['agent-package.schema.json', 'manager-agent', false],
+  ['approval-assessment.schema.json', 'manager-agent', false],
   ['approval-request.schema.json', 'manager-agent', false],
   ['approval-response.schema.json', 'manager-agent', false],
   ['command-record.schema.json', 'developer-agent', true],
