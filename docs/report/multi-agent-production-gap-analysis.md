@@ -331,7 +331,6 @@ flowchart TD
 | Context 压缩 | 每阶段生成 `context-summary.md` | 避免重复加载完整历史 |
 | Memory 分层 | workflow memory / task memory / project memory 分开 | 减少污染 |
 | RAG | 对项目文件、历史报告、错误日志建立索引 | 按需检索 |
-| Summary Agent | 可由小模型生成阶段摘要 | 降低大模型 token |
 | Task Memory | 每个 task 只保留目标、约束、输入输出 | worker 不读 manager 私有历史 |
 | Diff-first review | review 先看 diff，再扩上下文 | 降低审查成本 |
 | Artifact references | 大文件以 hash + path 引用 | 避免 prompt 膨胀 |

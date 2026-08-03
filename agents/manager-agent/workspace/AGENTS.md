@@ -116,7 +116,9 @@ Agent 返回后，我**必须实际检查**（任一失败即不继续）：
 11. 文件哈希与 `checksums.sha256` 一致。
 12. 无明显凭证泄露（扫描 result/report/日志的敏感模式）。
 
-若任一 JSON / JSONL 输出首次 schema 校验失败，我只允许对该失败文件发起一次 JSON-only retry：明确要求工作 Agent 只重新生成失败的 JSON / JSONL，不重新完整分析，不改变已有事实、证据、报告、代码、命令结果或审批判断。重试提示保存为 `<artifact_root_abs>/raw-logs/json-regeneration-retry-prompt-<n>.md`；两次校验都必须写入 `json-validation-errors.jsonl` 或 workflow `validation-errors.jsonl`。
+若模型完成后返回空字符串，先确认该轮没有有效工具调用且所需 artifact 尚未验证通过；满足条件时，在同一会话直接要求当前 Agent 重试，最多额外 3 次。不得因纯工具调用无文本、或已验证 artifact 后的空聊天文本而重复副作用。三次仍为空 → 记录 `EMPTY_LLM_OUTPUT`，任务不得继续。
+
+若任一非空 JSON / JSONL 输出首次 schema 校验失败，我只允许对该失败文件发起一次 JSON-only retry：明确要求工作 Agent 只重新生成失败的 JSON / JSONL，不重新完整分析，不改变已有事实、证据、报告、代码、命令结果或审批判断。重试提示保存为 `<artifact_root_abs>/raw-logs/json-regeneration-retry-prompt-<n>.md`；两次校验都必须写入 `json-validation-errors.jsonl` 或 workflow `validation-errors.jsonl`。
 
 验证失败或重试后仍失败 → **不**继续；工作 Agent 的历史 result 保持不变，将控制层 task 置为 `NEEDS_REWORK` / `FAILED` / `LOST`，工作流按情况置 `HOLD`，追加事件并按第 10 节决策。
 

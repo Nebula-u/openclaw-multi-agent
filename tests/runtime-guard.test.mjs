@@ -1415,7 +1415,7 @@ test('check-workflow rejects a first self-transition from RUNNING', () => {
   } finally { fixture.cleanup(); }
 });
 
-test('check-workflow rejects a workflow directory symlink outside runtime control', () => {
+test('check-workflow rejects a workflow directory symlink outside runtime control', (t) => {
   const fixture = makeRuntime();
   try {
     const outside = join(fixture.root, 'outside');
@@ -1423,7 +1423,13 @@ test('check-workflow rejects a workflow directory symlink outside runtime contro
     const realWorkflow = fixture.workflowDir;
     const moved = join(outside, WORKFLOW_ID);
     renameSync(realWorkflow, moved);
-    symlinkSync(moved, realWorkflow, 'dir');
+    try {
+      symlinkSync(moved, realWorkflow, 'dir');
+    } catch (error) {
+      if (error?.code === 'EPERM') t.skip('当前 Windows 会话无创建符号链接权限');
+      else throw error;
+      return;
+    }
     const result = checkWorkflow(fixture);
     assert.equal(result.status, 1);
     assert.match(result.stdout, /WORKFLOW_DIR_ESCAPE/);
@@ -1459,13 +1465,19 @@ test('check-workflow requires evidence for every PASS gate item', () => {
   } finally { fixture.cleanup(); }
 });
 
-test('check-workflow rejects a control workflows parent symlink outside runtime root', () => {
+test('check-workflow rejects a control workflows parent symlink outside runtime root', (t) => {
   const fixture = makeRuntime();
   try {
     const workflowsRoot = join(fixture.runtimeRoot, 'control', 'workflows');
     const outside = join(fixture.root, 'outside-workflows');
     renameSync(workflowsRoot, outside);
-    symlinkSync(outside, workflowsRoot, 'dir');
+    try {
+      symlinkSync(outside, workflowsRoot, 'dir');
+    } catch (error) {
+      if (error?.code === 'EPERM') t.skip('当前 Windows 会话无创建符号链接权限');
+      else throw error;
+      return;
+    }
     const result = checkWorkflow(fixture);
     assert.equal(result.status, 1);
     assert.match(result.stdout, /RUNTIME_ROOT_ESCAPE/);

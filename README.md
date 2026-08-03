@@ -63,23 +63,31 @@ Guard 使用 Ajv / ajv-formats 作为本地 JSON Schema validator。Guard 失败
 
 所有 JSON / JSONL 输出错误必须记录到 `raw-logs/json-validation-errors.jsonl` 或 workflow 级 `validation-errors.jsonl`，记录格式见 `contracts/json-validation-error.schema.json`。首次 JSON 校验失败只允许一次 JSON-only retry：只重新生成失败的 JSON / JSONL，不重新完整分析任务。
 
-## 真实 Agent JSON 合约测试
+模型、Responses/Chat 路由和空字符串重试策略见 [docs/model-routing.md](docs/model-routing.md)。空模型输出最多额外重试 3 次；有有效工具调用的无文本中间响应不算空输出；非空 JSON Schema 失败仍只允许一次 JSON-only retry。
 
-离线检查只验证测试规划、真实调用状态机和失败包完整性，不调用模型：
+## Agent LLM JSON 合约测试
+
+离线检查只验证测试规划、单 Gateway 客户端调用状态机和失败包完整性，不调用模型：
 
 ```bash
 npm run test:agent-json:offline
 ```
 
-全量真实测试会通过已注册角色执行 `openclaw agent`：19 个 JSON/JSONL 契约场景各 30 条不同需求（570 次首轮调用），每个首次校验失败的真实产物在同一 Agent 会话内仅打回重写一次。测试产物全部写在被 Git 忽略的 `artifacts/agent-json-real/<run-id>/`；正常输出无需人工阅读，重写后仍不通过的每一例会完整保留两次输出、原始回复、两次 Guard 报告和重写提示，并由 `report.md` 汇总。
+全量真实测试通过现有 OpenClaw Gateway 的一个持久客户端连接调用已注册角色：19 个 JSON/JSONL 契约场景各 5 条不同需求，默认独立重复 2 轮（190 次首轮调用）。测试仅评估 Agent 的最终 LLM 回复，不调用 Agent 工具、不要求 Agent 写文件，也不会为每个用例启动 OpenClaw CLI。首次校验失败时，同一 Agent session 只允许一次重写。正常回复只在临时目录经 Guard 校验后删除；重写后仍不通过的每一例会完整保留两次原始 LLM 回复、两次 Guard 报告和两次提示，并由中文 `report.md` 汇总在被 Git 忽略的 `artifacts/agent-llm-json/<run-id>/`。
 
 ```bash
 npm run agent-json:real
 
-# 中断后继续同一次运行；只会跳过已有 case 元数据的用例
-npm run agent-json:real -- --run-id <run-id> --resume
+# 指定可追溯的运行 ID
+npm run agent-json:real -- --run-id <run-id>
 
-# 调试单个场景（场景名见 report.md / scripts/agent-json-harness/real-scenarios.mjs）
+# 默认顺序执行以复用一个 Gateway 客户端连接；需要时可显式调整并发数
+npm run agent-json:real -- --concurrency 1
+
+# 调整每个差异化案例的独立重复次数（默认 2）
+npm run agent-json:real -- --repetitions 2
+
+# 调试单个场景（场景名见 report.md / scripts/agent-json-harness/llm-scenarios.mjs）
 npm run agent-json:real -- --scenario result --timeout-seconds 600
 ```
 
@@ -417,6 +425,7 @@ Manager 只有在用户批准后才能调用 `NewAgent`；构建完成后还需�
 - [docs/troubleshooting.md](docs/troubleshooting.md) — 排错
 - [docs/threat-model.md](docs/threat-model.md) — 威胁模型
 - [docs/component-management.md](docs/component-management.md) — Agent package、审批式生成、Skill Workshop 与删除边界
+- [docs/model-routing.md](docs/model-routing.md) — Agent 模型路由、Responses/Chat 边界与空输出恢复
 
 ## 许可与安全
 

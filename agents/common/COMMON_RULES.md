@@ -83,6 +83,8 @@
 
 每个 JSON / JSONL 产物必须使用对应 `contracts/*.schema.json` 校验；JSONL 需加 `--jsonl`。校验命令必须传入 `--log-file <artifact_root_abs>/raw-logs/json-validation-errors.jsonl`，并带上 `--stage agent_self_validation`、`--agent-id`、`--workflow-id`、`--task-id`、`--run-id`、`--attempt`，以便记录错误主体和错误内容。失败日志记录格式以 `contracts/json-validation-error.schema.json` 为准。
 
-第一次校验失败时，只允许一次 JSON-only retry：只重新生成失败的 JSON / JSONL 文件，使其符合指定 schema；不得重新完整分析任务，不得改变既有事实判断、报告结论、证据来源、命令结果、代码实现或审批决定。重试提示必须明确包含这条限制，并保存到 `raw-logs/json-regeneration-retry-prompt-<n>.md`。
+模型正常完成却返回空字符串时，必须先判定该轮没有有效 function/custom/web-search 工具调用、且所需 artifact 尚未通过 manager 校验。满足条件才可在同一会话直接重试该模型调用，最多额外 3 次；不得把正常的纯工具调用误判为空输出，也不得因最终聊天文本为空而重复已验证的工具副作用或 artifact。三次后仍为空 → 记录 `EMPTY_LLM_OUTPUT`，不得报告完成。
+
+非空回复首次校验失败时，只允许一次 JSON-only retry：只重新生成失败的 JSON / JSONL 文件，使其符合指定 schema；不得重新完整分析任务，不得改变既有事实判断、报告结论、证据来源、命令结果、代码实现或审批决定。重试提示必须明确包含这条限制，并保存到 `raw-logs/json-regeneration-retry-prompt-<n>.md`。
 
 重试后必须再次运行同一个 schema 校验，带 `--retry-count 1` 与 `--retry-prompt <retry_prompt_path_abs>`。若第二次仍失败，不得报告 `COMPLETED`；按性质返回 `FAILED`、`BLOCKED` 或 `NEEDS_REWORK`，并保留两次错误日志。任何情况下不得覆盖或删除失败日志。

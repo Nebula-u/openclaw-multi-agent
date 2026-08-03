@@ -14,6 +14,7 @@ artifacts/preflight/*.tmp
 artifacts/validation/
 artifacts/install-dryrun/
 artifacts/agent-json-real/
+artifacts/agent-llm-json/
 
 # ---- OS / editor noise ----
 .worktrees/
