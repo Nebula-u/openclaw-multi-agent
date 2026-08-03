@@ -207,6 +207,22 @@ function checkWorkflow(fixture) {
   ]);
 }
 
+test('check-workflow reports a legacy snapshot as structured schema errors', () => {
+  const fixture = makeRuntime();
+  try {
+    writeJson(join(fixture.workflowDir, 'workflow.json'), {
+      schema_version: '1.0',
+      workflow_id: WORKFLOW_ID,
+      status: 'DESIGNING',
+      tasks: [],
+    });
+    const result = checkWorkflow(fixture);
+    assert.equal(result.status, 1);
+    assert.match(result.stdout, /SCHEMA_(REQUIRED|TYPE|CONST)/);
+    assert.doesNotMatch(result.stdout, /GUARD_USAGE_ERROR/);
+  } finally { fixture.cleanup(); }
+});
+
 function clearActiveWorkflows(fixture) {
   writeJson(join(fixture.runtimeRoot, 'control', 'active-workflows.json'), {
     schema_version: 1,

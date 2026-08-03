@@ -1014,6 +1014,20 @@ function checkWorkflowCommand(options) {
   }
   addSchemaErrors(errors, workflow, workflowSchema, workflowPath);
   addSchemaErrors(errors, active, activeSchema, activePath);
+  // Do not dereference snapshot fields until the schema establishes they exist.
+  // This keeps malformed or legacy control files diagnosable as HOLD instead of
+  // degrading into a generic CLI usage error.
+  if (errors.length > 0) {
+    appendGuardFailureLog(options, workflowPath, errors);
+    emit({
+      ok: false,
+      command: 'check-workflow',
+      workflow_id: workflowId,
+      effective_status: 'HOLD',
+      errors,
+    }, 1);
+    return;
+  }
   if (workflow.workflow_id !== workflowId) {
     errors.push(issue('WORKFLOW_ID_MISMATCH', workflowPath, 'workflow_id does not match requested workflow'));
   }
