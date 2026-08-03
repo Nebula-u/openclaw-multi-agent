@@ -81,8 +81,8 @@ RUNTIME_GUARD="$PROJECT_ROOT/scripts/runtime-guard.mjs"
 RUNTIME_GUARD_TEST="$PROJECT_ROOT/tests/runtime-guard.test.mjs"
 if command -v node >/dev/null 2>&1; then
   if [ -d "$PROJECT_ROOT/node_modules/ajv" ] && [ -d "$PROJECT_ROOT/node_modules/ajv-formats" ]; then
-    node "$RUNTIME_GUARD" self-check --project-root "$PROJECT_ROOT" >/dev/null 2>&1 && check "Runtime Guard contracts/templates 自检" PASS || check "Runtime Guard contracts/templates 自检" FAIL
-    node --test "$RUNTIME_GUARD_TEST" >/dev/null 2>&1 && check "Runtime Guard 行为测试" PASS || check "Runtime Guard 行为测试" FAIL
+    node "$(native_path "$RUNTIME_GUARD")" self-check --project-root "$(native_path "$PROJECT_ROOT")" >/dev/null 2>&1 && check "Runtime Guard contracts/templates 自检" PASS || check "Runtime Guard contracts/templates 自检" FAIL
+    node --test "$(native_path "$RUNTIME_GUARD_TEST")" >/dev/null 2>&1 && check "Runtime Guard 行为测试" PASS || check "Runtime Guard 行为测试" FAIL
   else
     check "Runtime Guard npm 依赖" FAIL "请先在项目根目录运行 npm install（需要 ajv 与 ajv-formats）"
   fi
