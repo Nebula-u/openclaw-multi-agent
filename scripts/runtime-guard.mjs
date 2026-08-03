@@ -276,6 +276,37 @@ function jsonFiles(path, suffix = '.json') {
     .map((name) => join(path, name));
 }
 
+function nonEmptyFile(path) {
+  try {
+    return existsSync(path) && readFileSync(path, 'utf8').trim().length > 0;
+  } catch {
+    return false;
+  }
+}
+
+function artifactRunKeys(runtimeRoot, workflowId) {
+  const workflowRoot = join(runtimeRoot, 'artifacts', workflowId);
+  if (!existsSync(workflowRoot)) return [];
+  const runs = [];
+  for (const taskEntry of readdirSync(workflowRoot, { withFileTypes: true })) {
+    if (!taskEntry.isDirectory()) continue;
+    const taskRoot = join(workflowRoot, taskEntry.name);
+    for (const runEntry of readdirSync(taskRoot, { withFileTypes: true })) {
+      if (!runEntry.isDirectory()) continue;
+      runs.push({
+        task_id: taskEntry.name,
+        run_id: runEntry.name,
+        path: join(taskRoot, runEntry.name),
+      });
+    }
+  }
+  return runs;
+}
+
+function taskRequiresArtifact(task) {
+  return ['DISPATCHED', 'RUNNING', 'WAITING_HUMAN', 'BLOCKED', 'NEEDS_REWORK', 'COMPLETED', 'FAILED', 'LOST'].includes(task.status);
+}
+
 function addSchemaErrors(errors, value, schema, source, options = {}) {
   for (const error of validateInstance(value, schema, options)) {
     errors.push({ ...error, source });
@@ -571,11 +602,28 @@ function validateTasks({ workflow, workflowDir, projectRoot, eventRecords, error
   let currentReleaseTaskSeq = -1;
   const evidenceByScope = new Map();
   const allEvidenceIds = new Set();
+  const taskKeys = new Set();
+  const taskIds = new Map();
   for (const taskFile of taskFiles) {
     const task = readJsonForCheck(taskFile, errors);
     if (!task) continue;
     tasks.push(task);
     addSchemaErrors(errors, task, taskSchema, taskFile);
+    if (!taskFile.endsWith(`${sep}${task.task_id}.json`)) {
+      errors.push(issue('TASK_FILENAME_MISMATCH', taskFile, 'task file name must equal task_id.json'));
+    }
+    const taskKey = scopeKey(task.task_id, task.run_id);
+    if (taskKeys.has(taskKey)) {
+      errors.push(issue('DUPLICATE_TASK_RUN', taskFile, 'task_id and run_id must be unique in control tasks'));
+    }
+    taskKeys.add(taskKey);
+    if (taskIds.has(task.task_id)) {
+      errors.push(issue('DUPLICATE_TASK_ID', taskFile, 'task_id must have exactly one control snapshot'));
+    }
+    taskIds.set(task.task_id, task);
+    if (task.attempt > task.max_attempts) {
+      errors.push(issue('TASK_MAX_ATTEMPTS_EXCEEDED', taskFile, 'task attempt exceeds max_attempts and requires a human approval'));
+    }
     if (task.workflow_id !== workflow.workflow_id) {
       errors.push(issue('TASK_WORKFLOW_MISMATCH', taskFile, 'task workflow_id does not match workflow'));
     }
@@ -661,6 +709,12 @@ function validateTasks({ workflow, workflowDir, projectRoot, eventRecords, error
           errors.push(issue('REQUIRED_OUTPUT_MISSING', taskFile, `required output is missing or outside artifact root: ${requiredOutput}`));
         }
       }
+      for (const summaryName of ['user-summary.md', 'manager-summary.md']) {
+        const summaryPath = join(outputDir, summaryName);
+        if (!nonEmptyFile(summaryPath)) {
+          errors.push(issue('TASK_SUMMARY_REQUIRED', summaryPath, `completed task is missing a non-empty ${summaryName}`));
+        }
+      }
     }
     if (task.task_type === 'RELEASE_VERIFICATION'
       && task.assigned_agent === 'release-agent'
@@ -742,6 +796,51 @@ function validateTasks({ workflow, workflowDir, projectRoot, eventRecords, error
         });
       }
     }
+  }
+  const artifactRuns = artifactRunKeys(workflow.runtime_root_abs, workflow.workflow_id);
+  const artifactKeys = new Set(artifactRuns.map((run) => scopeKey(run.task_id, run.run_id)));
+  for (const run of artifactRuns) {
+    if (!taskKeys.has(scopeKey(run.task_id, run.run_id))) {
+      errors.push(issue('ORPHAN_ARTIFACT_RUN', run.path, 'artifact task/run has no matching control task snapshot'));
+    }
+  }
+  for (const task of tasks) {
+    if (taskRequiresArtifact(task) && !artifactKeys.has(scopeKey(task.task_id, task.run_id))) {
+      errors.push(issue('TASK_ARTIFACT_RUN_REQUIRED', task.artifact_root_abs, 'task status requires its canonical artifact task/run directory'));
+    }
+  }
+  const dependencyStates = new Map(tasks.map((task) => [task.task_id, task.status]));
+  for (const task of tasks) {
+    for (const dependencyId of task.dependencies ?? []) {
+      if (dependencyId === task.task_id || !taskIds.has(dependencyId)) {
+        errors.push(issue('TASK_DEPENDENCY_NOT_FOUND', task.task_id, `task dependency is unavailable: ${dependencyId}`));
+      } else if (['READY', 'DISPATCHED', 'RUNNING', 'WAITING_HUMAN', 'COMPLETED'].includes(task.status)
+        && dependencyStates.get(dependencyId) !== 'COMPLETED') {
+        errors.push(issue('TASK_DEPENDENCY_NOT_COMPLETED', task.task_id, `task dependency is not completed: ${dependencyId}`));
+      }
+    }
+  }
+  const visiting = new Set();
+  const visited = new Set();
+  const visit = (taskId) => {
+    if (visiting.has(taskId)) return true;
+    if (visited.has(taskId)) return false;
+    visiting.add(taskId);
+    for (const dependencyId of taskIds.get(taskId)?.dependencies ?? []) {
+      if (taskIds.has(dependencyId) && visit(dependencyId)) return true;
+    }
+    visiting.delete(taskId);
+    visited.add(taskId);
+    return false;
+  };
+  for (const taskId of taskIds.keys()) {
+    if (visit(taskId)) {
+      errors.push(issue('TASK_DEPENDENCY_CYCLE', '$.tasks', 'control task dependencies must be acyclic'));
+      break;
+    }
+  }
+  if (new Set(workflow.task_ids).size !== workflow.task_ids.length) {
+    errors.push(issue('DUPLICATE_WORKFLOW_TASK_ID', '$.task_ids', 'workflow task_ids must be unique'));
   }
   const findingsById = new Map();
   for (const finding of currentCandidateFindings) {

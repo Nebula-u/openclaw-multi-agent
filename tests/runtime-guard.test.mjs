@@ -223,6 +223,29 @@ test('check-workflow reports a legacy snapshot as structured schema errors', () 
   } finally { fixture.cleanup(); }
 });
 
+test('check-workflow rejects an artifact run without a control task', () => {
+  const fixture = makeRuntime();
+  try {
+    mkdirSync(join(fixture.runtimeRoot, 'artifacts', WORKFLOW_ID, TASK_ID, RUN_ID), { recursive: true });
+    const result = checkWorkflow(fixture);
+    assert.equal(result.status, 1);
+    assert.match(result.stdout, /ORPHAN_ARTIFACT_RUN/);
+  } finally { fixture.cleanup(); }
+});
+
+test('check-workflow requires both completed-task summaries', () => {
+  const fixture = makeRuntime({ taskIds: [TASK_ID], withCurrentCandidate: true });
+  try {
+    const task = scopedTask(fixture);
+    appendTaskLifecycle(fixture, task);
+    writeTaskResult(task);
+    rmSync(join(task.artifact_root_abs, 'output', 'manager-summary.md'));
+    const result = checkWorkflow(fixture);
+    assert.equal(result.status, 1);
+    assert.match(result.stdout, /TASK_SUMMARY_REQUIRED/);
+  } finally { fixture.cleanup(); }
+});
+
 function clearActiveWorkflows(fixture) {
   writeJson(join(fixture.runtimeRoot, 'control', 'active-workflows.json'), {
     schema_version: 1,
@@ -352,6 +375,8 @@ function writeTaskResult(task) {
     isolation_mode: 'UNSANDBOXED_LOCAL',
     self_validation: { preflight_passed: true, checks: [] },
   });
+  writeFileSync(join(task.artifact_root_abs, 'output', 'user-summary.md'), 'task complete\n', 'utf8');
+  writeFileSync(join(task.artifact_root_abs, 'output', 'manager-summary.md'), 'task complete\n', 'utf8');
 }
 
 function writeTaskEvidence(task, evidenceIds) {
