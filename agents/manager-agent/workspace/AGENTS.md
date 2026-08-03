@@ -56,7 +56,7 @@
 1. 重新读取 `install-manifest.json`、当前 `workflow.json`、`active-workflows.json`、`events.jsonl` 最后一条事件和当前 `tasks/<task-id>.json`，不得依赖聊天记忆中的旧值。
 2. 创建或更新控制层 `tasks/<task-id>.json`；artifact `input/task.json` 只是不可变任务输入，不能代替控制层任务记录。`workflow.json` 只维护 `task_ids[]`，不得另建嵌入式 `tasks[]` 作为第二套任务状态。
 3. 按 `contracts/workflow-event.schema.json` 写事件草稿，但不自行填写 `seq`、`state_revision`、`previous_event_hash` 或 `event_hash`；调用 `node <project_root_abs>/scripts/runtime-guard.mjs append-event --project-root <project_root_abs> --events <events_abs> --event <draft_abs>` 追加事件。禁止手写、猜测或重写哈希链。
-4. 以最新事件为依据更新 `workflow.json` 的 `status`、`current_phase`、`updated_at`、`state_revision`、`current_candidate_commit`、`task_ids[]`、`pending_decision_ids[]`。代码阶段的 candidate 必须等于 integration 分支 HEAD；除非用户明确批准，不把进行中的 workflow 合并到目标仓库默认分支。
+4. 以最新事件为依据更新 `workflow.json` 的 `status`、`current_phase`、`updated_at`、`state_revision`、`current_candidate_commit`、`task_ids[]`、`pending_decision_ids[]`，并重算 `rules-snapshot.md` / `context-summary.md` 的 SHA-256 写入 `rules_snapshot_sha256` / `context_summary_sha256`。代码阶段的 candidate 必须等于 integration 分支 HEAD；除非用户明确批准，不把进行中的 workflow 合并到目标仓库默认分支。
 5. 同步 `active-workflows.json`：非终态条目的 `status`、`updated_at`、`state_revision`、`current_phase`、`current_candidate_commit` 必须与 `workflow.json` 完全一致，并记录 `workflow_json_abs`；进入终态且写完 `final-report.md` 后，从活动索引移除该条目。
 6. 阶段结束时先写对应 Gate 和 `context-summary.md`，再推进下一阶段；最终交付前必须写 `final-report.md`。
 7. 写完后必须运行 `node <project_root_abs>/scripts/runtime-guard.mjs check-workflow --project-root <project_root_abs> --runtime-root <runtime_root_abs> --workflow-id <workflow-id> --log-file <workflow_dir_abs>/validation-errors.jsonl --stage workflow_check`。只有退出码为 0 且 `ok=true` 才算屏障通过。
@@ -88,16 +88,17 @@
 2. 若为 developer/test 任务：从允许的 input commit 创建任务分支与**绝对** worktree：
    `git -C "<target_abs>" worktree add -b <task-branch> "<RT>/worktrees/<wf>/<task>/<run>/repo" <input_commit>`
    仅在该 worktree 仓库设置**本地** Git identity（不改全局）。
-3. 组装任务上下文包到 `<artifact_run>/input/`（见 `rules/CONTEXT_PROTOCOL.md`）：`task.json`、`context.md`、`rules.md`、`acceptance-criteria.json`、`approved-decisions.json`、`source-manifest.json`、`context-manifest.json`。为每个 input 文件计算 SHA-256 写入 manifest。
-4. 只传最小充分上下文：**不**复制用户完整聊天历史；**不**要求工作 Agent 读我的会话历史。
-5. 对 `input/` 内所有 JSON / JSONL 结构化文件运行 Runtime Guard `validate-file`，带 `--log-file <workflow_dir_abs>/validation-errors.jsonl --stage manager_dispatch`；任一失败不得派发。
-6. 先将控制层 task 置为 `DISPATCHED`，更新 workflow/active，追加 `TASK_DISPATCHED` 事件，并通过第 3.1 节的提交屏障；屏障未通过不得派发。
-7. 用 OpenClaw 原生会话工具创建隔离的工作 Agent 会话：
+3. 组装任务上下文包到 `<artifact_run>/input/`（见 `rules/CONTEXT_PROTOCOL.md`）：`task.json`、`context.md`、`rules.md`、`acceptance-criteria.json`、`approved-decisions.json`、`source-manifest.json`、`context-manifest.json`。为每个 input 文件计算小写 SHA-256 写入 manifest，且 `rule_hash` 必须等于 `rules.md` 的哈希。
+4. 在 `approval-assessments/<task-id>.json` 对全部 15 个审批 trigger 做评估；任何 `REQUIRES_APPROVAL` 必须先有同作用域的已批准 decision，才能派发。
+5. 只传最小充分上下文：**不**复制用户完整聊天历史；**不**要求工作 Agent 读我的会话历史。
+6. 对 `input/` 内所有 JSON / JSONL 结构化文件运行 Runtime Guard `validate-file`，带 `--log-file <workflow_dir_abs>/validation-errors.jsonl --stage manager_dispatch`；任一失败不得派发。
+7. 先将控制层 task 置为 `DISPATCHED`，更新 workflow/active，追加 `TASK_DISPATCHED` 事件，并通过第 3.1 节的提交屏障；屏障未通过不得派发。
+8. 用 OpenClaw 原生会话工具创建隔离的工作 Agent 会话：
    - 若本版本提供 `sessions_spawn`：调用时**必须**显式传 `agentId`，且 `agentId == task.assigned_agent`；上下文语义用 `isolated`（干净子会话）。
    - 若工具名/参数不同：以真实工具 schema 为准调整，并在兼容性报告记录差异。**不得**退回相对路径，**不得**引入 Python 脚本。
-8. 派发提示只含：任务摘要、绝对 `context-manifest.json` 路径、绝对 `task.json` 路径、绝对输出目录、绝对 worktree 路径，以及 JSON-only retry 规则：若某个 JSON / JSONL 产物校验失败，只重生该 JSON / JSONL 文件，不重新完整分析任务。
-9. spawn 成功后保存子会话 session/run 标识，将 task 置为 `RUNNING`，追加事件并再次通过提交屏障；spawn 失败则记录 `BLOCKED`/`FAILED`，不得假装已派发。
-10. 用 OpenClaw 原生 yield/wait/完成通知机制等待；**不**用 `sleep`、**不**高频轮询。
+9. 派发提示只含：任务摘要、绝对 `context-manifest.json` 路径、绝对 `task.json` 路径、绝对输出目录、绝对 worktree 路径，以及 JSON-only retry 规则：若某个 JSON / JSONL 产物校验失败，只重生该 JSON / JSONL 文件，不重新完整分析任务。
+10. spawn 成功后保存子会话 session/run 标识，将 task 置为 `RUNNING`，追加事件并再次通过提交屏障；spawn 失败则记录 `BLOCKED`/`FAILED`，不得假装已派发。
+11. 用 OpenClaw 原生 yield/wait/完成通知机制等待；**不**用 `sleep`、**不**高频轮询。
 
 ## 7. 验证工作 Agent 返回（Development/Test/任何改动类任务）
 
@@ -146,6 +147,7 @@ Agent 返回后，我**必须实际检查**（任一失败即不继续）：
 
 - 任务状态：`CREATED`/`READY`/`DISPATCHED`/`RUNNING`/`WAITING_HUMAN`/`BLOCKED`/`NEEDS_REWORK`/`COMPLETED`/`FAILED`/`CANCELLED`/`SUPERSEDED`/`LOST`。
 - 工作流状态：`CREATED`/`ANALYZING_REQUIREMENTS`/`WAITING_REQUIREMENT_APPROVAL`/`DESIGNING`/`WAITING_ARCHITECTURE_APPROVAL`/`IMPLEMENTING`/`REVIEWING_CODE`/`TESTING`/`REVIEWING_TESTS`/`VERIFYING_RELEASE_READINESS`/`WAITING_RELEASE_APPROVAL`/`WAITING_HUMAN`/`HOLD`/`READY_FOR_OPERATIONS_HANDOFF`/`RELEASE_NO_GO`/`RELEASE_HOLD`/`FAILED`/`CANCELLED`。合法迁移以 `config/workflow-state-machine.json` 为准。
+- Intake 必须写 `approval-assessments/intake.json`，ArchitectureGate 前必须写 architecture assessment；每份 assessment 都要覆盖 `APPROVAL_RULES.md` 的 15 条。命中项置 `REQUIRES_APPROVAL` 并绑定同作用域的 request/response；ArchitectureGate PASS 必须在 `approved_decision_ids` 引用其所有命中且批准的 decision。
 - 触发审批节点（见 `rules/APPROVAL_RULES.md` 的 15 条）→ 生成绑定 `decision_id/workflow_id/task_id/run_id` 的 request；需求、架构、发布专用节点使用对应等待状态，其他节点使用 `WAITING_HUMAN`。**不设自动超时同意**，用户沉默 ≠ 批准；等待期间不调度依赖该决策的任务。用户回复后保存同作用域 `.response.json` + 原始回复摘要并通过 Guard。
 - 默认最大重做次数 3（policy 可改）；超过 → `WAITING_HUMAN`。
 

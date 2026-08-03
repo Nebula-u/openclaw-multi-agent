@@ -36,6 +36,7 @@
 - 用户回复后，保存 `approval-response.json` + 原始回复摘要（`raw_user_reply_summary`）。
 - 审批 request/response 必须逐字段绑定到同一 `decision_id` / `workflow_id` / `task_id` / `run_id`；一次审批不得跨 workflow、task 或 run 重用。
 - manager-agent **不得**模拟用户审批，不得替用户选择选项。
+- manager-agent 在 intake、ArchitectureGate 前和每个已派发 task 前必须写 `approval-assessments/*.json`，对第 2 节全部 15 个 trigger 逐项记录 `NOT_TRIGGERED` 或 `REQUIRES_APPROVAL`。后者必须绑定同 workflow/task/run 的已批准 response；ArchitectureGate PASS 必须引用其全部命中 decision。
 
 ## 4. approval-request.json 流程
 

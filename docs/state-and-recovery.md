@@ -43,7 +43,7 @@
 
 ### 3.2 `workflow.json`（字段以 contract 为准）
 
-来源 `contracts/workflow.schema.json`，`required` 包括：`schema_version`、`workflow_id`（`^WF-`）、`status`、`status_reason`、`target_project_root_abs`、`runtime_root_abs`、`integration_branch`、`base_commit`、`current_candidate_commit`、`current_phase`、`state_revision`、`task_ids[]`、`pending_decision_ids[]`、`context_version`、`rules_version`、`created_at`、`updated_at`。`status` 全枚举和合法迁移见 `workflow.md` 与状态机。
+来源 `contracts/workflow.schema.json`，`required` 包括：`schema_version`、`workflow_id`（`^WF-`）、`status`、`status_reason`、`target_project_root_abs`、`runtime_root_abs`、`integration_branch`、`base_commit`、`current_candidate_commit`、`current_phase`、`state_revision`、`task_ids[]`、`pending_decision_ids[]`、`context_version`、`rules_version`、`rules_snapshot_sha256`、`context_summary_sha256`、`created_at`、`updated_at`。`status` 全枚举和合法迁移见 `workflow.md` 与状态机。
 
 ### 3.3 `events.jsonl`（append-only 哈希链，SHA-256）
 
