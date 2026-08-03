@@ -28,6 +28,13 @@ const ZERO_HASH = '0'.repeat(64);
 const FIRST_EVENT_HASH = 'd42a3dbcacd494ced033f30a4818ca3a4941f8e76e44ce459782ef534dbe15e8';
 const NUMERIC_KEY_CANONICAL = '{"actor":"manager-agent","candidate_commit":null,"event_id":"EVT-00000000-0000-0000-0000-000000000001","event_type":"WORKFLOW_CREATED","from_phase":null,"from_status":null,"payload":{"10":"ten","2":"two","nested":{"10":"nested-ten","2":"nested-two"}},"previous_event_hash":"0000000000000000000000000000000000000000000000000000000000000000","run_id":null,"schema_version":1,"seq":1,"state_revision":1,"task_id":null,"task_status_after":null,"task_status_before":null,"timestamp":"2026-07-29T00:00:00Z","to_phase":"INTAKE","to_status":"CREATED","workflow_id":"WF-00000000-0000-0000-0000-000000000001"}';
 const NUMERIC_KEY_EVENT_HASH = '518202028b4743c8422327055a6a3812324648ca634edb67f4adf72e382b5da9';
+const APPROVAL_TRIGGERS = [
+  'REQUIREMENT_AMBIGUITY', 'IMPLEMENTATION_TRADEOFF', 'PUBLIC_API_BREAKING_CHANGE',
+  'IRREVERSIBLE_DATA_OP', 'NEEDS_INSTALL_OR_NETWORK', 'NEEDS_CREDENTIALS',
+  'INPUT_NOT_GIT_REPO', 'INPUT_DIRTY_WORKTREE', 'CHANGE_APPROVED_REQ_OR_ARCH',
+  'THIRDPARTY_LICENSE_UNCLEAR', 'SECURITY_RISK_ACCEPTANCE', 'TEST_OR_SECURITY_EXCEPTION',
+  'RELEASE_HOLD_OVERRIDE', 'MAX_REWORK_EXCEEDED', 'DESTRUCTIVE_OR_CROSS_PROJECT',
+];
 
 function runGuard(args) {
   return spawnSync(process.execPath, [GUARD, ...args], {
@@ -134,6 +141,7 @@ function makeRuntime({
   mkdirSync(join(workflowDir, 'tasks'), { recursive: true });
   mkdirSync(join(workflowDir, 'decisions'), { recursive: true });
   mkdirSync(join(workflowDir, 'gates'), { recursive: true });
+  mkdirSync(join(workflowDir, 'approval-assessments'), { recursive: true });
   mkdirSync(join(runtimeRoot, 'artifacts'), { recursive: true });
   mkdirSync(join(runtimeRoot, 'worktrees'), { recursive: true });
   const rulesSnapshot = 'rules snapshot\n';
@@ -192,6 +200,7 @@ function makeRuntime({
     `${actualEvents.map((event) => JSON.stringify(event)).join('\n')}\n`,
     'utf8',
   );
+  writeApprovalAssessment(fixtureLike(runtimeRoot, workflowDir), { scope: 'INTAKE' });
 
   return {
     root,
@@ -211,6 +220,33 @@ function checkWorkflow(fixture) {
     '--runtime-root', fixture.runtimeRoot,
     '--workflow-id', WORKFLOW_ID,
   ]);
+}
+
+function fixtureLike(runtimeRoot, workflowDir) {
+  return { runtimeRoot, workflowDir };
+}
+
+function writeApprovalAssessment(fixture, {
+  scope,
+  task = null,
+  required = [],
+} = {}) {
+  const evaluations = APPROVAL_TRIGGERS.map((trigger) => ({
+    trigger,
+    status: required.some((item) => item.trigger === trigger) ? 'REQUIRES_APPROVAL' : 'NOT_TRIGGERED',
+    rationale: 'fixture assessment',
+    decision_id: required.find((item) => item.trigger === trigger)?.decision_id ?? null,
+  }));
+  const suffix = scope === 'TASK' ? task.task_id : scope.toLowerCase();
+  writeJson(join(fixture.workflowDir, 'approval-assessments', `${suffix}.json`), {
+    schema_version: 1,
+    workflow_id: WORKFLOW_ID,
+    scope,
+    task_id: task?.task_id ?? null,
+    run_id: task?.run_id ?? null,
+    assessed_at: '2026-07-29T00:00:00Z',
+    evaluations,
+  });
 }
 
 test('check-workflow reports a legacy snapshot as structured schema errors', () => {
@@ -263,6 +299,16 @@ test('check-workflow detects a tampered context input hash', () => {
     assert.equal(result.status, 1);
     assert.match(result.stdout, /CONTEXT_INPUT_HASH_MISMATCH/);
     assert.match(result.stdout, /RULE_HASH_MISMATCH/);
+  } finally { fixture.cleanup(); }
+});
+
+test('check-workflow requires an intake approval assessment', () => {
+  const fixture = makeRuntime();
+  try {
+    rmSync(join(fixture.workflowDir, 'approval-assessments', 'intake.json'));
+    const result = checkWorkflow(fixture);
+    assert.equal(result.status, 1);
+    assert.match(result.stdout, /INTAKE_APPROVAL_ASSESSMENT_REQUIRED/);
   } finally { fixture.cleanup(); }
 });
 
@@ -369,6 +415,7 @@ function scopedTask(fixture, overrides = {}) {
     ...overrides,
   });
   writeTaskContext(task);
+  writeApprovalAssessment(fixture, { scope: 'TASK', task });
   return task;
 }
 

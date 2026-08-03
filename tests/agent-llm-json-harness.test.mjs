@@ -11,7 +11,7 @@ import { collectLlmRun } from '../scripts/agent-json-harness/collect-llm-failure
 
 const EXPECTED_SCHEMAS = [
   'acceptance-criteria.schema.json', 'active-workflows.schema.json', 'agent-package.schema.json',
-  'approval-request.schema.json', 'approval-response.schema.json', 'command-record.schema.json',
+  'approval-assessment.schema.json', 'approval-request.schema.json', 'approval-response.schema.json', 'command-record.schema.json',
   'component-build-result.schema.json', 'component-request.schema.json', 'context-manifest.schema.json',
   'evidence.schema.json', 'gate-result.schema.json', 'json-validation-error.schema.json',
   'release-decision.schema.json', 'result.schema.json', 'review-findings.schema.json', 'skill-package.schema.json',

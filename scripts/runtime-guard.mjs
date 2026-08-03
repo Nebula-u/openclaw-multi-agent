@@ -20,6 +20,13 @@ import { isAbsolute, join, resolve, sep } from 'node:path';
 
 const VALIDATOR_NAME = 'ajv';
 const LOG_EXCERPT_LIMIT = 16 * 1024;
+const APPROVAL_TRIGGERS = [
+  'REQUIREMENT_AMBIGUITY', 'IMPLEMENTATION_TRADEOFF', 'PUBLIC_API_BREAKING_CHANGE',
+  'IRREVERSIBLE_DATA_OP', 'NEEDS_INSTALL_OR_NETWORK', 'NEEDS_CREDENTIALS',
+  'INPUT_NOT_GIT_REPO', 'INPUT_DIRTY_WORKTREE', 'CHANGE_APPROVED_REQ_OR_ARCH',
+  'THIRDPARTY_LICENSE_UNCLEAR', 'SECURITY_RISK_ACCEPTANCE', 'TEST_OR_SECURITY_EXCEPTION',
+  'RELEASE_HOLD_OVERRIDE', 'MAX_REWORK_EXCEEDED', 'DESTRUCTIVE_OR_CROSS_PROJECT',
+];
 
 function ajvOptions() {
   return {
@@ -1026,7 +1033,73 @@ function validateApprovals({ workflow, workflowDir, projectRoot, taskState, erro
   ].includes(workflow.status)) {
     errors.push(issue('PENDING_APPROVAL_REQUIRES_WAIT', '$.status', 'pending approval requires a waiting or hold workflow status'));
   }
+  for (const task of taskState.tasks) {
+    for (const decisionId of task.approval_dependencies ?? []) {
+      const approval = resolvedApprovals.get(decisionId);
+      if (!approval || !['APPROVED', 'MODIFIED'].includes(approval.response.outcome)) {
+        errors.push(issue('TASK_APPROVAL_DEPENDENCY_UNRESOLVED', task.task_id, `task approval dependency is not approved: ${decisionId}`));
+        continue;
+      }
+      const request = approval.request;
+      if (request.workflow_id !== workflow.workflow_id
+        || (request.task_id !== null && (request.task_id !== task.task_id || request.run_id !== task.run_id))) {
+        errors.push(issue('TASK_APPROVAL_DEPENDENCY_SCOPE_MISMATCH', task.task_id, `task approval dependency is outside task scope: ${decisionId}`));
+      }
+    }
+  }
   return { pendingIds, resolvedApprovals };
+}
+
+function validateApprovalAssessments({ workflow, workflowDir, projectRoot, approvals, taskState, errors }) {
+  const schema = readJson(join(projectRoot, 'contracts', 'approval-assessment.schema.json'));
+  const assessmentDir = join(workflowDir, 'approval-assessments');
+  const assessments = [];
+  const seenScopes = new Set();
+  for (const file of jsonFiles(assessmentDir)) {
+    const assessment = readJsonForCheck(file, errors);
+    if (!assessment) continue;
+    assessments.push({ assessment, file });
+    addSchemaErrors(errors, assessment, schema, file);
+    const scopeKeyValue = `${assessment.scope}\u0000${assessment.task_id}\u0000${assessment.run_id}`;
+    if (seenScopes.has(scopeKeyValue)) errors.push(issue('DUPLICATE_APPROVAL_ASSESSMENT', file, 'approval assessment scope must be unique'));
+    seenScopes.add(scopeKeyValue);
+    if (assessment.workflow_id !== workflow.workflow_id) {
+      errors.push(issue('APPROVAL_ASSESSMENT_WORKFLOW_MISMATCH', file, 'approval assessment workflow_id does not match workflow'));
+    }
+    const evaluations = assessment.evaluations ?? [];
+    const triggerSet = new Set(evaluations.map((evaluation) => evaluation.trigger));
+    if (triggerSet.size !== APPROVAL_TRIGGERS.length
+      || !APPROVAL_TRIGGERS.every((trigger) => triggerSet.has(trigger))) {
+      errors.push(issue('APPROVAL_TRIGGER_ASSESSMENT_INCOMPLETE', file, 'assessment must evaluate every approval trigger exactly once'));
+    }
+    if (triggerSet.size !== evaluations.length) {
+      errors.push(issue('DUPLICATE_APPROVAL_TRIGGER', file, 'assessment contains duplicate approval triggers'));
+    }
+    for (const evaluation of evaluations) {
+      if (evaluation.status === 'NOT_TRIGGERED' && evaluation.decision_id !== null) {
+        errors.push(issue('UNNEEDED_APPROVAL_DECISION', file, `non-triggered assessment cannot bind a decision: ${evaluation.trigger}`));
+      }
+      if (evaluation.status === 'REQUIRES_APPROVAL') {
+        const approval = approvals.resolvedApprovals.get(evaluation.decision_id);
+        if (!approval || !['APPROVED', 'MODIFIED'].includes(approval.response.outcome)) {
+          errors.push(issue('REQUIRED_APPROVAL_MISSING', file, `trigger requires an approved decision: ${evaluation.trigger}`));
+        } else if (approval.request.trigger !== evaluation.trigger) {
+          errors.push(issue('APPROVAL_TRIGGER_MISMATCH', file, `decision trigger does not match assessment: ${evaluation.trigger}`));
+        }
+      }
+    }
+  }
+  const intake = assessments.find(({ assessment }) => assessment.scope === 'INTAKE' && assessment.task_id === null && assessment.run_id === null);
+  if (!intake) errors.push(issue('INTAKE_APPROVAL_ASSESSMENT_REQUIRED', assessmentDir, 'workflow requires an intake approval assessment'));
+  for (const task of taskState.tasks) {
+    if (!taskRequiresArtifact(task)) continue;
+    const taskAssessment = assessments.find(({ assessment }) => assessment.scope === 'TASK'
+      && assessment.task_id === task.task_id && assessment.run_id === task.run_id);
+    if (!taskAssessment) {
+      errors.push(issue('TASK_APPROVAL_ASSESSMENT_REQUIRED', task.task_id, 'dispatched task requires an approval assessment'));
+    }
+  }
+  return assessments;
 }
 
 function expectedGateOverall(items) {
@@ -1035,7 +1108,7 @@ function expectedGateOverall(items) {
   return 'PASS';
 }
 
-function validateGates({ workflow, workflowDir, projectRoot, machine, approvals, taskState, errors }) {
+function validateGates({ workflow, workflowDir, projectRoot, machine, approvals, assessments, taskState, errors }) {
   const gateSchema = readJson(join(projectRoot, 'contracts', 'gate-result.schema.json'));
   const gateFiles = jsonFiles(join(workflowDir, 'gates'));
   let currentReleaseGateCount = 0;
@@ -1069,6 +1142,19 @@ function validateGates({ workflow, workflowDir, projectRoot, machine, approvals,
         || (gate.task_id === null && (approval.request.task_id !== null || approval.request.run_id !== null))
         || (gate.task_id !== null && (!gateTask || approval.request.task_id !== gate.task_id || approval.request.run_id !== gateTask.run_id))) {
         errors.push(issue('GATE_APPROVAL_SCOPE_MISMATCH', gateFile, 'approved decision scope does not match gate scope'));
+      }
+    }
+    if (gate.gate_name === 'ArchitectureGate' && gate.overall === 'PASS') {
+      const architectureAssessment = assessments.find(({ assessment }) => assessment.scope === 'ARCHITECTURE'
+        && assessment.task_id === null && assessment.run_id === null);
+      if (!architectureAssessment) {
+        errors.push(issue('ARCHITECTURE_APPROVAL_ASSESSMENT_REQUIRED', gateFile, 'PASS ArchitectureGate requires an architecture approval assessment'));
+      } else {
+        for (const evaluation of architectureAssessment.assessment.evaluations ?? []) {
+          if (evaluation.status === 'REQUIRES_APPROVAL' && !(gate.approved_decision_ids ?? []).includes(evaluation.decision_id)) {
+            errors.push(issue('ARCHITECTURE_GATE_APPROVAL_REQUIRED', gateFile, `PASS ArchitectureGate must reference approval ${evaluation.decision_id}`));
+          }
+        }
       }
     }
     if (['ReviewGate', 'SecurityGate', 'ReleaseReadinessGate'].includes(gate.gate_name)
@@ -1241,7 +1327,8 @@ function checkWorkflowCommand(options) {
   validateWorkflowSnapshots(workflow, workflowDir, errors);
   const taskState = validateTasks({ workflow, workflowDir, projectRoot, eventRecords, errors });
   const approvals = validateApprovals({ workflow, workflowDir, projectRoot, taskState, errors });
-  validateGates({ workflow, workflowDir, projectRoot, machine, approvals, taskState, errors });
+  const assessments = validateApprovalAssessments({ workflow, workflowDir, projectRoot, approvals, taskState, errors });
+  validateGates({ workflow, workflowDir, projectRoot, machine, approvals, assessments, taskState, errors });
   validateGitCandidate(workflow, errors);
 
   if (errors.length > 0) {
@@ -1294,6 +1381,7 @@ function selfCheckCommand(options) {
     ['gate-result.json', 'gate-result.schema.json', true],
     ['approval-request.json', 'approval-request.schema.json', true],
     ['approval-response.json', 'approval-response.schema.json', true],
+    ['approval-assessment.json', 'approval-assessment.schema.json', true],
   ];
   for (const [templateName, schemaName, allowPlaceholders] of templateMappings) {
     const templatePath = join(projectRoot, 'templates', templateName);

@@ -1,0 +1,30 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://openclaw-sdlc-multi-agent/contracts/approval-assessment.schema.json",
+  "title": "ApprovalAssessment",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "workflow_id", "scope", "task_id", "run_id", "assessed_at", "evaluations"],
+  "properties": {
+    "schema_version": { "type": "integer", "const": 1 },
+    "workflow_id": { "type": "string", "pattern": "^WF-[A-Za-z0-9][A-Za-z0-9-]*$" },
+    "scope": { "type": "string", "enum": ["INTAKE", "ARCHITECTURE", "TASK"] },
+    "task_id": { "type": ["string", "null"], "pattern": "^TASK-[A-Za-z0-9][A-Za-z0-9-]*$" },
+    "run_id": { "type": ["string", "null"], "pattern": "^RUN-[A-Za-z0-9][A-Za-z0-9-]*$" },
+    "assessed_at": { "type": "string", "format": "date-time" },
+    "evaluations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["trigger", "status", "rationale", "decision_id"],
+        "properties": {
+          "trigger": { "type": "string" },
+          "status": { "type": "string", "enum": ["NOT_TRIGGERED", "REQUIRES_APPROVAL"] },
+          "rationale": { "type": "string", "minLength": 1 },
+          "decision_id": { "type": ["string", "null"], "pattern": "^DEC-[A-Za-z0-9][A-Za-z0-9-]*$" }
+        }
+      }
+    }
+  }
+}
