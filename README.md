@@ -57,9 +57,15 @@ node scripts/runtime-guard.mjs check-workflow \
   --project-root /abs/path/openclaw-sdlc-multi-agent \
   --runtime-root /abs/path/openclaw-runtime \
   --workflow-id WF-<uuid>
+
+# 恢复入口：未指定 workflow ID 时仅允许恰好一个活动工作流
+node scripts/runtime-guard.mjs recovery-check \
+  --project-root /abs/path/openclaw-sdlc-multi-agent \
+  --runtime-root /abs/path/openclaw-runtime \
+  [--workflow-id WF-<uuid>]
 ```
 
-Guard 使用 Ajv / ajv-formats 作为本地 JSON Schema validator。Guard 失败会以非零退出码和 `effective_status=HOLD` 阻止推进。事件链使用 JSONL、按 Unicode 码点（含数字形态键）递归排序的 canonical JSON 与 SHA-256；非终态快照与活动索引一致，终态则要求 0 条活动记录和非空 `final-report.md`。Review/Security Gate 的 PASS 需要能绑定 current candidate 的 `review-agent` 证据；旧 candidate 的 finding 只保留为历史。ReleaseReadinessGate 仍按 task/run 绑定 decision，但历史 release gate 只做自身内部一致性校验；release 终态必须恰好有一个 current candidate 的最新 release task/run gate，并只由它参与终态映射。
+Guard 使用 Ajv / ajv-formats 作为本地 JSON Schema validator。Guard 失败会以非零退出码和 `effective_status=HOLD` 阻止推进。它校验控制任务与 canonical artifact task/run 一一对应、任务依赖与最大尝试次数、完成任务的 `user-summary.md` / `manager-summary.md`、上下文 manifest 绑定与逐文件 SHA-256、`rules.md` 哈希，以及 workflow 的规则/上下文快照哈希。事件链使用 JSONL、按 Unicode 码点（含数字形态键）递归排序的 canonical JSON 与 SHA-256；非终态快照与活动索引一致，终态则要求 0 条活动记录和非空 `final-report.md`。每个 intake 与已派发任务还必须完成 15 项审批 trigger 评估；ArchitectureGate PASS 必须引用该阶段所有命中的已批准 decision。Review/Security Gate 的 PASS 需要能绑定 current candidate 的 `review-agent` 证据；旧 candidate 的 finding 只保留为历史。ReleaseReadinessGate 仍按 task/run 绑定 decision，但历史 release gate 只做自身内部一致性校验；release 终态必须恰好有一个 current candidate 的最新 release task/run gate，并只由它参与终态映射。
 
 所有 JSON / JSONL 输出错误必须记录到 `raw-logs/json-validation-errors.jsonl` 或 workflow 级 `validation-errors.jsonl`，记录格式见 `contracts/json-validation-error.schema.json`。首次 JSON 校验失败只允许一次 JSON-only retry：只重新生成失败的 JSON / JSONL，不重新完整分析任务。
 
@@ -67,13 +73,19 @@ Guard 使用 Ajv / ajv-formats 作为本地 JSON Schema validator。Guard 失败
 
 ## Agent LLM JSON 合约测试
 
+本地完整回归入口（Runtime Guard、离线 LLM harness、Bash/PowerShell 安装验证）：
+
+```bash
+npm test
+```
+
 离线检查只验证测试规划、单 Gateway 客户端调用状态机和失败包完整性，不调用模型：
 
 ```bash
 npm run test:agent-json:offline
 ```
 
-全量真实测试通过现有 OpenClaw Gateway 的一个持久客户端连接调用已注册角色：19 个 JSON/JSONL 契约场景各 5 条不同需求，默认独立重复 2 轮（190 次首轮调用）。测试仅评估 Agent 的最终 LLM 回复，不调用 Agent 工具、不要求 Agent 写文件，也不会为每个用例启动 OpenClaw CLI。首次校验失败时，同一 Agent session 只允许一次重写。正常回复只在临时目录经 Guard 校验后删除；重写后仍不通过的每一例会完整保留两次原始 LLM 回复、两次 Guard 报告和两次提示，并由中文 `report.md` 汇总在被 Git 忽略的 `artifacts/agent-llm-json/<run-id>/`。
+全量真实测试通过现有 OpenClaw Gateway 的一个持久客户端连接调用已注册角色：20 个 JSON/JSONL 契约场景各 5 条不同需求，默认独立重复 2 轮（200 次首轮调用）。测试仅评估 Agent 的最终 LLM 回复，不调用 Agent 工具、不要求 Agent 写文件，也不会为每个用例启动 OpenClaw CLI。首次校验失败时，同一 Agent session 只允许一次重写。正常回复只在临时目录经 Guard 校验后删除；重写后仍不通过的每一例会完整保留两次原始 LLM 回复、两次 Guard 报告和两次提示，并由中文 `report.md` 汇总在被 Git 忽略的 `artifacts/agent-llm-json/<run-id>/`。
 
 ```bash
 npm run agent-json:real
@@ -405,7 +417,7 @@ Manager 只有在用户批准后才能调用 `NewAgent`；构建完成后还需�
 
 ## manager-agent 如何恢复已中断的工作流
 
-新的 manager 会话不依赖聊天历史。它会读取 `<runtime>/control/active-workflows.json`，再读取对应 `workflow.json`、`events.jsonl`、`context-summary.md`、未决审批与 Git 状态后恢复。快照与事件/Git 不一致时进入 `HOLD`。详见 [docs/state-and-recovery.md](docs/state-and-recovery.md)。
+新的 manager 会话不依赖聊天历史。它必须先运行 `recovery-check`：恰好一个活动工作流时才继续完整 Guard 校验；多个活动工作流必须由用户显式选择 `--workflow-id`。通过后再读取对应 `workflow.json`、`events.jsonl`、`context-summary.md`、未决审批与 Git 状态；快照、事件、输入哈希或 Git 不一致时进入 `HOLD`，不得恢复派发。当前仓库保留的历史 Demo 使用旧版 `active_workflows` 索引格式，`recovery-check` 会给出 schema 诊断并保持 `HOLD`，不会自动改写历史产物。详见 [docs/state-and-recovery.md](docs/state-and-recovery.md)。
 
 ## 文档索引
 

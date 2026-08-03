@@ -1,20 +1,22 @@
 # 多 Agent 软件开发与运维计划：当前完成度评估
 
-> 评估日期：2026-07-27  
-> 评估口径：以仓库文件、OpenClaw 实际注册状态、runtime 运行产物与本地 Git 记录为准；不把仅有设计文档的能力视为已完全交付。
+> 评估日期：2026-08-03
+> 评估口径：以当前分支代码、自动化测试、OpenClaw 实际注册状态、runtime 运行产物与本地 Git 记录为准；平台实现与历史 Demo 的运行状态分开评估，不把仅有设计文档或旧协议产物视为已完全交付。
 
 ## 总体结论
 
-按可验证的实际运行能力估算，项目当前约完成 **65%**。
+按可验证的平台能力估算，项目当前约完成 **72%**；历史 Demo 仍未迁移到当前文件协议，因此不能把它作为端到端闭环已验证的证据。
 
-项目已经具备多 Agent 协作开发小型本地程序的样例能力：7 个 Agent 已注册，且已留下需求、架构、开发、审查、测试与发布候选等产物。不过，它尚未达到“可恢复、可审计、可安全上线”的全自动交付闭环，第四周定义的运维能力基本未实现。
+项目已经具备多 Agent 协作开发小型本地程序的样例能力：7 个 Agent 已注册，且已留下需求、架构、开发、审查、测试与发布候选等产物。本分支补齐了任务控制/产物对应、上下文哈希、审批评估、恢复检查和安装回归；不过，尚未以新协议重新完成一次真实工作流，第四周定义的运维能力也未实现。
 
 ### 已验证事实
 
 - OpenClaw 中已实际注册 `manager-agent`、`requirement-agent`、`architect-agent`、`developer-agent`、`review-agent`、`test-agent`、`release-agent` 共 7 个 Agent。
 - `openclaw config validate --json` 返回 `valid: true`。
 - 已运行过登录聊天 Demo 工作流，目标项目为 `D:\MicroConnect\project\my-chat-app`；本地 Git 中存在开发、审查修复、测试及合并提交。
-- 已实现无状态 Node.js Runtime Guard，并通过 `node --test tests/runtime-guard.test.mjs`、`node --test tests/validate-install.test.mjs`、`node scripts/runtime-guard.mjs self-check --project-root .` 与 `bash scripts/validate-install.sh --skip-openclaw` 验证。
+- 已实现无状态 Node.js Runtime Guard：控制任务/artifact 一一对应、摘要、依赖、重试上限、上下文输入 SHA-256、规则/上下文快照哈希、15 项审批评估和 ArchitectureGate 审批引用均 fail-closed。
+- 已新增 `recovery-check`，在单一活动工作流时复用完整 Guard 校验；多个 workflow 时要求用户选择。旧 Demo 的旧版活动索引会返回结构化 schema 诊断并保持 `HOLD`。
+- 当前分支 `npm test` 通过：Runtime Guard 78 通过、2 个 Windows 无符号链接权限的测试跳过；离线 LLM harness 8 通过；Bash/PowerShell 安装验证 2 通过。
 - 运行产物中存在需求、架构、开发、代码审查、测试和发布候选报告。
 
 ### 关键风险
@@ -34,19 +36,19 @@
 | SDLC workflow 设计 | ✅ | 已定义需求、架构、开发、审查、测试、发布交接等 13 阶段。 |
 | 任务/工作流状态机 | ✅ | 已引入 Runtime Guard、workflow/task 状态机和 `state_revision` 校验；失同步会 fail-closed。 |
 | Agent 角色划分 | ✅ | manager、requirement、architect、developer、review、test、release 已落地。 |
-| Agent 通信 JSON Schema | ✅ | 12 份契约已通过 Runtime Guard 强制校验，非法 JSON、字段缺失和作用域不匹配会被拒绝。 |
+| Agent 通信 JSON Schema | ✅ | 20 份契约已通过 Runtime Guard 强制校验，非法 JSON、字段缺失和作用域不匹配会被拒绝。 |
 | 日志、思维/过程追踪 | ✅ | 已补齐事件链哈希、append-only 追加、fsync 与篡改检测，事件链不完整会阻断推进。 |
-| Pipeline 规则与人工审批 | ✅ | 已实现 Gate 重新聚合、审批 scope 绑定、Review/Security current-candidate 证据约束和 Release current authority 校验。 |
+| Pipeline 规则与人工审批 | ✅ | 已实现 Gate 重新聚合、审批 scope 绑定、15 项 trigger assessment、ArchitectureGate 审批引用、Review/Security current-candidate 证据约束和 Release current authority 校验。 |
 
 ## 第二周：需求、架构与开发
 
 | 任务 | 状态 | 评估 |
 |---|---|---|
-| Manager 交互、分派、汇总 | 🟡 | Demo 中确实派发了多个 Agent，但控制层未完整记录后续任务。 |
+| Manager 交互、分派、汇总 | 🟡 | Guard 现已拒绝 orphan artifact、缺失控制任务、依赖异常及缺失 user/manager summary；但历史 Demo 未迁移，且尚未重新演练真实多 Agent 闭环。 |
 | 需求到架构 | ✅ | 已产出需求、验收标准、架构、ADR、接口、数据模型和实现计划。 |
 | 单开发 Agent 实现小型程序 | ✅ | 已在 `my-chat-app` 生成登录聊天 Demo，并提交到本地 Git。 |
-| 上下文管理与规则传递 | 🟡 | 每任务有 context/task/rules 输入包；但未验证跨中断恢复的完整性。 |
-| 架构/大改动人工审批 | 🟡 | 技术栈和 UI 基线有用户确认；后续大功能变更缺少可追溯审批记录。 |
+| 上下文管理与规则传递 | 🟡 | Guard 已读取 context manifest、重算输入/规则 SHA-256 并校验 workflow 快照；`recovery-check` 已提供可执行入口，但尚未完成一次真实中断后续跑演练。 |
+| 架构/大改动人工审批 | ✅ | intake、任务和架构阶段均有 15 项 trigger assessment；命中项必须绑定批准 decision，ArchitectureGate PASS 必须引用全部命中 decision。 |
 
 ## 第三周：测试、发布与质量闭环
 
@@ -55,8 +57,8 @@
 | 测试 Agent、测试报告 | 🟡 | 已有 40 通过、0 失败、1 跳过的 API 测试报告；前端构建测试在测试 worktree 中未执行。 |
 | 测试代码审查 | ❌ | 未见独立的“测试代码审查”阶段产物。 |
 | 发布 Agent、变更/发布检查 | 🟡 | 已有发布候选 `GO` 和运维交接材料，但不是实际发布。 |
-| 多 Agent 闭环、失败重试 | 🟡 | 制品链覆盖多个角色，但状态、事件、输入任务和结果不完整，无法证明闭环可靠。 |
-| 质量门禁 | ❌ | 设计存在，执行不可信：Gate 中有 `FAIL` 仍总体 `PASS`；审查发现的高风险问题未全部处理。 |
+| 多 Agent 闭环、失败重试 | 🟡 | 控制面已对状态、任务、输入、结果、摘要和审批 fail-closed；仍缺一次按新协议完成的真实多 Agent 工作流演练。 |
+| 质量门禁 | ✅ | Guard 重算 Gate overall，并对未决审批、阻断 finding、current-candidate 证据与 release task/run authority fail-closed；历史 Demo 的旧 Gate 不作为当前协议通过证据。 |
 | 最终综合报告 | ❌ | 有需求、架构、开发、测试、发布报告，但未生成统一的 `final-report.md`。 |
 
 ## 第四周：运维闭环
@@ -64,25 +66,24 @@
 | 任务 | 状态 | 评估 |
 |---|---|---|
 | 部署、监控、异常定位、回滚 | ❌ | 当前项目明确限定为“运维前交付”，未实现部署、监控、告警或真实回滚。 |
-| 全流程端到端联调 | ❌ | 跑过能力样例，但控制状态不一致，且未覆盖运维，不能算完整联调。 |
-| 重试、超时、人工接管、状态恢复 | 🟡 | 文档规定最大重做次数和人工接管；真实状态不一致说明恢复能力尚未通过验证。 |
-| 使用、角色、流程、审批文档 | 🟡 | 文档覆盖较全，但旧交付报告与当前运行产物不一致，且缺少运维文档。 |
+| 全流程端到端联调 | ❌ | 历史能力样例是旧协议且已被安全 HOLD；尚未完成按当前协议的新 Demo 与运维范围联调。 |
+| 重试、超时、人工接管、状态恢复 | 🟡 | 最大尝试次数、审批评估和 `recovery-check` 已可执行；尚缺真实中断、换 manager 会话后恢复并完成的演练。 |
+| 使用、角色、流程、审批文档 | ✅ | README、Manager 操作规范、审批和恢复文档已同步当前 Guard 行为；运维文档仍受第四周范围限制。 |
 | 可配置角色、流程、审批、发布策略 | 🟡 | 已有策略覆盖与模型配置；角色注册和工作流仍主要是固定实现。 |
 
 ## 优先级任务清单
 
-### P0：先修复可信控制面
+### P0：迁移并演练可信控制面
 
-1. 统一 `active-workflows.json`、`workflow.json`、任务状态、事件链和 Git 候选提交。
-2. 对 task、result、gate、approval 等所有运行产物执行强制 JSON Schema 校验。
-3. 非法 JSON、字段不匹配、缺失事件哈希或状态不一致时，必须自动 `HOLD`，禁止继续派发。
-4. 修复 Gate 聚合逻辑：阻断性 `FAIL`、未关闭审批、未处理 HIGH/CRITICAL 风险必须阻断发布。
+1. 不改写历史证据的前提下，审计旧 Demo 并创建一个符合当前 schema 的新 Demo workflow。
+2. 在新 Demo 中验证控制任务、artifact、context manifest、snapshot hash、summary 与 approval assessment 的完整链路。
+3. 中断一个已派发任务，由新 manager 会话执行 `recovery-check` 后恢复；保留全过程证据。
 
 ### P1：补齐第三周闭环
 
 1. 增加独立测试代码审查阶段。
 2. 生成统一 `final-report.md`，汇总架构、开发、测试、审查、发布、风险和未验证项。
-3. 演练一次中断恢复：中断某一阶段后由新的 manager 会话恢复并完成工作流。
+3. 演练一次中断恢复：中断某一阶段后由新的 manager 会话运行 `recovery-check`、恢复并完成工作流。
 4. 修复或升级已发现的安全问题，至少包括 token 存储策略和登录限速。
 
 ### P2：进入第四周运维能力
