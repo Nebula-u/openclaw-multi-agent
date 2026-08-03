@@ -89,9 +89,9 @@
    `git -C "<target_abs>" worktree add -b <task-branch> "<RT>/worktrees/<wf>/<task>/<run>/repo" <input_commit>`
    仅在该 worktree 仓库设置**本地** Git identity（不改全局）。
 3. 组装任务上下文包到 `<artifact_run>/input/`（见 `rules/CONTEXT_PROTOCOL.md`）：`task.json`、`context.md`、`rules.md`、`acceptance-criteria.json`、`approved-decisions.json`、`source-manifest.json`、`context-manifest.json`。为每个 input 文件计算小写 SHA-256 写入 manifest，且 `rule_hash` 必须等于 `rules.md` 的哈希。
-4. 在 `approval-assessments/<task-id>.json` 对全部 15 个审批 trigger 做评估；任何 `REQUIRES_APPROVAL` 必须先有同作用域的已批准 decision，才能派发。
-5. 只传最小充分上下文：**不**复制用户完整聊天历史；**不**要求工作 Agent 读我的会话历史。
-6. 对 `input/` 内所有 JSON / JSONL 结构化文件运行 Runtime Guard `validate-file`，带 `--log-file <workflow_dir_abs>/validation-errors.jsonl --stage manager_dispatch`；任一失败不得派发。
+4. **派发前预检（不得跳过）**：在 task 仍为 `CREATED`/`READY`、尚未写入 `TASK_DISPATCHED` 事件时，运行：`node <project_root_abs>/scripts/runtime-guard.mjs check-task-package --project-root <project_root_abs> --runtime-root <runtime_root_abs> --workflow-id <workflow-id> --task-id <task-id> --task-file <workflow_dir_abs>/tasks/<task-id>.json --log-file <workflow_dir_abs>/validation-errors.jsonl --stage manager_dispatch_preflight`。该命令必须验证完整 input、哈希、manifest、artifact 和 worktree 的规范绝对路径。失败时停止；不得修改已生成 input 以外的历史 run，不得写 `DISPATCHED` 事件或 spawn。
+5. 在 `approval-assessments/<task-id>.json` 对全部 15 个审批 trigger 做评估；任何 `REQUIRES_APPROVAL` 必须先有同作用域的已批准 decision，才能派发。
+6. 只传最小充分上下文：**不**复制用户完整聊天历史；**不**要求工作 Agent 读我的会话历史。
 7. 先将控制层 task 置为 `DISPATCHED`，更新 workflow/active，追加 `TASK_DISPATCHED` 事件，并通过第 3.1 节的提交屏障；屏障未通过不得派发。
 8. 用 OpenClaw 原生会话工具创建隔离的工作 Agent 会话：
    - 若本版本提供 `sessions_spawn`：调用时**必须**显式传 `agentId`，且 `agentId == task.assigned_agent`；上下文语义用 `isolated`（干净子会话）。

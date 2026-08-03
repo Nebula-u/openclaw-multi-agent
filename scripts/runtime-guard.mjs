@@ -69,6 +69,7 @@ function parseArgs(argv) {
       'stage',
       'agent-id',
       'task-id',
+      'task-file',
       'run-id',
       'attempt',
       'retry-count',
@@ -340,7 +341,9 @@ function validateTaskContext(task, taskFile, contextSchema, errors) {
       continue;
     }
     inputEntries.set(entry.path_abs, entry);
-    if (sha256File(entry.path_abs) !== entry.sha256) {
+    if (!existsSync(entry.path_abs)) {
+      errors.push(issue('CONTEXT_INPUT_MISSING', entry.path_abs, 'context manifest references a missing input file'));
+    } else if (sha256File(entry.path_abs) !== entry.sha256) {
       errors.push(issue('CONTEXT_INPUT_HASH_MISMATCH', entry.path_abs, 'context input SHA-256 does not match manifest'));
     }
   }
@@ -352,7 +355,7 @@ function validateTaskContext(task, taskFile, contextSchema, errors) {
     }
   }
   const rulesPath = join(inputRoot, 'rules.md');
-  if (inputEntries.has(rulesPath) && sha256File(rulesPath) !== manifest.rule_hash) {
+  if (inputEntries.has(rulesPath) && existsSync(rulesPath) && sha256File(rulesPath) !== manifest.rule_hash) {
     errors.push(issue('RULE_HASH_MISMATCH', expectedManifestPath, 'rule_hash must equal the SHA-256 of input/rules.md'));
   }
   const inputTaskPath = join(inputRoot, 'task.json');
@@ -363,6 +366,22 @@ function validateTaskContext(task, taskFile, contextSchema, errors) {
         errors.push(issue('CONTEXT_TASK_MISMATCH', `${inputTaskPath}:${field}`, `input task ${field} does not match control task`));
       }
     }
+  }
+}
+
+function validateTaskPaths(task, taskFile, workflow, errors) {
+  const runtimeArtifactsRoot = join(workflow.runtime_root_abs, 'artifacts');
+  const workflowArtifactsRoot = join(runtimeArtifactsRoot, workflow.workflow_id);
+  const expectedArtifactRoot = join(workflowArtifactsRoot, task.task_id, task.run_id);
+  if (!isRealPathWithin(runtimeArtifactsRoot, workflowArtifactsRoot)
+    || !isRealPathWithin(workflowArtifactsRoot, expectedArtifactRoot)
+    || !isSameRealPath(expectedArtifactRoot, task.artifact_root_abs)) {
+    errors.push(issue('ARTIFACT_PATH_ESCAPE', taskFile, 'artifact_root_abs must exactly resolve to this workflow/task/run artifact directory'));
+  }
+  const expectedWorktree = join(workflow.runtime_root_abs, 'worktrees', workflow.workflow_id, task.task_id, task.run_id, 'repo');
+  if (!isRealPathWithin(join(workflow.runtime_root_abs, 'worktrees'), expectedWorktree)
+    || !isSameRealPath(expectedWorktree, task.worktree_path_abs)) {
+    errors.push(issue('WORKTREE_PATH_ESCAPE', taskFile, 'worktree_path_abs must exactly resolve to this workflow/task/run worktree without symlink escape'));
   }
 }
 
@@ -710,17 +729,7 @@ function validateTasks({ workflow, workflowDir, projectRoot, eventRecords, error
     if (task.workflow_id !== workflow.workflow_id) {
       errors.push(issue('TASK_WORKFLOW_MISMATCH', taskFile, 'task workflow_id does not match workflow'));
     }
-    const runtimeArtifactsRoot = join(workflow.runtime_root_abs, 'artifacts');
-    const workflowArtifactsRoot = join(runtimeArtifactsRoot, workflow.workflow_id);
-    const expectedArtifactRoot = join(workflowArtifactsRoot, task.task_id, task.run_id);
-    if (!isRealPathWithin(runtimeArtifactsRoot, workflowArtifactsRoot)
-      || !isRealPathWithin(workflowArtifactsRoot, expectedArtifactRoot)
-      || !isSameRealPath(expectedArtifactRoot, task.artifact_root_abs)) {
-      errors.push(issue('ARTIFACT_PATH_ESCAPE', taskFile, 'artifact_root_abs must exactly resolve to this workflow/task/run artifact directory'));
-    }
-    if (!isRealPathWithin(join(workflow.runtime_root_abs, 'worktrees'), task.worktree_path_abs)) {
-      errors.push(issue('WORKTREE_PATH_ESCAPE', taskFile, 'worktree_path_abs must exist under runtime worktrees without symlink escape'));
-    }
+    validateTaskPaths(task, taskFile, workflow, errors);
     if (taskRequiresArtifact(task)) {
       validateTaskContext(task, taskFile, contextSchema, errors);
     }
@@ -1354,6 +1363,56 @@ function checkWorkflowCommand(options, command = 'check-workflow') {
   });
 }
 
+function checkTaskPackageCommand(options) {
+  const projectRoot = resolve(requireOption(options, 'project-root'));
+  const runtimeRoot = resolve(requireOption(options, 'runtime-root'));
+  const workflowId = requireOption(options, 'workflow-id');
+  const taskId = requireOption(options, 'task-id');
+  const taskFile = resolve(requireOption(options, 'task-file'));
+  const errors = [];
+  if (!/^WF-[A-Za-z0-9][A-Za-z0-9-]*$/u.test(workflowId)) {
+    errors.push(issue('INVALID_WORKFLOW_ID', '$.workflow-id', 'workflow-id must be a complete safe WF identifier'));
+  }
+  if (!/^TASK-[A-Za-z0-9][A-Za-z0-9-]*$/u.test(taskId)) {
+    errors.push(issue('INVALID_TASK_ID', '$.task-id', 'task-id must be a complete safe TASK identifier'));
+  }
+  const workflowDir = join(runtimeRoot, 'control', 'workflows', workflowId);
+  const expectedTaskFile = join(workflowDir, 'tasks', `${taskId}.json`);
+  if (!isSameRealPath(taskFile, expectedTaskFile)) {
+    errors.push(issue('TASK_CONTROL_PATH_MISMATCH', taskFile, 'task-file must be the canonical control/workflows/<workflow>/tasks/<task>.json path'));
+  }
+  const workflow = readJsonForCheck(join(workflowDir, 'workflow.json'), errors);
+  const task = readJsonForCheck(taskFile, errors);
+  if (workflow) {
+    const workflowSchema = readJson(join(projectRoot, 'contracts', 'workflow.schema.json'));
+    addSchemaErrors(errors, workflow, workflowSchema, join(workflowDir, 'workflow.json'));
+    if (resolve(workflow.runtime_root_abs) !== runtimeRoot) {
+      errors.push(issue('RUNTIME_ROOT_MISMATCH', '$.runtime_root_abs', 'workflow runtime root does not match command runtime root'));
+    }
+  }
+  if (task) {
+    const taskSchema = readJson(join(projectRoot, 'contracts', 'task.schema.json'));
+    const contextSchema = readJson(join(projectRoot, 'contracts', 'context-manifest.schema.json'));
+    addSchemaErrors(errors, task, taskSchema, taskFile);
+    if (task.task_id !== taskId) {
+      errors.push(issue('TASK_ID_MISMATCH', taskFile, 'task task_id does not match requested task-id'));
+    }
+    if (workflow && task.workflow_id !== workflow.workflow_id) {
+      errors.push(issue('TASK_WORKFLOW_MISMATCH', taskFile, 'task workflow_id does not match workflow'));
+    }
+    if (workflow) validateTaskPaths(task, taskFile, workflow, errors);
+    // A dispatch preflight always requires the complete immutable input package,
+    // even while the control task is still in CREATED or READY state.
+    validateTaskContext(task, taskFile, contextSchema, errors);
+  }
+  if (errors.length > 0) {
+    appendGuardFailureLog(options, taskFile, errors);
+    emit({ ok: false, command: 'check-task-package', workflow_id: workflowId, task_id: taskId, effective_status: 'HOLD', errors }, 1);
+    return;
+  }
+  emit({ ok: true, command: 'check-task-package', workflow_id: workflowId, task_id: taskId });
+}
+
 function recoveryCheckCommand(options) {
   const projectRoot = resolve(requireOption(options, 'project-root'));
   const runtimeRoot = resolve(requireOption(options, 'runtime-root'));
@@ -1440,6 +1499,10 @@ function main() {
     }
     if (command === 'check-workflow') {
       checkWorkflowCommand(options);
+      return;
+    }
+    if (command === 'check-task-package') {
+      checkTaskPackageCommand(options);
       return;
     }
     if (command === 'recovery-check') {

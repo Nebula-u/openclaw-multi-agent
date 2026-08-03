@@ -228,6 +228,17 @@ function recoveryCheck(fixture, workflowId = null) {
   return runGuard(args);
 }
 
+function checkTaskPackage(fixture, task) {
+  return runGuard([
+    'check-task-package',
+    '--project-root', ROOT,
+    '--runtime-root', fixture.runtimeRoot,
+    '--workflow-id', WORKFLOW_ID,
+    '--task-id', task.task_id,
+    '--task-file', join(fixture.workflowDir, 'tasks', `${task.task_id}.json`),
+  ]);
+}
+
 function fixtureLike(runtimeRoot, workflowDir) {
   return { runtimeRoot, workflowDir };
 }
@@ -314,6 +325,30 @@ test('check-workflow detects a tampered context input hash', () => {
     assert.equal(result.status, 1);
     assert.match(result.stdout, /CONTEXT_INPUT_HASH_MISMATCH/);
     assert.match(result.stdout, /RULE_HASH_MISMATCH/);
+  } finally { fixture.cleanup(); }
+});
+
+test('check-task-package validates a complete package before its dispatch event', () => {
+  const fixture = makeRuntime({ taskIds: [TASK_ID], withCurrentCandidate: true });
+  try {
+    const task = scopedTask(fixture);
+    const result = checkTaskPackage(fixture, task);
+    assert.equal(result.status, 0, result.stdout);
+    assert.match(result.stdout, /"command": "check-task-package"/);
+  } finally { fixture.cleanup(); }
+});
+
+test('check-task-package rejects a noncanonical worktree before dispatch', () => {
+  const fixture = makeRuntime({ taskIds: [TASK_ID], withCurrentCandidate: true });
+  try {
+    const task = scopedTask(fixture);
+    const escaped = join(fixture.runtimeRoot, 'worktrees', WORKFLOW_ID, task.task_id, task.run_id, 'other-repo');
+    mkdirSync(escaped, { recursive: true });
+    task.worktree_path_abs = escaped;
+    writeJson(join(fixture.workflowDir, 'tasks', `${task.task_id}.json`), task);
+    const result = checkTaskPackage(fixture, task);
+    assert.equal(result.status, 1);
+    assert.match(result.stdout, /WORKTREE_PATH_ESCAPE/);
   } finally { fixture.cleanup(); }
 });
 
