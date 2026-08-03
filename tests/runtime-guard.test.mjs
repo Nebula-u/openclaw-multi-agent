@@ -136,6 +136,10 @@ function makeRuntime({
   mkdirSync(join(workflowDir, 'gates'), { recursive: true });
   mkdirSync(join(runtimeRoot, 'artifacts'), { recursive: true });
   mkdirSync(join(runtimeRoot, 'worktrees'), { recursive: true });
+  const rulesSnapshot = 'rules snapshot\n';
+  const contextSummary = 'context summary\n';
+  writeFileSync(join(workflowDir, 'rules-snapshot.md'), rulesSnapshot, 'utf8');
+  writeFileSync(join(workflowDir, 'context-summary.md'), contextSummary, 'utf8');
 
   const workflow = {
     schema_version: 1,
@@ -153,6 +157,8 @@ function makeRuntime({
     pending_decision_ids: pendingDecisionIds,
     context_version: 0,
     rules_version: 'test-rules-v1',
+    rules_snapshot_sha256: createHash('sha256').update(rulesSnapshot, 'utf8').digest('hex'),
+    context_summary_sha256: createHash('sha256').update(contextSummary, 'utf8').digest('hex'),
     created_at: '2026-07-29T00:00:00Z',
     updated_at: `2026-07-29T00:00:0${revision - 1}Z`,
   };
@@ -243,6 +249,20 @@ test('check-workflow requires both completed-task summaries', () => {
     const result = checkWorkflow(fixture);
     assert.equal(result.status, 1);
     assert.match(result.stdout, /TASK_SUMMARY_REQUIRED/);
+  } finally { fixture.cleanup(); }
+});
+
+test('check-workflow detects a tampered context input hash', () => {
+  const fixture = makeRuntime({ taskIds: [TASK_ID], withCurrentCandidate: true });
+  try {
+    const task = scopedTask(fixture);
+    appendTaskLifecycle(fixture, task);
+    writeTaskResult(task);
+    writeFileSync(join(task.artifact_root_abs, 'input', 'rules.md'), 'tampered rules\n', 'utf8');
+    const result = checkWorkflow(fixture);
+    assert.equal(result.status, 1);
+    assert.match(result.stdout, /CONTEXT_INPUT_HASH_MISMATCH/);
+    assert.match(result.stdout, /RULE_HASH_MISMATCH/);
   } finally { fixture.cleanup(); }
 });
 
@@ -340,13 +360,48 @@ function scopedTask(fixture, overrides = {}) {
   const worktree = join(fixture.runtimeRoot, 'worktrees', WORKFLOW_ID, taskId, runId, 'repo');
   mkdirSync(join(artifactRoot, 'output'), { recursive: true });
   mkdirSync(worktree, { recursive: true });
-  return minimalTask(fixture, {
+  const task = minimalTask(fixture, {
     status: 'COMPLETED',
     input_commit: fixture.currentCandidateCommit,
     worktree_path_abs: worktree,
     artifact_root_abs: artifactRoot,
     context_manifest_path_abs: join(artifactRoot, 'input', 'context-manifest.json'),
     ...overrides,
+  });
+  writeTaskContext(task);
+  return task;
+}
+
+function writeTaskContext(task) {
+  const inputRoot = join(task.artifact_root_abs, 'input');
+  mkdirSync(inputRoot, { recursive: true });
+  writeJson(join(inputRoot, 'task.json'), task);
+  writeFileSync(join(inputRoot, 'context.md'), 'context\n', 'utf8');
+  writeFileSync(join(inputRoot, 'rules.md'), 'rules\n', 'utf8');
+  writeJson(join(inputRoot, 'acceptance-criteria.json'), { schema_version: 1, criteria: [] });
+  writeJson(join(inputRoot, 'approved-decisions.json'), { decisions: [] });
+  writeJson(join(inputRoot, 'source-manifest.json'), { files: [] });
+  const inputFiles = ['task.json', 'context.md', 'rules.md', 'acceptance-criteria.json', 'approved-decisions.json', 'source-manifest.json']
+    .map((name) => {
+      const path = join(inputRoot, name);
+      return { path_abs: path, sha256: createHash('sha256').update(readFileSync(path)).digest('hex') };
+    });
+  writeJson(join(inputRoot, 'context-manifest.json'), {
+    schema_version: 1,
+    workflow_id: task.workflow_id,
+    task_id: task.task_id,
+    run_id: task.run_id,
+    assigned_agent: task.assigned_agent,
+    created_at: task.created_at,
+    manager_session_reference: null,
+    target_project_root_abs: task.worktree_path_abs,
+    worktree_path_abs: task.worktree_path_abs,
+    artifact_root_abs: task.artifact_root_abs,
+    input_files: inputFiles,
+    rule_version: 'test-rules-v1',
+    rule_hash: inputFiles.find((entry) => entry.path_abs.endsWith('rules.md')).sha256,
+    input_commit: task.input_commit,
+    expected_output_paths_abs: [],
   });
 }
 

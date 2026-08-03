@@ -9,7 +9,8 @@
     "target_project_root_abs", "runtime_root_abs", "integration_branch",
     "base_commit", "current_candidate_commit", "current_phase",
     "state_revision", "task_ids", "pending_decision_ids", "context_version",
-    "rules_version", "created_at", "updated_at"
+    "rules_version", "rules_snapshot_sha256", "context_summary_sha256",
+    "created_at", "updated_at"
   ],
   "properties": {
     "schema_version": { "type": "integer", "const": 1 },
@@ -45,6 +46,8 @@
     "pending_decision_ids": { "type": "array", "items": { "type": "string", "pattern": "^DEC-[A-Za-z0-9][A-Za-z0-9-]*$" } },
     "context_version": { "type": "integer", "minimum": 0 },
     "rules_version": { "type": "string", "minLength": 1 },
+    "rules_snapshot_sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "context_summary_sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
     "created_at": { "type": "string", "format": "date-time" },
     "updated_at": { "type": "string", "format": "date-time" }
   }

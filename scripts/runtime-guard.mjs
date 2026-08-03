@@ -284,6 +284,81 @@ function nonEmptyFile(path) {
   }
 }
 
+function sha256File(path) {
+  return createHash('sha256').update(readFileSync(path)).digest('hex');
+}
+
+function validateWorkflowSnapshots(workflow, workflowDir, errors) {
+  const snapshots = [
+    ['rules-snapshot.md', 'rules_snapshot_sha256'],
+    ['context-summary.md', 'context_summary_sha256'],
+  ];
+  for (const [fileName, hashField] of snapshots) {
+    const path = join(workflowDir, fileName);
+    if (!nonEmptyFile(path)) {
+      errors.push(issue('WORKFLOW_SNAPSHOT_REQUIRED', path, `${fileName} must exist and be non-empty`));
+    } else if (sha256File(path) !== workflow[hashField]) {
+      errors.push(issue('WORKFLOW_SNAPSHOT_HASH_MISMATCH', path, `${fileName} does not match workflow ${hashField}`));
+    }
+  }
+}
+
+function validateTaskContext(task, taskFile, contextSchema, errors) {
+  const inputRoot = join(task.artifact_root_abs, 'input');
+  const expectedManifestPath = join(inputRoot, 'context-manifest.json');
+  if (!isSameRealPath(task.context_manifest_path_abs, expectedManifestPath)) {
+    errors.push(issue('CONTEXT_MANIFEST_PATH_MISMATCH', taskFile, 'task context_manifest_path_abs must be its canonical input/context-manifest.json'));
+    return;
+  }
+  const manifest = readJsonForCheck(expectedManifestPath, errors);
+  if (!manifest) return;
+  addSchemaErrors(errors, manifest, contextSchema, expectedManifestPath);
+  for (const field of ['workflow_id', 'task_id', 'run_id', 'assigned_agent', 'input_commit']) {
+    if (!equalJson(manifest[field], task[field])) {
+      errors.push(issue('CONTEXT_MANIFEST_ID_MISMATCH', `${expectedManifestPath}:${field}`, `context manifest ${field} does not match task`));
+    }
+  }
+  if (!isSameRealPath(manifest.artifact_root_abs, task.artifact_root_abs)
+    || !isSameRealPath(manifest.worktree_path_abs, task.worktree_path_abs)) {
+    errors.push(issue('CONTEXT_MANIFEST_PATH_MISMATCH', expectedManifestPath, 'context manifest roots do not match task roots'));
+  }
+  const inputEntries = new Map();
+  for (const entry of manifest.input_files ?? []) {
+    if (!isAbsolute(entry.path_abs) || !isRealPathWithin(inputRoot, entry.path_abs)) {
+      errors.push(issue('CONTEXT_INPUT_PATH_ESCAPE', expectedManifestPath, `context input path escapes input root: ${entry.path_abs}`));
+      continue;
+    }
+    if (inputEntries.has(entry.path_abs)) {
+      errors.push(issue('DUPLICATE_CONTEXT_INPUT', expectedManifestPath, `duplicate context input: ${entry.path_abs}`));
+      continue;
+    }
+    inputEntries.set(entry.path_abs, entry);
+    if (sha256File(entry.path_abs) !== entry.sha256) {
+      errors.push(issue('CONTEXT_INPUT_HASH_MISMATCH', entry.path_abs, 'context input SHA-256 does not match manifest'));
+    }
+  }
+  const requiredInputs = ['task.json', 'context.md', 'rules.md', 'acceptance-criteria.json', 'approved-decisions.json', 'source-manifest.json'];
+  for (const fileName of requiredInputs) {
+    const path = join(inputRoot, fileName);
+    if (!inputEntries.has(path)) {
+      errors.push(issue('CONTEXT_INPUT_REQUIRED', expectedManifestPath, `context manifest is missing ${fileName}`));
+    }
+  }
+  const rulesPath = join(inputRoot, 'rules.md');
+  if (inputEntries.has(rulesPath) && sha256File(rulesPath) !== manifest.rule_hash) {
+    errors.push(issue('RULE_HASH_MISMATCH', expectedManifestPath, 'rule_hash must equal the SHA-256 of input/rules.md'));
+  }
+  const inputTaskPath = join(inputRoot, 'task.json');
+  const inputTask = readJsonForCheck(inputTaskPath, errors);
+  if (inputTask) {
+    for (const field of ['workflow_id', 'task_id', 'run_id', 'assigned_agent']) {
+      if (!equalJson(inputTask[field], task[field])) {
+        errors.push(issue('CONTEXT_TASK_MISMATCH', `${inputTaskPath}:${field}`, `input task ${field} does not match control task`));
+      }
+    }
+  }
+}
+
 function artifactRunKeys(runtimeRoot, workflowId) {
   const workflowRoot = join(runtimeRoot, 'artifacts', workflowId);
   if (!existsSync(workflowRoot)) return [];
@@ -592,6 +667,7 @@ function validateTasks({ workflow, workflowDir, projectRoot, eventRecords, error
   const commandSchema = readJson(join(projectRoot, 'contracts', 'command-record.schema.json'));
   const reviewSchema = readJson(join(projectRoot, 'contracts', 'review-findings.schema.json'));
   const releaseSchema = readJson(join(projectRoot, 'contracts', 'release-decision.schema.json'));
+  const contextSchema = readJson(join(projectRoot, 'contracts', 'context-manifest.schema.json'));
   const taskFiles = jsonFiles(join(workflowDir, 'tasks'));
   const tasks = [];
   const blockingFindings = [];
@@ -637,6 +713,9 @@ function validateTasks({ workflow, workflowDir, projectRoot, eventRecords, error
     }
     if (!isRealPathWithin(join(workflow.runtime_root_abs, 'worktrees'), task.worktree_path_abs)) {
       errors.push(issue('WORKTREE_PATH_ESCAPE', taskFile, 'worktree_path_abs must exist under runtime worktrees without symlink escape'));
+    }
+    if (taskRequiresArtifact(task)) {
+      validateTaskContext(task, taskFile, contextSchema, errors);
     }
     const latestTaskEventForTask = [...eventRecords]
       .reverse()
@@ -1159,6 +1238,7 @@ function checkWorkflowCommand(options) {
 
   const eventRecords = readJsonLinesForCheck(eventsPath, errors).map((record) => record.value);
   validateEventChain(eventRecords, workflow, machine, eventSchema, errors);
+  validateWorkflowSnapshots(workflow, workflowDir, errors);
   const taskState = validateTasks({ workflow, workflowDir, projectRoot, eventRecords, errors });
   const approvals = validateApprovals({ workflow, workflowDir, projectRoot, taskState, errors });
   validateGates({ workflow, workflowDir, projectRoot, machine, approvals, taskState, errors });
