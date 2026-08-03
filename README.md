@@ -71,6 +71,12 @@ Guard 使用 Ajv / ajv-formats 作为本地 JSON Schema validator。Guard 失败
 
 模型、Responses/Chat 路由和空字符串重试策略见 [docs/model-routing.md](docs/model-routing.md)。空模型输出最多额外重试 3 次；有有效工具调用的无文本中间响应不算空输出；非空 JSON Schema 失败仍只允许一次 JSON-only retry。
 
+### Manager 模型与变更状态
+
+`manager-agent` 的默认模型为 `newapi-responses/gpt-5.6-luna`。如果 TUI 显示的模型与此不一致，应先执行 `openclaw models status --agent manager-agent --check`；当默认项正确而 TUI 仍显示其他模型时，检查并清除 Manager 父会话的会话级 `providerOverride` / `modelOverride`，然后重新启动 TUI。不要把模型凭据或完整认证输出写入项目文档、日志或 Issue。
+
+每一项项目改动都必须在用户完成检查/验收后同步更新 [CHANGELOG.md](CHANGELOG.md)、本 README 和 [docs/current-progress-assessment.md](docs/current-progress-assessment.md)：Changelog 记录实际改动、原因、效果和验证；README 记录用户可见的操作或配置变化；完成度评估记录状态、证据、风险和未完成项。未完成用户检查的工作不得标记为已验证或已完成。
+
 ## Agent LLM JSON 合约测试
 
 本地完整回归入口（Runtime Guard、离线 LLM harness、Bash/PowerShell 安装验证）：
