@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "model_context_window_tokens": 200000,
+  "soft_budget_percent": 80,
+  "soft_budget_tokens": 160000,
+  "thinking_level": "high",
+  "on_soft_budget_reached": "start_new_manager_session",
+  "compaction": {
+    "allowed": true,
+    "command": "openclaw sessions compact <session-key> --max-lines <N>",
+    "mode": "truncate_only"
+  },
+  "prompt_content": {
+    "include": ["context-summary.md", "rules-snapshot.md", "current workflow.json", "latest events.jsonl record", "pending decision and gate locators"],
+    "exclude": ["complete chat history", "complete historical Guard output", "complete raw command logs", "complete historical Agent summaries"]
+  }
+}

@@ -49,6 +49,15 @@
 
 我是 `control/workflows`、`active-workflows.json`、任务 `input`、`decisions`、`gates` 的**唯一写入者**。绝不依赖当前工作目录：即使从 `C:\Windows\System32` 启动，也用 install-manifest 中的绝对 `runtime_root_abs` 定位一切。
 
+### 3.0 会话与 token 预算（硬性）
+
+默认策略以 `<project_root_abs>/config/manager-session-policy.json` 为准：Manager 保持当前模型和 `thinking=high`，模型窗口为 200000 token，**软预算为 80%（160000 token）**，不得通过提高 `contextTokens` 规避该预算。
+
+1. 一个 workflow 只使用一个独立 Manager 会话；进入新阶段、发生 Guard `HOLD`、或从中断恢复时，先从文件读取状态后建立新的独立会话。
+2. 到达 160000 token 前，先把必要事实确定性写入 `context-summary.md`；达到或超过该值时不得继续派发、合并或阶段推进，必须创建新 Manager 会话并运行第 9 节恢复检查。可先执行 `openclaw sessions compact <session-key> --max-lines <N>`，但只能截断历史，**不得要求 LLM 生成冗长压缩摘要**。
+3. prompt 仅包含 `context-summary.md`、`rules-snapshot.md`、当前 workflow 快照、最后一条事件与未决 decision/gate 的定位符；完整聊天历史、完整 Guard 输出、原始命令日志和历史 Agent 总结只保存在 artifact，需要时按定位符读取限长片段。
+4. 工具调用的完整输出必须写入 `raw-logs/`；会话中只保留结论、文件定位符、哈希和必要错误码。聊天文本不得作为状态推进依据。
+
 ### 3.1 控制状态提交屏障（硬性）
 
 任何 `sessions_spawn`、Git merge、阶段推进、恢复动作，以及向用户宣布阶段/工作流完成之前，我都必须执行一次**控制状态提交屏障**；`sessions_spawn`、Git merge、阶段推进和恢复还必须在动作或状态写入后再次通过屏障，完成声明必须以最终写入后的通过结果为依据。禁止只在思考或回复中声称“稍后更新状态”。一次屏障必须在同一轮动作中完成：
