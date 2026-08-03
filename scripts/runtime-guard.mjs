@@ -1340,6 +1340,27 @@ function checkWorkflowCommand(options, command = 'check-workflow') {
   const eventRecords = readJsonLinesForCheck(eventsPath, errors).map((record) => record.value);
   validateEventChain(eventRecords, workflow, machine, eventSchema, errors);
   validateWorkflowSnapshots(workflow, workflowDir, errors);
+  // Quarantine is an auditable terminal boundary, not a repair mode. Once the
+  // immutable evidence and terminal snapshots are verified, historical task
+  // defects must remain preserved rather than preventing its removal from the
+  // active recovery index.
+  if (workflow.status === 'QUARANTINED') {
+    if (errors.length > 0) {
+      appendGuardFailureLog(options, workflowPath, errors);
+      emit({ ok: false, command, workflow_id: workflowId, effective_status: 'HOLD', errors }, 1);
+      return;
+    }
+    emit({
+      ok: true,
+      command,
+      workflow_id: workflowId,
+      effective_status: workflow.status,
+      state_revision: workflow.state_revision,
+      event_count: eventRecords.length,
+      quarantined: true,
+    });
+    return;
+  }
   const taskState = validateTasks({ workflow, workflowDir, projectRoot, eventRecords, errors });
   const approvals = validateApprovals({ workflow, workflowDir, projectRoot, taskState, errors });
   const assessments = validateApprovalAssessments({ workflow, workflowDir, projectRoot, approvals, taskState, errors });

@@ -1045,7 +1045,7 @@ test('check-workflow accepts a terminal workflow removed from the active index w
 });
 
 test('check-workflow accepts a quarantined workflow only with its evidence report', () => {
-  const fixture = makeRuntime({ status: 'QUARANTINED', phase: 'INTAKE' });
+  const fixture = makeRuntime({ status: 'QUARANTINED', phase: 'INTAKE', taskIds: [TASK_ID] });
   try {
     clearActiveWorkflows(fixture);
     writeFileSync(join(fixture.workflowDir, 'final-report.md'), 'workflow quarantined\n', 'utf8');
@@ -1055,6 +1055,7 @@ test('check-workflow accepts a quarantined workflow only with its evidence repor
     writeFileSync(join(fixture.workflowDir, 'quarantine-report.md'), 'original artifacts retained\n', 'utf8');
     result = checkWorkflow(fixture);
     assert.equal(result.status, 0, result.stdout);
+    assert.match(result.stdout, /"quarantined": true/);
   } finally { fixture.cleanup(); }
 });
 
