@@ -352,6 +352,26 @@ test('check-task-package rejects a noncanonical worktree before dispatch', () =>
   } finally { fixture.cleanup(); }
 });
 
+test('check-workflow requires every declared structured output for a completed task', () => {
+  const fixture = makeRuntime({ taskIds: [TASK_ID], withCurrentCandidate: true });
+  try {
+    const task = scopedTask(fixture);
+    appendTaskLifecycle(fixture, task);
+    writeTaskResult(task);
+    task.structured_outputs.push({
+      path_abs: join(task.artifact_root_abs, 'output', 'requirement-extra.json'),
+      schema_path_abs: join(ROOT, 'contracts', 'acceptance-criteria.schema.json'),
+      format: 'json',
+      required: true,
+      producer: 'review-agent',
+    });
+    writeJson(join(fixture.workflowDir, 'tasks', `${task.task_id}.json`), task);
+    const result = checkWorkflow(fixture);
+    assert.equal(result.status, 1);
+    assert.match(result.stdout, /STRUCTURED_OUTPUT_REQUIRED/);
+  } finally { fixture.cleanup(); }
+});
+
 test('check-workflow requires an intake approval assessment', () => {
   const fixture = makeRuntime();
   try {
@@ -396,6 +416,29 @@ function minimalTask(fixture, overrides = {}) {
     allowed_write_paths_abs: [],
     forbidden_paths_abs: [],
     required_outputs: [],
+    structured_outputs: [
+      {
+        path_abs: join(artifactRoot, 'output', 'result.json'),
+        schema_path_abs: join(ROOT, 'contracts', 'result.schema.json'),
+        format: 'json',
+        required: true,
+        producer: overrides.assigned_agent ?? 'review-agent',
+      },
+      {
+        path_abs: join(artifactRoot, 'output', 'evidence.jsonl'),
+        schema_path_abs: join(ROOT, 'contracts', 'evidence.schema.json'),
+        format: 'jsonl',
+        required: false,
+        producer: overrides.assigned_agent ?? 'review-agent',
+      },
+      {
+        path_abs: join(artifactRoot, 'output', 'command-records.jsonl'),
+        schema_path_abs: join(ROOT, 'contracts', 'command-record.schema.json'),
+        format: 'jsonl',
+        required: false,
+        producer: overrides.assigned_agent ?? 'review-agent',
+      },
+    ],
     approval_dependencies: [],
     created_at: '2026-07-29T00:00:00Z',
     updated_at: '2026-07-29T00:00:01Z',

@@ -32,6 +32,29 @@
   "required_outputs": [
     "C:\\path\\to\\openclaw-runtime\\artifacts\\TASK-00000000-0000-0000-0000-000000000000\\RUN-00000000-0000-0000-0000-000000000000\\development-report.md"
   ],
+  "structured_outputs": [
+    {
+      "path_abs": "C:\\path\\to\\openclaw-runtime\\artifacts\\TASK-00000000-0000-0000-0000-000000000000\\RUN-00000000-0000-0000-0000-000000000000\\output\\result.json",
+      "schema_path_abs": "C:\\path\\to\\openclaw-multi-agent\\contracts\\result.schema.json",
+      "format": "json",
+      "required": true,
+      "producer": "developer-agent"
+    },
+    {
+      "path_abs": "C:\\path\\to\\openclaw-runtime\\artifacts\\TASK-00000000-0000-0000-0000-000000000000\\RUN-00000000-0000-0000-0000-000000000000\\output\\evidence.jsonl",
+      "schema_path_abs": "C:\\path\\to\\openclaw-multi-agent\\contracts\\evidence.schema.json",
+      "format": "jsonl",
+      "required": false,
+      "producer": "developer-agent"
+    },
+    {
+      "path_abs": "C:\\path\\to\\openclaw-runtime\\artifacts\\TASK-00000000-0000-0000-0000-000000000000\\RUN-00000000-0000-0000-0000-000000000000\\output\\command-records.jsonl",
+      "schema_path_abs": "C:\\path\\to\\openclaw-multi-agent\\contracts\\command-record.schema.json",
+      "format": "jsonl",
+      "required": false,
+      "producer": "developer-agent"
+    }
+  ],
   "approval_dependencies": [],
   "created_at": "2026-01-01T00:00:00Z",
   "updated_at": "2026-01-01T00:00:00Z"

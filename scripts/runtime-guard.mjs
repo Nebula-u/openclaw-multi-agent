@@ -369,6 +369,12 @@ function validateTaskContext(task, taskFile, contextSchema, errors) {
   }
 }
 
+function isPathLexicallyWithin(root, candidate) {
+  const normalizedRoot = resolve(root);
+  const normalizedCandidate = resolve(candidate);
+  return normalizedCandidate === normalizedRoot || normalizedCandidate.startsWith(`${normalizedRoot}${sep}`);
+}
+
 function validateTaskPaths(task, taskFile, workflow, errors) {
   const runtimeArtifactsRoot = join(workflow.runtime_root_abs, 'artifacts');
   const workflowArtifactsRoot = join(runtimeArtifactsRoot, workflow.workflow_id);
@@ -411,6 +417,46 @@ function taskRequiresArtifact(task) {
 function addSchemaErrors(errors, value, schema, source, options = {}) {
   for (const error of validateInstance(value, schema, options)) {
     errors.push({ ...error, source });
+  }
+}
+
+function validateStructuredOutputs(task, taskFile, projectRoot, errors) {
+  const outputRoot = join(task.artifact_root_abs, 'output');
+  const contractsRoot = join(projectRoot, 'contracts');
+  const seenPaths = new Set();
+  for (const entry of task.structured_outputs ?? []) {
+    if (entry.producer !== task.assigned_agent) {
+      errors.push(issue('STRUCTURED_OUTPUT_PRODUCER_MISMATCH', taskFile, `structured output producer must equal assigned_agent: ${entry.path_abs}`));
+    }
+    if (!isAbsolute(entry.path_abs) || !isPathLexicallyWithin(outputRoot, entry.path_abs)
+      || (existsSync(entry.path_abs) && !isRealPathWithin(outputRoot, entry.path_abs))) {
+      errors.push(issue('STRUCTURED_OUTPUT_PATH_ESCAPE', taskFile, `structured output must exist under artifact output: ${entry.path_abs}`));
+      continue;
+    }
+    if (seenPaths.has(entry.path_abs)) {
+      errors.push(issue('DUPLICATE_STRUCTURED_OUTPUT', taskFile, `structured output is declared more than once: ${entry.path_abs}`));
+      continue;
+    }
+    seenPaths.add(entry.path_abs);
+    if (!isAbsolute(entry.schema_path_abs) || !isRealPathWithin(contractsRoot, entry.schema_path_abs)) {
+      errors.push(issue('STRUCTURED_OUTPUT_SCHEMA_ESCAPE', taskFile, `structured output schema must exist under contracts: ${entry.schema_path_abs}`));
+      continue;
+    }
+    if (!existsSync(entry.path_abs)) {
+      if (task.status === 'COMPLETED' && entry.required) {
+        errors.push(issue('STRUCTURED_OUTPUT_REQUIRED', entry.path_abs, 'completed task is missing a required structured output'));
+      }
+      continue;
+    }
+    const schema = readJsonForCheck(entry.schema_path_abs, errors);
+    if (!schema) continue;
+    const records = entry.format === 'jsonl'
+      ? readJsonLinesForCheck(entry.path_abs, errors)
+      : [{ line: null, value: readJsonForCheck(entry.path_abs, errors) }];
+    for (const record of records) {
+      if (record.value === null) continue;
+      addSchemaErrors(errors, record.value, schema, record.line ? `${entry.path_abs}:${record.line}` : entry.path_abs);
+    }
   }
 }
 
@@ -811,6 +857,7 @@ function validateTasks({ workflow, workflowDir, projectRoot, eventRecords, error
         }
       }
     }
+    validateStructuredOutputs(task, taskFile, projectRoot, errors);
     if (task.task_type === 'RELEASE_VERIFICATION'
       && task.assigned_agent === 'release-agent'
       && task.input_commit === workflow.current_candidate_commit

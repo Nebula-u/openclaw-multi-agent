@@ -7,7 +7,7 @@
   "required": [
     "schema_version", "workflow_id", "task_id", "run_id", "task_type",
     "assigned_agent", "title", "status", "attempt", "max_attempts",
-    "worktree_path_abs", "artifact_root_abs", "context_manifest_path_abs",
+    "worktree_path_abs", "artifact_root_abs", "context_manifest_path_abs", "structured_outputs",
     "created_at", "updated_at"
   ],
   "properties": {
@@ -53,6 +53,21 @@
     "allowed_write_paths_abs": { "type": "array", "items": { "type": "string" } },
     "forbidden_paths_abs": { "type": "array", "items": { "type": "string" } },
     "required_outputs": { "type": "array", "items": { "type": "string" } },
+    "structured_outputs": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path_abs", "schema_path_abs", "format", "required", "producer"],
+        "properties": {
+          "path_abs": { "type": "string", "minLength": 1 },
+          "schema_path_abs": { "type": "string", "minLength": 1 },
+          "format": { "type": "string", "enum": ["json", "jsonl"] },
+          "required": { "type": "boolean" },
+          "producer": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
     "approval_dependencies": { "type": "array", "items": { "type": "string", "pattern": "^DEC-[A-Za-z0-9][A-Za-z0-9-]*$" } },
     "created_at": { "type": "string", "format": "date-time" },
     "updated_at": { "type": "string", "format": "date-time" }

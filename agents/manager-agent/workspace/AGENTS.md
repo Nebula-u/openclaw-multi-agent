@@ -98,6 +98,7 @@
    `git -C "<target_abs>" worktree add -b <task-branch> "<RT>/worktrees/<wf>/<task>/<run>/repo" <input_commit>`
    仅在该 worktree 仓库设置**本地** Git identity（不改全局）。
 3. 组装任务上下文包到 `<artifact_run>/input/`（见 `rules/CONTEXT_PROTOCOL.md`）：`task.json`、`context.md`、`rules.md`、`acceptance-criteria.json`、`approved-decisions.json`、`source-manifest.json`、`context-manifest.json`。为每个 input 文件计算小写 SHA-256 写入 manifest，且 `rule_hash` 必须等于 `rules.md` 的哈希。
+   - 控制层 `tasks/<task-id>.json.structured_outputs[]` 必须逐项声明所有会被下游读取的 JSON/JSONL：`path_abs`、`schema_path_abs`、`format`、`required`、`producer`。所有工作 Agent 至少声明 `output/result.json`、`output/evidence.jsonl`、`output/command-records.jsonl`；review 和 release 的专属 JSON 也必须声明。`producer` 必须等于 `assigned_agent`，schema 只能引用 `<project_root_abs>/contracts/`。
 4. **派发前预检（不得跳过）**：在 task 仍为 `CREATED`/`READY`、尚未写入 `TASK_DISPATCHED` 事件时，运行：`node <project_root_abs>/scripts/runtime-guard.mjs check-task-package --project-root <project_root_abs> --runtime-root <runtime_root_abs> --workflow-id <workflow-id> --task-id <task-id> --task-file <workflow_dir_abs>/tasks/<task-id>.json --log-file <workflow_dir_abs>/validation-errors.jsonl --stage manager_dispatch_preflight`。该命令必须验证完整 input、哈希、manifest、artifact 和 worktree 的规范绝对路径。失败时停止；不得修改已生成 input 以外的历史 run，不得写 `DISPATCHED` 事件或 spawn。
 5. 在 `approval-assessments/<task-id>.json` 对全部 15 个审批 trigger 做评估；任何 `REQUIRES_APPROVAL` 必须先有同作用域的已批准 decision，才能派发。
 6. 只传最小充分上下文：**不**复制用户完整聊天历史；**不**要求工作 Agent 读我的会话历史。
@@ -114,6 +115,7 @@
 Agent 返回后，我**必须实际检查**（任一失败即不继续）：
 
 1. 用 Runtime Guard `validate-file` 确认 `output/result.json` 可解析且符合 `contracts/result.schema.json`，带 `--log-file <workflow_dir_abs>/validation-errors.jsonl --stage manager_receive`。
+   - 随后运行完整 `check-workflow`，使 Guard 按 `structured_outputs[]` 对所有声明的 JSON/JSONL 再次 Ajv 校验；不得仅因 Agent 的聊天文本或 Markdown 总结而更新 task 状态。
 2. `workflow_id`/`task_id`/`run_id` 与当前任务一致。
 3. `result.json.agent_id` == `assigned_agent`。
 4. 声明的 output / report 文件真实存在。
