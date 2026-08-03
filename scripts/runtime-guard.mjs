@@ -1355,10 +1355,15 @@ function checkWorkflowCommand(options, command = 'check-workflow') {
 }
 
 function recoveryCheckCommand(options) {
+  const projectRoot = resolve(requireOption(options, 'project-root'));
   const runtimeRoot = resolve(requireOption(options, 'runtime-root'));
   const activePath = join(runtimeRoot, 'control', 'active-workflows.json');
   const errors = [];
   const active = readJsonForCheck(activePath, errors);
+  if (active) {
+    const activeSchema = readJson(join(projectRoot, 'contracts', 'active-workflows.schema.json'));
+    addSchemaErrors(errors, active, activeSchema, activePath);
+  }
   if (!active || !Array.isArray(active.workflows)) {
     emit({ ok: false, command: 'recovery-check', effective_status: 'HOLD', errors: errors.length > 0 ? errors : [issue('ACTIVE_WORKFLOW_INDEX_INVALID', activePath, 'active workflow index is invalid')] }, 1);
     return;
