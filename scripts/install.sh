@@ -304,12 +304,12 @@ write_manifest() {
     [ $first -eq 0 ] && agents_json="$agents_json,"
     first=0
     local ews edir emdl emft esrc eorigin
-    ews="$(json_escape "${OC_WS[$id]}")"; edir="$(json_escape "${OC_DIR[$id]}")"; emdl="$(json_escape "${MODEL[$id]}")"
-    emft="$(json_escape "${MANIFEST[$id]}")"; esrc="$(json_escape "${SRC_WS[$id]}")"; eorigin="$(json_escape "${ORIGIN[$id]}")"
+    ews="$(json_escape "$(native_path "${OC_WS[$id]}")")"; edir="$(json_escape "$(native_path "${OC_DIR[$id]}")")"; emdl="$(json_escape "${MODEL[$id]}")"
+    emft="$(json_escape "$(native_path "${MANIFEST[$id]}")")"; esrc="$(json_escape "$(native_path "${SRC_WS[$id]}")")"; eorigin="$(json_escape "${ORIGIN[$id]}")"
     agents_json="$agents_json{\"id\":\"$id\",\"origin\":\"$eorigin\",\"protected\":${PROTECTED[$id]},\"manifest_abs\":\"$emft\",\"workspace_source_abs\":\"$esrc\",\"workspace_abs\":\"$ews\",\"agentDir_abs\":\"$edir\",\"model\":\"$emdl\",\"register\":true,\"active\":${ACTIVE[$id]},\"subagents_allow\":$allow,\"require_agent_id\":$reqid,\"sandbox_mode\":$sb}"
   done
   local ecfg epr err
-  ecfg="$(json_escape "$CONFIG_FILE")"; epr="$(json_escape "$PROJECT_ROOT")"; err="$(json_escape "$RUNTIME_ROOT_ABS")"
+  ecfg="$(json_escape "$(native_path "$CONFIG_FILE")")"; epr="$(json_escape "$(native_path "$PROJECT_ROOT")")"; err="$(json_escape "$(native_path "$RUNTIME_ROOT_ABS")")"
   cat > "$out" <<EOF
 {
   "schema_version": 2,
@@ -320,7 +320,7 @@ write_manifest() {
   "project_root_abs": "$epr",
   "runtime_root_abs": "$err",
   "config_backup": ${backup},
-  "package_catalog_root_abs": "$(json_escape "$PROJECT_ROOT/agents/packages")",
+  "package_catalog_root_abs": "$(json_escape "$(native_path "$PROJECT_ROOT/agents/packages")")",
   "agents": [ $agents_json ]
 }
 EOF
