@@ -1,6 +1,6 @@
 # COMMON_RULES.md — 所有 Agent 的通用规则
 
-> 版本: common-rules v1
+> 版本: common-rules v2
 > 本文件在安装时被复制到每个 Agent 的 workspace（`rules/COMMON_RULES.md`）。每个 Agent 的 `AGENTS.md` 必须显式加载并遵守本文件。规则优先级见下。
 
 ## 0. 规则优先级（从高到低）
@@ -88,3 +88,12 @@
 非空回复首次校验失败时，只允许一次 JSON-only retry：只重新生成失败的 JSON / JSONL 文件，使其符合指定 schema；不得重新完整分析任务，不得改变既有事实判断、报告结论、证据来源、命令结果、代码实现或审批决定。重试提示必须明确包含这条限制，并保存到 `raw-logs/json-regeneration-retry-prompt-<n>.md`。
 
 重试后必须再次运行同一个 schema 校验，带 `--retry-count 1` 与 `--retry-prompt <retry_prompt_path_abs>`。若第二次仍失败，不得报告 `COMPLETED`；按性质返回 `FAILED`、`BLOCKED` 或 `NEEDS_REWORK`，并保留两次错误日志。任何情况下不得覆盖或删除失败日志。
+
+## 10. 用户验收后的项目状态同步（长期规则）
+
+适用于本项目自身的所有改动，包括代码、Agent 规则、配置、运行时修复、测试、文档与流程变更。
+
+1. 实现、测试和内部检查完成后，先向用户说明可供检查的事实；在用户明确完成检查/验收前，状态只能是 `待验证` 或进行中，不得宣称最终完成或已验证。
+2. 用户完成检查/验收后，manager-agent 必须在同一变更周期内同步更新项目根目录 `CHANGELOG.md`、`README.md` 和 `docs/current-progress-assessment.md`，然后才可作出最终完成声明。
+3. `CHANGELOG.md` 必须记录实际改动、原因、效果与验证；`README.md` 必须更新受影响的用户可见操作、配置或行为；完成度评估必须更新状态、可验证证据、风险与遗留工作。无用户可见行为变化时，README 仍须记录状态同步要求或明确说明不适用原因。
+4. 工作 Agent 不得擅自把项目状态写为已完成；其 `user-summary.md` 与 `manager-summary.md` 必须标注“待用户验收后的三文档同步”或说明该任务不修改本项目本身。manager-agent 负责核实并完成同步。
