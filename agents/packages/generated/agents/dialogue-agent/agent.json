@@ -7,7 +7,7 @@
   "origin": "generated",
   "protected": false,
   "deletable": true,
-  "workspace_source_rel": "agents/generated/dialogue-agent/workspace",
+  "workspace_source_rel": "agents/packages/generated/agents/dialogue-agent/workspace",
   "runtime_subdir": "agents/generated/dialogue-agent",
   "role": "worker",
   "capabilities": ["qq.conversation", "general.qa", "web.search"],
