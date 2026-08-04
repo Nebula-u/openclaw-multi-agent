@@ -2,6 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://openclaw.local/contracts/json-validation-error.schema.json",
   "title": "JSON Validation Error Log Record",
+  "description": "每一次 JSON/JSONL 解析或 Ajv 校验失败的可审计日志记录；不得删除或覆盖历史失败。",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -37,7 +38,8 @@
         "gate",
         "workflow_check",
         "self_check"
-      ]
+      ],
+      "description": "发生校验的运行阶段。"
     },
     "agent_id": { "type": ["string", "null"] },
     "workflow_id": { "type": ["string", "null"] },
@@ -50,6 +52,7 @@
     "validator_errors": {
       "type": "array",
       "minItems": 1,
+      "description": "Ajv 返回的结构化错误；重写提示必须仅依据这些字段诊断。",
       "items": {
         "type": "object",
         "additionalProperties": true,
@@ -63,8 +66,8 @@
     },
     "invalid_content_sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
     "invalid_content_excerpt": { "type": "string" },
-    "retry_count": { "type": "integer", "minimum": 0 },
+    "retry_count": { "type": "integer", "minimum": 0, "description": "本记录前已经消耗的 JSON 重写次数。" },
     "retry_prompt_path_abs": { "type": ["string", "null"] },
-    "final_status": { "type": "string", "enum": ["FAILED", "RETRY_SUCCEEDED", "RETRY_FAILED"] }
+    "final_status": { "type": "string", "enum": ["FAILED", "RETRY_SUCCEEDED", "RETRY_FAILED"], "description": "该次校验或重试链路的终态。" }
   }
 }

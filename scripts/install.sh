@@ -457,6 +457,13 @@ set_json() {
 for id in "${AGENT_IDS[@]}"; do
   idx="$(agent_index "$id")"
   [ -n "$idx" ] || { echo "配置中未找到 Agent $id 的索引，停止。" >&2; restore_on_failure "索引缺失 $id"; exit 1; }
+  if [ -n "${MODEL[$id]}" ]; then
+    current_model="$(openclaw config get "agents.list[$idx].model" --json 2>/dev/null | tr -d '\r' | head -1 || true)"
+    current_model="${current_model#\"}"; current_model="${current_model%\"}"
+    if [ "$current_model" != "${MODEL[$id]}" ]; then
+      set_json "agents.list[$idx].model" "\"$(json_escape "${MODEL[$id]}")\""
+    fi
+  fi
   if [ "$id" = "$MANAGER_ID" ]; then
     set_json "agents.list[$idx].subagents" "{\"delegationMode\":\"prefer\",\"requireAgentId\":true,\"allowAgents\":$WORKER_ALLOW_JSON}"
   else

@@ -21,14 +21,14 @@
 - `check-task-package` 已在派发前校验上下文包；`structured_outputs[]` 已将已声明的跨 Agent JSON/JSONL 纳入 Guard 的 Ajv 复检。
 - Manager 会话策略固定为 200k 窗口的 80% 软预算（160k token）；达到预算后必须新建会话并从文件化控制面恢复。
 - 运行产物中存在需求、架构、开发、代码审查、测试和发布候选报告。
-- 已核对 Manager 的有效 Agent 默认模型为 `newapi-responses/gpt-5.6-luna`。2026-08-03 已清除父会话与当时 TUI 会话遗留的 DeepSeek 模型覆盖；重新启动 TUI 后的新 Manager 会话不再继承 DeepSeek。
+- 已将 7 个项目 Agent 统一到官方 `deepseek/deepseek-v4-pro` + Chat Completions API；当前不依赖 Responses API。
 
 ### 关键风险
 
 - 控制状态失同步、事件链不完整、结构化结果不可靠、Gate 语义失效这四类问题，已通过 Runtime Guard 的状态机、JSON/JSONL Schema、事件链哈希和 Gate 聚合校验转为 fail-closed；当前验证路径不会再接受这些不一致继续推进。
 - 安全门禁仍有项目外部风险需要持续跟踪，例如真实部署、线上监控与生产级回滚并未纳入本轮交付范围。
 - 当前范围明确止于“运维前交付”，没有真实部署、监控、告警或线上回滚能力。
-- Gateway 当前 `chat.send` 仍不支持项目可用的逐请求 `response_format` / strict JSON Schema 参数；本地 Ajv 强校验已覆盖声明产物，但 API 级结构化输出仍是待解决问题，不能标记为完成。
+- JSON/JSONL 回复已具备保守包装清洗、Ajv 错误分类（enum/type/schema drift/截断）和首次调用之外最多两次同会话重写；Gateway 当前 `chat.send` 仍不支持项目可用的逐请求 `response_format`，因此 DeepSeek JSON Output 尚不能在注册 Agent 的单次调用中可靠启用，不能标记为完成。
 
 状态说明：✅ 已完成并有运行/文件证据；🟡 部分完成或仅完成设计；❌ 未完成。
 
@@ -80,7 +80,7 @@
 | 全流程端到端联调 | ❌ | 历史能力样例是旧协议且已被安全 HOLD；尚未完成按当前协议的新 Demo 与运维范围联调。 |
 | 重试、超时、人工接管、状态恢复 | 🟡 | 最大尝试次数、审批评估和 `recovery-check` 已可执行；尚缺真实中断、换 manager 会话后恢复并完成的演练。 |
 | 使用、角色、流程、审批文档 | ✅ | README、Manager 操作规范、审批和恢复文档已同步当前 Guard 行为；运维文档仍受第四周范围限制。 |
-| 可配置角色、流程、审批、发布策略 | 🟡 | 已有策略覆盖与模型配置；Manager 的默认模型已验证为 `newapi-responses/gpt-5.6-luna`，并已清除会话级 DeepSeek 覆盖；角色注册和工作流仍主要是固定实现。 |
+| 可配置角色、流程、审批、发布策略 | 🟡 | 已有策略覆盖与模型配置；7 个 Agent 已统一到 DeepSeek V4 Pro Chat Completions，仍需完成实际请求 probe；角色注册和工作流仍主要是固定实现。 |
 
 ## 优先级任务清单
 

@@ -1,0 +1,13 @@
+{
+  "$comment": "Default project routing: all Agents use DeepSeek V4 Pro through the official DeepSeek Chat Completions API. Copy to an ignored *.local.json file before use.",
+  "schema_version": 1,
+  "agents": {
+    "manager-agent":     { "model": "deepseek/deepseek-v4-pro" },
+    "requirement-agent": { "model": "deepseek/deepseek-v4-pro" },
+    "architect-agent":   { "model": "deepseek/deepseek-v4-pro" },
+    "developer-agent":   { "model": "deepseek/deepseek-v4-pro" },
+    "review-agent":      { "model": "deepseek/deepseek-v4-pro" },
+    "test-agent":        { "model": "deepseek/deepseek-v4-pro" },
+    "release-agent":     { "model": "deepseek/deepseek-v4-pro" }
+  }
+}

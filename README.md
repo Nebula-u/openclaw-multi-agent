@@ -108,15 +108,17 @@ Guard 使用 Ajv / ajv-formats 作为本地 JSON Schema validator。Guard 失败
 
 所有 JSON / JSONL 输出错误必须记录到 `raw-logs/json-validation-errors.jsonl` 或 workflow 级 `validation-errors.jsonl`，记录格式见 `contracts/json-validation-error.schema.json`。首次 JSON 校验失败只允许一次 JSON-only retry：只重新生成失败的 JSON / JSONL，不重新完整分析任务。
 
-模型、Responses/Chat 路由和空字符串重试策略见 [docs/model-routing.md](docs/model-routing.md)。空模型输出最多额外重试 3 次；有有效工具调用的无文本中间响应不算空输出；非空 JSON Schema 失败仍只允许一次 JSON-only retry。
+模型、Responses/Chat 路由和 JSON 回复恢复策略见 [docs/model-routing.md](docs/model-routing.md) 与 [docs/llm-json-recovery.md](docs/llm-json-recovery.md)。JSON/JSONL 回复只做保守包装清洗，之后由 Ajv 校验；空输出、截断、enum/type 违规与 schema drift 共用首次调用之外最多 2 次重写预算。有有效工具调用的无文本中间响应不算空输出。
 
 ### Manager 模型与变更状态
 
-`manager-agent` 的默认模型为 `newapi-responses/gpt-5.6-luna`。如果 TUI 显示的模型与此不一致，应先执行 `openclaw models status --agent manager-agent --check`；当默认项正确而 TUI 仍显示其他模型时，检查并清除 Manager 父会话的会话级 `providerOverride` / `modelOverride`，然后重新启动 TUI。不要把模型凭据或完整认证输出写入项目文档、日志或 Issue。
+`manager-agent` 的默认模型为 `deepseek/deepseek-v4-pro`。如果 TUI 显示的模型与此不一致，应先执行 `openclaw models status --agent manager-agent --check`；当默认项正确而 TUI 仍显示其他模型时，检查并清除 Manager 父会话的会话级 `providerOverride` / `modelOverride`，然后重新启动 TUI。不要把模型凭据或完整认证输出写入项目文档、日志或 Issue。
 
 每一项项目改动都必须在用户完成检查/验收后同步更新 [CHANGELOG.md](CHANGELOG.md)、本 README 和 [docs/current-progress-assessment.md](docs/current-progress-assessment.md)：Changelog 记录实际改动、原因、效果和验证；README 记录用户可见的操作或配置变化；完成度评估记录状态、证据、风险和未完成项。未完成用户检查的工作不得标记为已验证或已完成。
 
-Manager 保持 `newapi-responses/gpt-5.6-luna` 和 `thinking=high`。其模型窗口为 200k token，项目软预算为 80%（160k token），配置见 `config/manager-session-policy.json`。达到预算后必须由新 Manager 会话结合 `recovery-check` 和 `context-summary.md` 恢复；不要通过增大 `contextTokens`、复制完整聊天记录或把完整工具日志放入 prompt 规避预算。
+Manager 保持 `deepseek/deepseek-v4-pro` 和 `thinking=high`。其模型窗口为 200k token，项目软预算为 80%（160k token），配置见 `config/manager-session-policy.json`。达到预算后必须由新 Manager 会话结合 `recovery-check` 和 `context-summary.md` 恢复；不要通过增大 `contextTokens`、复制完整聊天记录或把完整工具日志放入 prompt 规避预算。
+
+7 个 Agent 统一使用 DeepSeek V4 Pro + Chat Completions API，模型引用为 `deepseek/deepseek-v4-pro`。配置样例见 `config/agent-models.deepseek-routing.example.json`。
 
 ## Agent LLM JSON 合约测试
 
@@ -132,7 +134,7 @@ npm test
 npm run test:agent-json:offline
 ```
 
-全量真实测试通过现有 OpenClaw Gateway 的一个持久客户端连接调用已注册角色：20 个 JSON/JSONL 契约场景各 5 条不同需求，默认独立重复 2 轮（200 次首轮调用）。测试仅评估 Agent 的最终 LLM 回复，不调用 Agent 工具、不要求 Agent 写文件，也不会为每个用例启动 OpenClaw CLI。首次校验失败时，同一 Agent session 只允许一次重写。正常回复只在临时目录经 Guard 校验后删除；重写后仍不通过的每一例会完整保留两次原始 LLM 回复、两次 Guard 报告和两次提示，并由中文 `report.md` 汇总在被 Git 忽略的 `artifacts/agent-llm-json/<run-id>/`。
+全量真实测试通过现有 OpenClaw Gateway 的一个持久客户端连接调用已注册角色：20 个 JSON/JSONL 契约场景各 5 条不同需求，默认独立重复 2 轮（200 次首轮调用）。测试仅评估 Agent 的最终 LLM 回复，不调用 Agent 工具、不要求 Agent 写文件，也不会为每个用例启动 OpenClaw CLI。回复会先保守清洗、再由 Guard 校验；首次调用之外最多进行两次分类重写。每次失败都保留原始回复、清洗元数据、Guard 报告和提示，并由中文 `report.md` 汇总在被 Git 忽略的 `artifacts/agent-llm-json/<run-id>/`。
 
 ```bash
 npm run agent-json:real

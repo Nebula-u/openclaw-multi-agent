@@ -68,7 +68,7 @@ Agent 返回后，`manager-agent` **必须实际检查**以下各项，**任一�
 11. 文件哈希与 `checksums.sha256` 一致。
 12. 无明显凭证泄露（扫描 result/report/日志的敏感模式）。
 
-JSON / JSONL 校验首次失败 → 只允许一次 JSON-only retry：manager 明确要求工作 Agent 只重新生成失败 JSON / JSONL 文件，不重新完整分析，不改变既有事实、证据、报告、代码、命令结果或审批判断；重试提示保存到该 run 的 `raw-logs/`，两次错误都写入 `json-validation-errors.jsonl` 或 `<workflow>/validation-errors.jsonl`。
+JSON / JSONL 校验失败 → 首次调用外最多两次 JSON-only retry：manager 按空输出、截断、enum/type 或 schema drift 的固定模板明确要求工作 Agent 只重新生成失败 JSON / JSONL 文件，不重新完整分析，不改变既有事实、证据、报告、代码、命令结果或审批判断；每次重写提示、原始/清洗哈希和错误均保存到该 run 的 `raw-logs/` 或 `<workflow>/validation-errors.jsonl`。
 
 验证失败或重试仍失败 → **不继续**；任务按合法任务状态进入 `NEEDS_REWORK`、`FAILED`、`BLOCKED` 或 `WAITING_HUMAN`，workflow 视情形进入 `HOLD`，再 append event，按第 7 节决策。**不得**把 `HOLD` 写入 `result_status`，也不得因 Agent 回复"已完成"就跳过上述校验。
 
