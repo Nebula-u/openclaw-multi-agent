@@ -49,12 +49,19 @@ manager-agent 在每次派发前，于 `<artifact_root_abs>/input/` 创建完整
 
 1. **不**向工作 Agent 复制完整用户聊天历史。
 2. **不**要求工作 Agent 读取 manager 的私有会话历史。
-3. 派发消息只提供：任务摘要 + 绝对 `context-manifest.json` 路径 + 绝对 `task.json` 路径 + 绝对输出目录 + 绝对 worktree 路径。
+3. 派发消息只提供：任务摘要、`dispatch_id`、input manifest SHA-256、绝对 `context-manifest.json` 路径、绝对 `task.json` 路径、绝对输出目录 + 绝对 worktree 路径。
 4. 工作 Agent **先读取并校验**上下文包，再开始工作。
 5. 上下文不足 → 只返回缺失项，不自行扩大范围。
 6. manager 更新规则后，**不篡改**已派发任务的 input；必须创建新 attempt + 新 run_id + 新规则快照。
 7. manager 每阶段结束更新 `context-summary.md`，只保留后续阶段真正需要的事实/决策/限制/证据引用。
 8. 最小充分原则：只传递完成当前任务所必需的上下文。
+
+## 7. Dispatch 启动与完成确认
+
+1. 工作 Agent 启动后，先比对派发消息中的 `dispatch_id`、workflow/task/run/agent ID 与 `context-manifest.json`，并计算/核对 input manifest SHA-256；不一致即 `BLOCKED`，不写产物、不开始工作。
+2. 校验完成后向 manager-agent 发送简短启动确认，明确 `dispatch_id` 与已核对的 manifest SHA-256；该确认是消息信号，Manager 才能将其持久化为 `ACKNOWLEDGED` / `RUNNING` receipt，Agent 不得自行修改 dispatch ledger。
+3. 先完整落盘并自检所有结构化结果、报告、日志、校验和与（适用时）Git commit，再发送完成通知。完成消息必须包含 `dispatch_id`、result 路径、result SHA-256 与真实结果状态；消息本身不代表完成事实。
+4. 若 Manager 明确通知当前 run 已 superseded、取消或终结，立即停止新增写入并如实报告；不得调度其他 Agent 或自行重试。
 
 ## 6. 工作 Agent 侧消费步骤
 

@@ -95,3 +95,6 @@
 - `NEEDS_REWORK` —— 判断为 `NO_GO`/`HOLD` 且根因需上游修正（如构建失败、测试失败、评审未通过、缺回滚计划/部署前置）；在 `result.json` 与发布判断中逐条列出缺口与证据，供 manager-agent 重新派发。
 - `HUMAN_DECISION_REQUIRED` —— 命中 APPROVAL_RULES.md 审批节点，典型包括：给出 `HOLD` 但用户希望继续（第 13 条）、失败测试/UNKNOWN 安全结果/`UNSANDBOXED_LOCAL` 风险需例外放行（第 12 条）、严重安全问题需风险接受（第 11 条）。**不擅自决定**，在 `decisions_required[]` 列出选项、影响与可逆性，交 manager-agent 发起审批。
 - `FAILED` —— 任务在执行中不可恢复地失败；保留真实失败日志（不得只留成功日志），如实上报。
+## 13. Dispatch 身份与完成通知
+
+收到 manager-agent 派发后，先核对消息中的 `dispatch_id`、input manifest SHA-256 与 `context-manifest.json`，并确认 workflow/task/run/assigned_agent 一致；不一致返回 `BLOCKED`。核对成功后发送启动 ACK，但不直接写 dispatch ledger。所有发布前报告、结构化结果、证据、校验和与日志落盘并自检完成后，再发送包含 `dispatch_id`、result 绝对路径、SHA-256 和真实 `result_status` 的完成通知；通知不替代 manager-agent 的独立校验，且不得把 GO 写成已发布。

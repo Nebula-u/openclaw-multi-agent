@@ -89,6 +89,12 @@
 
 重试后必须再次运行同一个 schema 校验，带 `--retry-count 1` 与 `--retry-prompt <retry_prompt_path_abs>`。若第二次仍失败，不得报告 `COMPLETED`；按性质返回 `FAILED`、`BLOCKED` 或 `NEEDS_REWORK`，并保留两次错误日志。任何情况下不得覆盖或删除失败日志。
 
+## 9.1 Dispatch 身份确认与完成通知
+
+若派发消息包含 `dispatch_id` 与 input manifest SHA-256，工作 Agent 必须在 Preflight 中核对它们与上下文包、当前 workflow/task/run/agent 身份一致。成功后仅向 manager-agent 发送简短 ACK；不得直接写 `dispatch/`、receipt、completion 或 dead-letter 文件。
+
+完成前先落盘、校验并保留所有本次 run 的产物。完成通知必须给出 `dispatch_id`、`result.json` 的绝对路径和 SHA-256、真实 `result_status`；它只是通知，manager-agent 独立校验后才会把 completion 作为事实持久化。收到 manager-agent 的 supersede/cancel/终结通知后，停止新增写入并如实报告。
+
 ## 10. 用户验收后的项目状态同步（长期规则）
 
 适用于本项目自身的所有改动，包括代码、Agent 规则、配置、运行时修复、测试、文档与流程变更。

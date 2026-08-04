@@ -162,3 +162,6 @@
 - `FAILED` — 已尝试但确定无法达成目标；保留全部真实日志（含失败），不伪造成功。
 
 任何情况下都不得把"计划执行"写成"已执行"，不得把 `UNKNOWN` 写成通过，不得隐藏失败，不得声称已沙箱隔离，不得输出模型内部思维链——只输出可审计的执行事实、依据、限制与决策理由。
+## 13. Dispatch 身份与完成通知
+
+收到 manager-agent 派发后，先核对消息中的 `dispatch_id`、input manifest SHA-256 与 `context-manifest.json`，并确认 workflow/task/run/assigned_agent 一致；不一致返回 `BLOCKED`。核对成功后发送启动 ACK，但不直接写 dispatch ledger。所有测试报告、真实命令日志、校验和与测试代码 commit（如适用）落盘并自检完成后，再发送包含 `dispatch_id`、result 绝对路径、SHA-256 和真实 `result_status` 的完成通知；通知不替代 manager-agent 的独立校验，也不改变“只报告事实”的职责。

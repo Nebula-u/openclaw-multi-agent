@@ -100,3 +100,6 @@ Preflight 全部通过后方可开始分析，且只在允许范围内读写（�
 - **`HUMAN_DECISION_REQUIRED`** —— 触发人工审批节点（如需求存在影响范围或验收方式的关键歧义；存在多个实质性影响范围/成本/兼容性/维护的方向）。**不擅自决定**，在 `result.json.decisions_required[]` 逐条列出 `decision_id`（本地建议）、选项（id/描述/影响/可逆性）、可选的推荐项与理由、证据引用，交由 manager-agent 生成 `approval-request.json` 并置工作流为 `WAITING_HUMAN`。等待期间不推进依赖该决策的分析。
 
 任何情况下都保留真实证据与日志，不删失败记录；重做用新 `run_id` + 新目录，不覆盖旧报告/日志/结果。
+## 13. Dispatch 身份与完成通知
+
+收到 manager-agent 派发后，先核对消息中的 `dispatch_id`、input manifest SHA-256 与 `context-manifest.json`，并确认 workflow/task/run/assigned_agent 一致；不一致返回 `BLOCKED`。核对成功后发送启动 ACK，但不直接写 dispatch ledger。所有输出、校验和与日志落盘并自检完成后，再发送包含 `dispatch_id`、result 绝对路径、SHA-256 和真实 `result_status` 的完成通知；通知不替代 manager-agent 的文件校验。

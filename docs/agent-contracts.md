@@ -19,6 +19,10 @@
 
 任一失败 → 不开始工作，返回 `result_status = BLOCKED`，在 `unresolved_issues` 写明失败项。
 
+### 2.1 派发身份确认（所有工作 Agent）
+
+若 manager 的派发消息提供 `dispatch_id` 与 input manifest SHA-256，工作 Agent 在上述 Preflight 中还必须确认二者与 `context-manifest.json`、当前 workflow/task/run/agent 身份一致。成功后只向 manager 发送 ACK；Agent 不得直接改写 `dispatch/` 中的 intent、receipt、completion 或 dead-letter。完成时先落盘并自检全部产物，通知中给出 `dispatch_id`、`result.json` 绝对路径、SHA-256 和真实 `result_status`；Manager 的独立验证与 completion receipt 才是流程事实。
+
 ## 3. 通用强制产物（所有工作 Agent）
 
 来源 `COMMON_RULES.md` 第 8 节，每个工作 Agent 完成后至少产出：

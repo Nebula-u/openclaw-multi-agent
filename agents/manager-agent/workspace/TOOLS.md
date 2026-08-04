@@ -11,6 +11,8 @@ manager-agent 是唯一被授权调度其他 Agent 的 Agent。调度依赖 Open
 - **`sessions_list`** — 列出/定位子会话。
 - **`sessions_history`** — 读取子会话产出的公告 / 结果引用（用于确认完成，不替代对文件与 Git 的独立校验）。
 
+每次调用遵循持久化顺序：`check-task-package` → `prepare-dispatch` → `sessions_spawn` → `record-dispatch-receipt SENT` → `ACKNOWLEDGED` / `RUNNING`。超时或恢复先按 intent 的 session key/ID 用 `sessions_list` / `sessions_history` 查询；仅在已验证 completion 或合法 retry 决策后，才可创建新的 attempt。
+
 门控（由安装脚本按 schema 配置，见 `config/openclaw-config-notes.md`）：
 - `tools.agentToAgent`（含 `maxPingPongTurns`）允许跨 Agent 交换。
 - 本 Agent 的 `subagents.allowAgents` = 6 个工作 Agent；`requireAgentId: true`；`delegationMode: prefer`。
@@ -30,6 +32,7 @@ manager-agent 是唯一被授权调度其他 Agent 的 Agent。调度依赖 Open
 - 关键命令保存真实 stdout/stderr/退出码/哈希（见 `rules/EVIDENCE_RULES.md`）。
 - workflow event 的规范化与 SHA-256 只能由 Runtime Guard `append-event` 完成；其他文件哈希可用 Windows `Get-FileHash -Algorithm SHA256`、POSIX `sha256sum` / `shasum -a 256`。**不用** Python。
 - `check-workflow` 非零退出或返回 `ok=false` 时，禁止 spawn、merge、阶段推进和完成声明；不得用人工判断覆盖 Guard 结果。
+- 控制状态的 event、workflow、active index 与 task 指针必须通过 `commit-transition` 原子写入；恢复先运行 `recover-transactions`，再运行 `reconcile-dispatch`。`reconcile-dispatch` 不会、也不得被当作自动重试或自动 LOST 判定。
 - UUID：Windows `pwsh -NoProfile -Command "[guid]::NewGuid().Guid"`，POSIX `uuidgen`。
 
 ## 4. Git 工具（仅本地）

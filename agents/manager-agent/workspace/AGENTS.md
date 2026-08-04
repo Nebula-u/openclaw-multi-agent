@@ -71,6 +71,14 @@
 7. 写完后必须运行 `node <project_root_abs>/scripts/runtime-guard.mjs check-workflow --project-root <project_root_abs> --runtime-root <runtime_root_abs> --workflow-id <workflow-id> --log-file <workflow_dir_abs>/validation-errors.jsonl --stage workflow_check`。只有退出码为 0 且 `ok=true` 才算屏障通过。
 8. Guard 任一失败 → 不 spawn、不 merge、不推进、不宣布完成；其 `effective_status=HOLD` 是权威失败关闭结果。保留 Guard 输出与原始文件，工作流使用合法 `HOLD` / `RELEASE_HOLD` / `FAILED` 状态报告差异，不覆盖历史 Agent 产物。
 
+### 3.2 原子变更与派发事实（硬性）
+
+- 对 task、workflow、active index 与对应 event 的同一次状态改变，先生成完整的下一版草稿，再以 `commit-transition --expected-revision <current>` 一次性提交；不得把 `append-event` 与分别覆盖快照混用。`append-event` 仅兼容旧事件追加，不能用于新流程的状态推进。
+- 每个 `sessions_spawn` 必须有一个先于 spawn 的 `dispatch/ DSP-* /intent.json`。先执行 `check-task-package`，再在 task 为 `READY` 时执行 `prepare-dispatch`；同一 task/run 未终结 intent 存在时禁止再次 spawn。
+- spawn 返回的 session key/ID 是回执事实：立即写 `SENT`，收到 Agent 已读取上下文的确认后写 `ACKNOWLEDGED`，实际开始工作后写 `RUNNING`。聊天消息只是触发写回执的信号，不能代替 receipt。
+- timeout、Gateway 中断或新会话恢复时，必须先 `recover-transactions`，再 `reconcile-dispatch`，并按 intent 的 session key/ID 查询 `sessions_list` / `sessions_history`；租约过期只表示必须查询，绝不等同于 LOST，绝不直接重复 spawn。
+- Manager 验证完成产物、结构化输出、Git 和证据后才记录 `SUCCEEDED` / `FAILED` / `LOST` completion receipt；retry 必须使用新的 attempt（或合法的新 run），不得复用已终结 intent 的幂等键。FAILED/LOST 仅在重试预算耗尽后可写 dead letter。
+
 ## 4. ID 生成
 
 为 workflow/task/run/decision/finding/evidence 生成唯一 ID：
@@ -102,12 +110,12 @@
 4. **派发前预检（不得跳过）**：在 task 仍为 `CREATED`/`READY`、尚未写入 `TASK_DISPATCHED` 事件时，运行：`node <project_root_abs>/scripts/runtime-guard.mjs check-task-package --project-root <project_root_abs> --runtime-root <runtime_root_abs> --workflow-id <workflow-id> --task-id <task-id> --task-file <workflow_dir_abs>/tasks/<task-id>.json --log-file <workflow_dir_abs>/validation-errors.jsonl --stage manager_dispatch_preflight`。该命令必须验证完整 input、哈希、manifest、artifact 和 worktree 的规范绝对路径。失败时停止；不得修改已生成 input 以外的历史 run，不得写 `DISPATCHED` 事件或 spawn。
 5. 在 `approval-assessments/<task-id>.json` 对全部 15 个审批 trigger 做评估；任何 `REQUIRES_APPROVAL` 必须先有同作用域的已批准 decision，才能派发。
 6. 只传最小充分上下文：**不**复制用户完整聊天历史；**不**要求工作 Agent 读我的会话历史。
-7. 先将控制层 task 置为 `DISPATCHED`，更新 workflow/active，追加 `TASK_DISPATCHED` 事件，并通过第 3.1 节的提交屏障；屏障未通过不得派发。
+7. 在 task 仍为 `READY` 时先运行 `prepare-dispatch`，并保存返回的 `dispatch_id`、intent 的 input manifest SHA-256、session key 与 retry budget；随后以 `commit-transition` 原子写入 `TASK_DISPATCHED` 与下一版 task/workflow/active/event，并通过第 3.1 节的提交屏障。任一步失败均不得派发。
 8. 用 OpenClaw 原生会话工具创建隔离的工作 Agent 会话：
    - 若本版本提供 `sessions_spawn`：调用时**必须**显式传 `agentId`，且 `agentId == task.assigned_agent`；上下文语义用 `isolated`（干净子会话）。
    - 若工具名/参数不同：以真实工具 schema 为准调整，并在兼容性报告记录差异。**不得**退回相对路径，**不得**引入 Python 脚本。
-9. 派发提示只含：任务摘要、绝对 `context-manifest.json` 路径、绝对 `task.json` 路径、绝对输出目录、绝对 worktree 路径，以及 JSON-only retry 规则：若某个 JSON / JSONL 产物校验失败，只重生该 JSON / JSONL 文件，不重新完整分析任务。
-10. spawn 成功后保存子会话 session/run 标识，将 task 置为 `RUNNING`，追加事件并再次通过提交屏障；spawn 失败则记录 `BLOCKED`/`FAILED`，不得假装已派发。
+9. 派发提示只含：任务摘要、`dispatch_id`、input manifest SHA-256、绝对 `context-manifest.json` 路径、绝对 `task.json` 路径、绝对输出目录、绝对 worktree 路径，以及 JSON-only retry 规则：若某个 JSON / JSONL 产物校验失败，只重生该 JSON / JSONL 文件，不重新完整分析任务。
+10. spawn 成功后用其真实 session key/ID 记录 `SENT`；收到启动确认后依次记录 `ACKNOWLEDGED` / `RUNNING`，并以 `commit-transition` 原子更新 task/workflow/active/event 后再次通过提交屏障。spawn 失败则记录 completion `FAILED` 或保留可查询 intent，并以事务写入 `BLOCKED`/`FAILED`，不得假装已派发。
 11. 用 OpenClaw 原生 yield/wait/完成通知机制等待；**不**用 `sleep`、**不**高频轮询。
 
 ## 7. 验证工作 Agent 返回（Development/Test/任何改动类任务）
@@ -147,7 +155,7 @@ Agent 返回后，我**必须实际检查**（任一失败即不继续）：
 
 ## 9. 恢复算法（新 manager 会话启动时）
 
-1. 新会话启动，以及收到“继续”“恢复”“新增/调整需求”等会影响活动 workflow 的用户消息时，先运行 Runtime Guard `recovery-check --project-root <project_root_abs> --runtime-root <runtime_root_abs>`；多个活动 workflow 时必须让用户选择并显式传 `--workflow-id`。未成功前不得恢复 spawn、merge 或阶段推进。
+1. 新会话启动，以及收到“继续”“恢复”“新增/调整需求”等会影响活动 workflow 的用户消息时，先运行 `recover-transactions --project-root <project_root_abs> --runtime-root <runtime_root_abs> --workflow-id <workflow-id>`，再运行 `reconcile-dispatch` 和 Runtime Guard `recovery-check --project-root <project_root_abs> --runtime-root <runtime_root_abs>`；多个活动 workflow 时必须让用户选择并显式传 `--workflow-id`。未成功前不得恢复 spawn、merge 或阶段推进。
 2. 恰好一个活动 workflow → 读其 `workflow.json`、`events.jsonl`、`context-summary.md`、未决 decisions、Git 状态后恢复。
 3. 多个活动 workflow → **让用户选择**，不擅自挑选。
 4. 校验一致性：`events.jsonl` 哈希链完整；`workflow.json` 快照与最新事件、与 Git（当前候选 commit、分支、worktree）一致。
