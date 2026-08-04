@@ -700,6 +700,10 @@ function validateFileCommand(options) {
         path: record.line ? `${filePath}:${record.line}${error.path.slice(1)}` : error.path,
       });
     }
+    if (idField && typeof record.value[idField] === 'string') {
+      if (ids.has(record.value[idField])) errors.push(issue('JSONL_DUPLICATE_ID', `${filePath}:${record.line}`, `${idField} must be unique within JSONL`));
+      ids.add(record.value[idField]);
+    }
   }
   if (errors.length > 0) {
     appendValidationFailureLog(options, schemaPath, filePath, errors);
@@ -728,10 +732,6 @@ function appendEventCommand(options) {
         error.code === 'WORKFLOW_LOCK_CONFLICT' ? 'events chain is already locked' : error.message,
       );
       throw error;
-    }
-    if (idField && typeof record.value[idField] === 'string') {
-      if (ids.has(record.value[idField])) errors.push(issue('JSONL_DUPLICATE_ID', `${filePath}:${record.line}`, `${idField} must be unique within JSONL`));
-      ids.add(record.value[idField]);
     }
     const existing = existsSync(eventsPath) ? readJsonLines(eventsPath).map((record) => record.value) : [];
     const previous = existing.at(-1) ?? null;

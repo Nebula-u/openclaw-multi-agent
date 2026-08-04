@@ -3,7 +3,7 @@
 > 更新时间：2026-08-04（Asia/Shanghai）  
 > 仓库：`D:\MicroConnect\project\openclaw-multi-agent`  
 > 当前分支：`feat/runtime-kernel-reliability`  
-> 状态：按用户要求暂停；第三阶段 dispatch ledger 尚未提交，工作区有意保持未提交状态。
+> 状态：实施完成并通过全量回归；本文保留为变更与恢复记录。
 
 ## 1. 用户目标与不可违反的约束
 
@@ -390,11 +390,17 @@ feat: harden structured output ingestion and contracts
 ```text
 [completed] 新分支与 Runtime Guard 边界加固
 [completed] 原子事务、stale-lock recovery、task/run immutable history
-[in progress] dispatch intent/receipt/lease/retry/dead-letter ledger
-[pending] Manager 与工作 Agent 协议更新
-[pending] JSON output contract 与确定性 ingestion
-[pending] 全量回归、文档与最终交付
+[completed] dispatch intent/receipt/lease/retry/dead-letter ledger（b912230）
+[completed] Manager 与工作 Agent 协议更新（583ad53）
+[completed] JSON output contract 与确定性 ingestion（84c3491，后续修复见本提交）
+[completed] 全量回归、文档与最终交付
 ```
+
+## 9. 最终验证与限制
+
+最终执行 `npm test`：Runtime Guard 101 pass、2 skipped、0 fail；离线 Agent JSON harness 9 pass；安装器验证 2 pass。两个 skipped 均为当前 Windows 会话无创建符号链接权限，测试明确报告为 skip。
+
+未引入 LangGraph，未增删 Agent、未改变整体职责，未改 test sandbox，未加入发布后运维。
 
 ## 8. 常用恢复命令
 
