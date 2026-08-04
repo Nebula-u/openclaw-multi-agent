@@ -2,6 +2,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://openclaw-sdlc-multi-agent/contracts/result.schema.json",
   "title": "AgentResult",
+  "description": "Agent 的权威完成结果；Manager 只能在 Runtime Guard 通过后据此推进状态。",
   "type": "object",
   "additionalProperties": true,
   "required": [
@@ -11,26 +12,27 @@
     "artifact_root_abs", "isolation_mode", "self_validation"
   ],
   "properties": {
-    "schema_version": { "type": "integer", "minimum": 1 },
-    "workflow_id": { "type": "string", "pattern": "^WF-" },
-    "task_id": { "type": "string", "pattern": "^TASK-" },
-    "run_id": { "type": "string", "pattern": "^RUN-" },
-    "agent_id": { "type": "string" },
-    "role": { "type": "string" },
-    "attempt": { "type": "integer", "minimum": 1 },
+    "schema_version": { "type": "integer", "minimum": 1, "description": "所遵循的 result 契约版本。" },
+    "workflow_id": { "type": "string", "pattern": "^WF-", "description": "所属 workflow 的不可变标识，必须与上下文包一致。" },
+    "task_id": { "type": "string", "pattern": "^TASK-", "description": "所属任务标识，必须与上下文包一致。" },
+    "run_id": { "type": "string", "pattern": "^RUN-", "description": "本次执行实例标识，不能复用历史 run。" },
+    "agent_id": { "type": "string", "description": "实际生成该结果的已分配 Agent ID。" },
+    "role": { "type": "string", "description": "生成结果时所承担的角色。" },
+    "attempt": { "type": "integer", "minimum": 1, "description": "该 task/run 的执行尝试序号，从 1 开始。" },
     "started_at": { "type": "string", "format": "date-time" },
     "finished_at": { "type": "string", "format": "date-time" },
     "result_status": {
       "type": "string",
-      "enum": ["COMPLETED", "NEEDS_REWORK", "BLOCKED", "HUMAN_DECISION_REQUIRED", "FAILED"]
+      "enum": ["COMPLETED", "NEEDS_REWORK", "BLOCKED", "HUMAN_DECISION_REQUIRED", "FAILED"],
+      "description": "Agent 对本次运行的最终判定；只能使用列出的枚举值，不能自造状态。"
     },
-    "summary_for_user": { "type": "string" },
-    "summary_for_manager": { "type": "string" },
+    "summary_for_user": { "type": "string", "description": "面向用户的可审计简要结论，不得虚构执行事实。" },
+    "summary_for_manager": { "type": "string", "description": "供 Manager 复核与下一步调度使用的简要结论。" },
     "input_commit": { "type": ["string", "null"] },
     "output_commit": { "type": ["string", "null"] },
     "branch": { "type": ["string", "null"] },
-    "worktree_path_abs": { "type": "string", "minLength": 1 },
-    "artifact_root_abs": { "type": "string", "minLength": 1 },
+    "worktree_path_abs": { "type": "string", "minLength": 1, "description": "本次任务获准使用的 worktree 绝对路径。" },
+    "artifact_root_abs": { "type": "string", "minLength": 1, "description": "本次 run 不可变 artifact 根目录的绝对路径。" },
     "modified_files": { "type": "array", "items": { "type": "string" } },
     "created_files": { "type": "array", "items": { "type": "string" } },
     "deleted_files": { "type": "array", "items": { "type": "string" } },
@@ -44,13 +46,13 @@
     "decisions_required": { "type": "array", "items": { "type": "object" } },
     "recommended_next_action": { "type": "string" },
     "git_status_after_completion": { "type": ["string", "null"] },
-    "isolation_mode": { "type": "string", "enum": ["UNSANDBOXED_LOCAL"] },
+    "isolation_mode": { "type": "string", "enum": ["UNSANDBOXED_LOCAL"], "description": "实际执行隔离级别；当前部署仅允许 UNSANDBOXED_LOCAL。" },
     "self_validation": {
       "type": "object",
       "additionalProperties": true,
       "required": ["preflight_passed", "checks"],
       "properties": {
-        "preflight_passed": { "type": "boolean" },
+        "preflight_passed": { "type": "boolean", "description": "开始工作前身份、路径、上下文哈希检查是否全部通过。" },
         "checks": {
           "type": "array",
           "items": {
@@ -58,7 +60,7 @@
             "required": ["name", "status"],
             "properties": {
               "name": { "type": "string" },
-              "status": { "type": "string", "enum": ["PASS", "FAIL", "UNKNOWN", "NOT_APPLICABLE"] },
+              "status": { "type": "string", "enum": ["PASS", "FAIL", "UNKNOWN", "NOT_APPLICABLE"], "description": "单项自检结果，必须为该枚举之一。" },
               "detail": { "type": "string" }
             }
           }
@@ -74,7 +76,7 @@
       "properties": {
         "claim_id": { "type": "string" },
         "statement": { "type": "string" },
-        "classification": { "type": "string", "enum": ["OBSERVED", "INFERRED", "PROPOSED", "UNKNOWN"] },
+        "classification": { "type": "string", "enum": ["OBSERVED", "INFERRED", "PROPOSED", "UNKNOWN"], "description": "声明的证据等级；仅 OBSERVED 可直接陈述为已发生事实。" },
         "evidence_refs": { "type": "array", "items": { "type": "string" } },
         "limitations": { "type": "string" },
         "observed_at": { "type": "string" }

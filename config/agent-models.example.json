@@ -1,5 +1,5 @@
 {
-  "$comment": "agent-models.example.json — 复制为 agent-models.json 并按需修改。安装脚本可用 --ModelConfig 指向本文件，为每个 Agent 指定模型。留空表示继承 OpenClaw 默认。模型 ID 必须是当前 OpenClaw 真实可用的 provider/model 引用；newapi 的推荐分工见 agent-models.newapi-routing.example.json，其中 luna 的 Responses 路径与 terra/sol 的 Chat 路径并存。",
+  "$comment": "agent-models.example.json — 复制为 agent-models.json 并按需修改。安装脚本可用 --ModelConfig 指向本文件，为每个 Agent 指定模型。留空表示继承 OpenClaw 默认。模型 ID 必须是当前 OpenClaw 真实可用的 provider/model 引用；DeepSeek V4 的推荐分工见 agent-models.deepseek-routing.example.json。",
   "schema_version": 1,
   "agents": {
     "manager-agent":     { "model": "" },

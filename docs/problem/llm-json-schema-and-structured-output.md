@@ -1,12 +1,14 @@
 # LLM JSON Schema 与结构化输出待解决问题
 
-> 状态：待处理
+> 状态：部分处理；本地 JSON 回复恢复已实现，Gateway 请求级 DeepSeek JSON Output 仍受协议能力阻塞。
 > 记录日期：2026-08-03
 > 来源：对 7 个内置 Agent、Runtime Guard、Gateway LLM harness、OpenClaw Gateway 客户端及历史真实 LLM 测试产物的审计。
 
 ## 结论摘要
 
-当前项目已具备 JSON/JSONL 的事后 Ajv 校验能力，但尚未形成“所有跨 Agent 结构化产物均由控制层强制校验”与“生成 JSON 时由 LLM API 强制使用 JSON Schema 输出”的完整闭环。
+当前项目已具备 JSON/JSONL 的事后 Ajv 校验能力与保守回复恢复，但尚未形成“生成 JSON 时由 LLM API 强制使用 JSON Schema 输出”的完整闭环。
+
+2026-08-04 更新：`scripts/runtime-core/json-ingestion.mjs` 已支持 BOM、唯一 Markdown fence 与唯一解释性包裹的确定性提取，并拒绝多个候选；`json-repair-prompts.mjs` 会区分 enum/type、schema drift、截断和空输出，首次调用外最多重试两次。DeepSeek JSON Output 官方参数为 `response_format: {"type":"json_object"}`，但当前 OpenClaw Gateway `chat.send` schema 不含请求级 `responseFormat`，不能可靠透传；本项目不会把它错误地全局静态施加给工具调用与 Markdown 对话。
 
 - 7 个内置 Agent 的源规则和当前 runtime 规则均要求使用 Runtime Guard + Ajv 校验 JSON/JSONL，并在首次失败后仅允许一次 JSON-only retry。
 - Manager 在派发前校验输入包 JSON/JSONL；`check-workflow` 自动校验 `result.json`、`evidence.jsonl`、`command-records.jsonl`、`review-findings.json` 与 `release-decision.json` 等核心产物。

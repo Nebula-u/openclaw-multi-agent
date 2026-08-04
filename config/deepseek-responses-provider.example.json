@@ -1,0 +1,17 @@
+{
+  "$comment": "Add this as models.providers.deepseek-responses. It uses the official DeepSeek API; do not add an API key to this example. Configure the existing official DeepSeek credential through OpenClaw's auth/profile mechanism.",
+  "baseUrl": "https://api.deepseek.com",
+  "api": "openai-responses",
+  "models": [
+    {
+      "id": "deepseek-v4-flash",
+      "name": "DeepSeek V4 Flash (Responses)",
+      "api": "openai-responses",
+      "reasoning": true,
+      "input": ["text"],
+      "contextWindow": 1000000,
+      "maxTokens": 393216,
+      "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }
+    }
+  ]
+}

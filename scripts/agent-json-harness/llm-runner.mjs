@@ -2,9 +2,8 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { PROJECT_ROOT, validateLlmResponse } from './runtime-guard-client.mjs';
-import { buildEmptyLlmRetryPrompt, buildLlmCasePrompt, buildLlmRetryPrompt } from './llm-scenarios.mjs';
-
-const MAX_EMPTY_RESPONSE_RETRIES = 3;
+import { buildLlmCasePrompt } from './llm-scenarios.mjs';
+import { MAX_REPAIR_RETRIES, buildJsonRepairPrompt, classifyLlmFailure } from './json-repair-prompts.mjs';
 
 function sessionKey({ scenario, testCase, runId }) {
   return `agent:${scenario.agentId}:llm-json-${runId}-${scenario.name}-${testCase.id}`;
@@ -24,58 +23,45 @@ async function attempt({ client, scenario, testCase, runId, prompt, attemptNumbe
   }
 }
 
-function isEmptyResponse(attemptResult) {
-  return attemptResult.error === null
-    && typeof attemptResult.response === 'string'
-    && attemptResult.response.trim().length === 0;
-}
-
-async function retryEmptyResponses({ client, scenario, testCase, runId, timeoutMs, attempts, prompt, nextAttemptNumber }) {
-  let currentPrompt = prompt;
-  let attemptNumber = nextAttemptNumber;
-  let retries = 0;
-  let latest = attempts.at(-1);
-  while (isEmptyResponse(latest) && retries < MAX_EMPTY_RESPONSE_RETRIES) {
-    retries += 1;
-    currentPrompt = buildEmptyLlmRetryPrompt(retries);
-    latest = await attempt({ client, scenario, testCase, runId, prompt: currentPrompt, attemptNumber, timeoutMs });
-    attempts.push(latest);
-    attemptNumber += 1;
-  }
-  return { latest, retries, nextAttemptNumber: attemptNumber };
+function classificationFor(result) {
+  if (result.error) return 'LLM_INVOCATION_ERROR';
+  return classifyLlmFailure({
+    response: result.response,
+    validation: result.validation,
+    ingestionError: result.validation.ingestion?.error,
+  });
 }
 
 export async function runLlmCase({ client, scenario, testCase, runId, timeoutMs = 600000 }) {
   const schemaText = readFileSync(join(PROJECT_ROOT, 'contracts', scenario.schemaFile), 'utf8').trim();
-  const firstPrompt = buildLlmCasePrompt(scenario, testCase, schemaText);
-  const first = await attempt({ client, scenario, testCase, runId, prompt: firstPrompt, attemptNumber: 1, timeoutMs });
-  const attempts = [first];
-  const initial = await retryEmptyResponses({
-    client, scenario, testCase, runId, timeoutMs, attempts, prompt: firstPrompt, nextAttemptNumber: 2,
-  });
-  if (isEmptyResponse(initial.latest)) {
-    return {
-      classification: 'EMPTY_RETRY_FAILED', scenario, testCase, sessionKey: sessionKey({ scenario, testCase, runId }),
-      attempts, empty_retries: initial.retries,
-    };
-  }
-  if (initial.latest.validation.ok) {
-    return {
-      classification: initial.retries === 0 ? 'PASSED_FIRST' : 'EMPTY_RETRY_SUCCEEDED',
-      scenario, testCase, sessionKey: sessionKey({ scenario, testCase, runId }), attempts, empty_retries: initial.retries,
-    };
+  let prompt = buildLlmCasePrompt(scenario, testCase, schemaText);
+  const attempts = [];
+  let finalClassification = null;
+
+  for (let attemptNumber = 1; attemptNumber <= MAX_REPAIR_RETRIES + 1; attemptNumber += 1) {
+    const result = await attempt({ client, scenario, testCase, runId, prompt, attemptNumber, timeoutMs });
+    attempts.push(result);
+    if (result.validation.ok) {
+      return {
+        classification: attemptNumber === 1 ? 'PASSED_FIRST' : 'REPAIR_RETRY_SUCCEEDED',
+        repair_classification: finalClassification,
+        scenario, testCase, sessionKey: sessionKey({ scenario, testCase, runId }), attempts,
+        repair_retries: attemptNumber - 1,
+      };
+    }
+    finalClassification = classificationFor(result);
+    if (attemptNumber > MAX_REPAIR_RETRIES) break;
+    prompt = buildJsonRepairPrompt({
+      classification: finalClassification,
+      errors: result.validation.errors ?? [],
+      retryNumber: attemptNumber,
+    });
   }
 
-  const retryPrompt = buildLlmRetryPrompt(initial.latest.validation.errors ?? []);
-  const schemaAttempt = await attempt({
-    client, scenario, testCase, runId, prompt: retryPrompt, attemptNumber: initial.nextAttemptNumber, timeoutMs,
-  });
-  attempts.push(schemaAttempt);
-  const schemaResult = await retryEmptyResponses({
-    client, scenario, testCase, runId, timeoutMs, attempts, prompt: retryPrompt, nextAttemptNumber: initial.nextAttemptNumber + 1,
-  });
   return {
-    classification: schemaResult.latest.validation.ok ? 'SCHEMA_RETRY_SUCCEEDED' : (isEmptyResponse(schemaResult.latest) ? 'EMPTY_RETRY_FAILED' : 'RETRY_FAILED'),
-    scenario, testCase, sessionKey: sessionKey({ scenario, testCase, runId }), attempts, empty_retries: initial.retries + schemaResult.retries,
+    classification: finalClassification === 'EMPTY_RESPONSE' ? 'EMPTY_RETRY_FAILED' : 'RETRY_FAILED',
+    repair_classification: finalClassification,
+    scenario, testCase, sessionKey: sessionKey({ scenario, testCase, runId }), attempts,
+    repair_retries: MAX_REPAIR_RETRIES,
   };
 }

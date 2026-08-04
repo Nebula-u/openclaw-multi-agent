@@ -61,6 +61,7 @@ export function buildLlmCasePrompt(scenario, testCase, schemaText) {
   return [
     '这是一次仅评估 LLM 最终回复的 JSON 契约测试。不要调用任何工具，不要读取或写入文件。',
     `请仅回复 ${format}，不要使用 Markdown 代码块、解释、前后缀或额外文本。`,
+    'JSON 输出形态示例（仅示意，不可照抄字段或值）：{"field":"value"}。实际字段、类型、必填项和枚举必须以下方 Schema 为准。',
     '',
     `业务需求：${testCase.requirement}`,
     `语言偏好：${testCase.language}。`,

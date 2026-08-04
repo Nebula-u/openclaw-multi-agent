@@ -230,6 +230,12 @@ try {
     $idx = Get-AgentIndex -List $listNow -Id $p.id
     if ($idx -lt 0) { throw "配置中未找到 Agent '$($p.id)'。" }
     $currentAgent = $listNow[$idx]
+    if ($p.model) {
+      $currentModel = if ($currentAgent.PSObject.Properties.Name -contains 'model') { [string]$currentAgent.model } else { '' }
+      if ($currentModel -ne $p.model) {
+        Set-OpenClawJson -Path "agents.list[$idx].model" -Value $p.model -Changes $changes
+      }
+    }
     $subagents = if ($p.role -eq 'manager') {
       [ordered]@{ delegationMode = 'prefer'; requireAgentId = $true; allowAgents = @($ManagerAllow) }
     } else {

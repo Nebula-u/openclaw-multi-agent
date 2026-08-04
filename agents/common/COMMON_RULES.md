@@ -77,17 +77,17 @@
 
 `result_status` 只能是：`COMPLETED` / `NEEDS_REWORK` / `BLOCKED` / `HUMAN_DECISION_REQUIRED` / `FAILED`。
 
-## 9. JSON 强校验、一次重试与错误日志
+## 9. JSON 强校验、保守清洗、两次重试与错误日志
 
 所有由 LLM 生成或改写的 JSON / JSONL 运行时产物，写入后必须立即用 Runtime Guard 调用官方 JSON Schema validator（Ajv）本地强校验。不得只靠“看起来是 JSON”、编辑器高亮、手工检查或模型自述来判定合法。
 
 每个 JSON / JSONL 产物必须使用对应 `contracts/*.schema.json` 校验；JSONL 需加 `--jsonl`。校验命令必须传入 `--log-file <artifact_root_abs>/raw-logs/json-validation-errors.jsonl`，并带上 `--stage agent_self_validation`、`--agent-id`、`--workflow-id`、`--task-id`、`--run-id`、`--attempt`，以便记录错误主体和错误内容。失败日志记录格式以 `contracts/json-validation-error.schema.json` 为准。
 
-模型正常完成却返回空字符串时，必须先判定该轮没有有效 function/custom/web-search 工具调用、且所需 artifact 尚未通过 manager 校验。满足条件才可在同一会话直接重试该模型调用，最多额外 3 次；不得把正常的纯工具调用误判为空输出，也不得因最终聊天文本为空而重复已验证的工具副作用或 artifact。三次后仍为空 → 记录 `EMPTY_LLM_OUTPUT`，不得报告完成。
+收到 LLM JSON/JSONL 回复后，先保存原始文本与 SHA-256；只可做确定性、保守的包装清洗：去 UTF-8 BOM、去唯一 JSON/JSONL Markdown fence、或从解释性前后缀中提取唯一完整 JSON 值/JSONL 连续块。多个候选、业务字段、ID、日期、数字、类型和枚举均不得猜测或自动改写。清洗后仍须立即执行 Runtime Guard + Ajv。
 
-非空回复首次校验失败时，只允许一次 JSON-only retry：只重新生成失败的 JSON / JSONL 文件，使其符合指定 schema；不得重新完整分析任务，不得改变既有事实判断、报告结论、证据来源、命令结果、代码实现或审批决定。重试提示必须明确包含这条限制，并保存到 `raw-logs/json-regeneration-retry-prompt-<n>.md`。
+空 content、输出截断、JSON parse error、enum/type 不符和 schema drift 共用同一重写预算：首次调用之外最多重试 **2 次**，且必须在同一会话中完成。enum 或 type 错误必须明确指出字段路径、期望类型/允许枚举和收到值，要求模型重写；schema drift、截断和空输出分别使用对应固定模板。不得把正常纯工具调用误判为空输出，也不得因最终文本为空而重复已验证的工具副作用或 artifact。
 
-重试后必须再次运行同一个 schema 校验，带 `--retry-count 1` 与 `--retry-prompt <retry_prompt_path_abs>`。若第二次仍失败，不得报告 `COMPLETED`；按性质返回 `FAILED`、`BLOCKED` 或 `NEEDS_REWORK`，并保留两次错误日志。任何情况下不得覆盖或删除失败日志。
+每次重试后必须再次运行同一个 schema 校验，并保存重写提示、原始回复、清洗后的回复（如有）、转换记录与错误日志。两次重试后仍失败，不得报告 `COMPLETED`；按性质返回 `FAILED`、`BLOCKED` 或 `NEEDS_REWORK`。任何情况下不得覆盖或删除失败日志。
 
 ## 9.1 Dispatch 身份确认与完成通知
 

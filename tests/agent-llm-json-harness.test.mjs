@@ -4,11 +4,12 @@ import { existsSync, mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { LLM_SCENARIOS, buildEmptyLlmRetryPrompt, buildLlmCasePrompt } from '../scripts/agent-json-harness/llm-scenarios.mjs';
+import { LLM_SCENARIOS, buildLlmCasePrompt } from '../scripts/agent-json-harness/llm-scenarios.mjs';
 import { textFromMessage } from '../scripts/agent-json-harness/gateway-llm-client.mjs';
 import { runLlmCase } from '../scripts/agent-json-harness/llm-runner.mjs';
 import { collectLlmRun } from '../scripts/agent-json-harness/collect-llm-failures.mjs';
 import { ingestJsonText } from '../scripts/runtime-core/json-ingestion.mjs';
+import { MAX_REPAIR_RETRIES, buildJsonRepairPrompt, classifyLlmFailure } from '../scripts/agent-json-harness/json-repair-prompts.mjs';
 
 const EXPECTED_SCHEMAS = [
   'acceptance-criteria.schema.json', 'active-workflows.schema.json', 'agent-package.schema.json',
@@ -37,27 +38,27 @@ test('提示只要求最终 LLM 回复，且不嵌入模板', () => {
   assert.doesNotMatch(prompt, /templates\//i);
 });
 
-test('非空但不符合 schema 的回复只在相同 Gateway session 中重试一次', async () => {
+test('非空但不符合 schema 的回复在相同 Gateway session 中最多重试两次', async () => {
   const scenario = LLM_SCENARIOS.find((item) => item.schemaFile === 'result.schema.json');
   const calls = [];
   const client = { send: async (input) => { calls.push(input); return '{}'; } };
   const outcome = await runLlmCase({ client, scenario, testCase: scenario.cases[0], runId: 'unit-run' });
   assert.equal(outcome.classification, 'RETRY_FAILED');
-  assert.equal(calls.length, 2);
-  assert.equal(calls[0].sessionKey, calls[1].sessionKey);
-  assert.match(calls[1].prompt, /未通过 JSON Schema 校验/);
+  assert.equal(calls.length, 3);
+  assert.ok(calls.every((call) => call.sessionKey === calls[0].sessionKey));
+  assert.match(calls[1].prompt, /SCHEMA_DRIFT/);
 });
 
-test('空回复最多在相同 Gateway session 中重写三次', async () => {
+test('空回复与其他错误共享最多两次重写预算', async () => {
   const scenario = LLM_SCENARIOS.find((item) => item.schemaFile === 'result.schema.json');
   const calls = [];
   const client = { send: async (input) => { calls.push(input); return ''; } };
   const outcome = await runLlmCase({ client, scenario, testCase: scenario.cases[0], runId: 'empty-run' });
   assert.equal(outcome.classification, 'EMPTY_RETRY_FAILED');
-  assert.equal(outcome.empty_retries, 3);
-  assert.equal(calls.length, 4);
+  assert.equal(outcome.repair_retries, MAX_REPAIR_RETRIES);
+  assert.equal(calls.length, 3);
   assert.ok(calls.every((call) => call.sessionKey === calls[0].sessionKey));
-  assert.match(calls[1].prompt, /最终回复为空/);
+  assert.match(calls[1].prompt, /EMPTY_RESPONSE/);
 });
 
 test('空回复恢复为合法 JSON 时标记为成功', async () => {
@@ -65,14 +66,14 @@ test('空回复恢复为合法 JSON 时标记为成功', async () => {
   const responses = ['', '{"schema_version":1,"workflow_id":"WF-a","task_id":"TASK-a","run_id":"RUN-a","agent_id":"developer-agent","role":"worker","attempt":1,"started_at":"2026-08-03T00:00:00Z","finished_at":"2026-08-03T00:00:01Z","result_status":"BLOCKED","summary_for_user":"x","summary_for_manager":"x","worktree_path_abs":"D:/worktree","artifact_root_abs":"D:/artifact","isolation_mode":"UNSANDBOXED_LOCAL","self_validation":{"preflight_passed":false,"checks":[]}}'];
   const client = { send: async () => responses.shift() };
   const outcome = await runLlmCase({ client, scenario, testCase: scenario.cases[0], runId: 'empty-success-run' });
-  assert.equal(outcome.classification, 'EMPTY_RETRY_SUCCEEDED');
-  assert.equal(outcome.empty_retries, 1);
+  assert.equal(outcome.classification, 'REPAIR_RETRY_SUCCEEDED');
+  assert.equal(outcome.repair_retries, 1);
 });
 
-test('空回复重试提示明确要求 JSON 且禁止空输出', () => {
-  const prompt = buildEmptyLlmRetryPrompt(2);
+test('固定重写模板明确要求 JSON 且禁止空输出', () => {
+  const prompt = buildJsonRepairPrompt({ classification: 'EMPTY_RESPONSE', errors: [], retryNumber: 1 });
   assert.match(prompt, /JSON/);
-  assert.match(prompt, /空字符串/);
+  assert.match(prompt, /content 为空/);
 });
 
 test('工具调用没有文本时不被误认为空 LLM 回复', () => {
@@ -80,11 +81,33 @@ test('工具调用没有文本时不被误认为空 LLM 回复', () => {
   assert.equal(textFromMessage({ role: 'assistant', content: '' }), '');
 });
 
-test('确定性 ingestion 只剥离 BOM 或完整单 JSON fence，不修复业务字段', () => {
+test('确定性 ingestion 清理 BOM、Markdown 与唯一解释性前后缀，但不修复业务字段', () => {
   const ingested = ingestJsonText('\uFEFF```json\n{"status":"UNKNOWN","id":"A"}\n```');
   assert.deepEqual(ingested.value, { status: 'UNKNOWN', id: 'A' });
   assert.deepEqual(ingested.transformations, ['STRIP_UTF8_BOM', 'UNWRAP_SINGLE_JSON_FENCE']);
-  assert.throws(() => ingestJsonText('说明\n```json\n{}\n```'), SyntaxError);
+  const wrapped = ingestJsonText('说明如下：\n```json\n{"status":"UNKNOWN"}\n```\n请检查。');
+  assert.deepEqual(wrapped.value, { status: 'UNKNOWN' });
+  assert.deepEqual(wrapped.transformations, ['UNWRAP_SINGLE_JSON_FENCE']);
+  const prose = ingestJsonText('说明如下： {"id":"A"} 谢谢。');
+  assert.deepEqual(prose.value, { id: 'A' });
+  assert.deepEqual(prose.transformations, ['EXTRACT_UNIQUE_JSON_FROM_WRAPPER']);
+  assert.throws(() => ingestJsonText('有两个候选： {"id":"A"} 和 {"id":"B"}'), /more than one/i);
+});
+
+test('JSONL ingestion 可移除唯一 Markdown 包装并拒绝猜测多个块', () => {
+  const ingested = ingestJsonText('说明\n```jsonl\n{"id":"A"}\n{"id":"B"}\n```\n结束', { jsonl: true });
+  assert.deepEqual(ingested.value, [{ id: 'A' }, { id: 'B' }]);
+  assert.throws(() => ingestJsonText('{"id":"A"}\n说明\n{"id":"B"}', { jsonl: true }), /more than one/i);
+});
+
+test('错误分类和模板区分截断、enum/type 与 schema drift', () => {
+  assert.throws(() => ingestJsonText('{"a":'), (error) => error.diagnostic === 'OUTPUT_TRUNCATED');
+  assert.equal(classifyLlmFailure({ response: '{"a":', validation: { errors: [] }, ingestionError: { diagnostic: 'OUTPUT_TRUNCATED' } }), 'OUTPUT_TRUNCATED');
+  assert.equal(classifyLlmFailure({ response: '{}', validation: { errors: [{ schema_keyword: 'enum' }] } }), 'ENUM_VIOLATION');
+  assert.equal(classifyLlmFailure({ response: '{}', validation: { errors: [{ schema_keyword: 'type' }] } }), 'TYPE_VIOLATION');
+  assert.equal(classifyLlmFailure({ response: '{}', validation: { errors: [{ schema_keyword: 'required' }] } }), 'SCHEMA_DRIFT');
+  assert.match(buildJsonRepairPrompt({ classification: 'ENUM_VIOLATION', errors: [{ path: '/result_status', schema_keyword: 'enum', message: 'must be equal to one of the allowed values' }], retryNumber: 1 }), /enum 值不合法/);
+  assert.match(buildJsonRepairPrompt({ classification: 'OUTPUT_TRUNCATED', errors: [], retryNumber: 2 }), /截断/);
 });
 
 test('收集器只创建一个 Gateway 客户端并打包每个最终失败回复', async () => {

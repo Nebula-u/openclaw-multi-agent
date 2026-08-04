@@ -2,7 +2,7 @@
 
 本项目遵循语义化的变更记录风格。日期格式 `YYYY-MM-DD`。
 
-## [Unreleased] - 2026-08-03
+## [Unreleased] - 2026-08-04
 
 ### 改动了什么
 
@@ -14,6 +14,10 @@
 - 清除了 `manager-agent` 父会话及当时两个 TUI 会话遗留的 `providerOverride`、`modelOverride` 与 `modelOverrideSource`。这些会话级字段曾将 Manager 的实际调用模型固定为 DeepSeek。
 - 保持 OpenClaw Agent 配置的 Manager 默认模型为 `newapi-responses/gpt-5.6-luna`，未改动其余 6 个项目 Agent、平台 `main` Agent、模型凭据或历史工作流会话。
 - 规定后续项目改动须在用户完成检查/验收后，同步更新本文件、`README.md` 与 `docs/current-progress-assessment.md`，记录变更、验证结果、完成状态与遗留风险。
+- 7 个 Agent 的项目配置与路由样例统一改为官方 `deepseek/deepseek-v4-pro` + Chat Completions API；不再将任何默认 Agent 路由到 Responses API。
+- JSON/JSONL LLM 回复链路新增保守清洗：去 BOM、去唯一 Markdown fence、或从唯一解释性前后缀中提取完整 JSON/JSONL；多个候选一律拒绝猜测，并记录原始/清洗 SHA-256 与转换元数据。
+- 新增 enum、type、schema drift、输出截断和空 content 的固定重写模板；所有类别共用首次调用之外最多两次的同会话重试预算。核心 `result`、`task` 与 JSON 校验错误契约为身份、状态、枚举、结构化产物和错误字段增加了描述。
+- 新增 `docs/llm-json-recovery.md`，记录清洗边界、两段可复核模板和 DeepSeek JSON Output 的官方要求与当前 Gateway 限制。本项实现与文档为待用户验收状态。
 
 ### 为什么要改
 
@@ -32,13 +36,16 @@
 - 重新启动 Manager TUI 后，新会话会使用 `newapi-responses/gpt-5.6-luna`，不再继承 `deepseek/deepseek-v4-flash`。
 - 已存在的历史会话和工作流产物保留原始记录；本次只移除了会改变后续调用路由的覆盖字段。
 - 后续状态不会在未完成用户检查时提前标记为已验证；验收后将由三份项目文档共同反映实际状态。
+- 配置样例与路由文档已统一到 DeepSeek V4 Pro Chat Completions，避免当前 Gateway 的 Responses 路径限制影响 Agent 调用。
+- 格式错误不再依赖模型自我修复：已知包装问题可确定性清除，enum/type 不合法、schema drift 和截断会获得精确诊断并 fail-closed；两次重写后仍失败保留全链路证据。
 
 ### 验证
 
 - `npm test` 通过：82 项 Runtime Guard 测试通过，2 项因当前 Windows 会话无符号链接权限跳过；离线 LLM harness 8 项和安装验证 2 项通过。
 - `check-workflow` 已对被隔离 workflow 返回 `effective_status=QUARANTINED`、`state_revision=9`、`event_count=9`。
 - Manager 父会话及相关 TUI 会话均已确认不存在 provider/model override。
-- `openclaw models status --agent manager-agent --check` 确认有效 Agent 默认模型为 `newapi-responses/gpt-5.6-luna`。
+- `openclaw config validate` 已验证当前 OpenClaw 配置；7 个 Agent 的有效模型统一为 `deepseek/deepseek-v4-pro`。
+- 待本次变更完成后运行 `npm test`、`git diff --check` 与安装校验；真实 DeepSeek 调用不在本地离线测试中执行。
 
 ## [0.2.2] - 2026-07-30
 

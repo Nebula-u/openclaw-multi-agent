@@ -77,17 +77,16 @@ function renderReport(summary) {
     `- 计划用例数：${summary.totals.planned}`,
     `- 已执行用例数：${summary.totals.executed}`,
     `- 首次校验通过：${summary.totals.passed_first}`,
-    `- 空输出重写后通过：${summary.totals.empty_retry_succeeded}`,
-    `- Schema 重写后通过：${summary.totals.schema_retry_succeeded}`,
-    `- 空输出三次重写后仍失败：${summary.totals.empty_retry_failed}`,
-    `- 重写一次后仍失败：${summary.totals.retry_failed}`,
+    `- 分类重写后通过（最多两次）：${summary.totals.repair_retry_succeeded}`,
+    `- 空输出两次重写后仍失败：${summary.totals.empty_retry_failed}`,
+    `- 非空 JSON 两次重写后仍失败：${summary.totals.retry_failed}`,
     `- 已打包供审阅：${summary.totals.packaged}`, '',
-    '| 场景 | 计划 | 首次通过 | 空输出重写通过 | Schema 重写通过 | 空输出失败 | Schema 失败 | 已打包 |',
-    '| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |',
+    '| 场景 | 计划 | 首次通过 | 分类重写通过 | 空输出失败 | JSON 失败 | 已打包 |',
+    '| --- | ---: | ---: | ---: | ---: | ---: | ---: |',
   ];
   if (summary.abort_reason) lines.splice(3, 0, `- 中止原因：${summary.abort_reason}`);
   for (const item of summary.scenarios) {
-    lines.push(`| ${item.name} | ${item.planned} | ${item.passed_first} | ${item.empty_retry_succeeded} | ${item.schema_retry_succeeded} | ${item.empty_retry_failed} | ${item.retry_failed} | ${item.packaged} |`);
+    lines.push(`| ${item.name} | ${item.planned} | ${item.passed_first} | ${item.repair_retry_succeeded} | ${item.empty_retry_failed} | ${item.retry_failed} | ${item.packaged} |`);
   }
   lines.push('', '## 已打包的失败项', '');
   for (const item of summary.scenarios) {
@@ -109,14 +108,9 @@ function recordOutcome(summary, row, outcome, runRoot) {
     row.passed_first += 1;
     return;
   }
-  if (outcome.classification === 'EMPTY_RETRY_SUCCEEDED') {
-    summary.totals.empty_retry_succeeded += 1;
-    row.empty_retry_succeeded += 1;
-    return;
-  }
-  if (outcome.classification === 'SCHEMA_RETRY_SUCCEEDED') {
-    summary.totals.schema_retry_succeeded += 1;
-    row.schema_retry_succeeded += 1;
+  if (outcome.classification === 'REPAIR_RETRY_SUCCEEDED') {
+    summary.totals.repair_retry_succeeded += 1;
+    row.repair_retry_succeeded += 1;
     return;
   }
   const folder = packageFailure(runRoot, outcome);
@@ -163,14 +157,14 @@ export async function collectLlmRun({
     generated_from: 'scripts/agent-json-harness/collect-llm-failures.mjs', run_id: requestedRunId,
     run_status: 'RUNNING',
     scenarios: [],
-    totals: { planned: scenarios.reduce((total, item) => total + item.cases.length * repetitions, 0), executed: 0, passed_first: 0, empty_retry_succeeded: 0, schema_retry_succeeded: 0, empty_retry_failed: 0, retry_failed: 0, packaged: 0 },
+    totals: { planned: scenarios.reduce((total, item) => total + item.cases.length * repetitions, 0), executed: 0, passed_first: 0, repair_retry_succeeded: 0, empty_retry_failed: 0, retry_failed: 0, packaged: 0 },
   };
   const client = await createClient();
   let abortError = null;
   try {
     const jobs = [];
     for (const scenario of scenarios) {
-      const row = { name: scenario.name, schema: `contracts/${scenario.schemaFile}`, agent_id: scenario.agentId, planned: scenario.cases.length * repetitions, executed: 0, passed_first: 0, empty_retry_succeeded: 0, schema_retry_succeeded: 0, empty_retry_failed: 0, retry_failed: 0, packaged: 0, failures: [] };
+      const row = { name: scenario.name, schema: `contracts/${scenario.schemaFile}`, agent_id: scenario.agentId, planned: scenario.cases.length * repetitions, executed: 0, passed_first: 0, repair_retry_succeeded: 0, empty_retry_failed: 0, retry_failed: 0, packaged: 0, failures: [] };
       summary.scenarios.push(row);
       for (let repetition = 1; repetition <= repetitions; repetition += 1) {
         for (const testCase of scenario.cases) {

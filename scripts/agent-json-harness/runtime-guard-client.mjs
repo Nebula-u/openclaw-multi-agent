@@ -1,4 +1,5 @@
 import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -35,18 +36,32 @@ export function validateLlmResponse(response, scenario) {
   try {
     let content = response ?? '';
     let ingestion = null;
-    if (!scenario.jsonl && typeof response === 'string' && response.trim()) {
+    if (typeof response === 'string' && response.trim()) {
       try {
-        ingestion = ingestJsonText(response);
+        ingestion = ingestJsonText(response, { jsonl: Boolean(scenario.jsonl) });
         content = ingestion.text;
-      } catch {
+      } catch (error) {
         // Preserve raw text: Runtime Guard produces the canonical parse error and failure package.
+        ingestion = {
+          raw_sha256: createHash('sha256').update(response, 'utf8').digest('hex'),
+          cleaned_sha256: null,
+          transformations: [],
+          error: { diagnostic: error.diagnostic ?? 'JSON_PARSE_ERROR', message: error.message },
+        };
       }
     }
     writeFileSync(artifact, content, 'utf8');
     const args = ['validate-file', '--schema', join(PROJECT_ROOT, 'contracts', scenario.schemaFile), '--file', artifact];
     if (scenario.jsonl) args.push('--jsonl');
-    return { ...invoke(args), ingestion: ingestion ? { raw_sha256: ingestion.raw_sha256, transformations: ingestion.transformations } : null };
+    return {
+      ...invoke(args),
+      ingestion: ingestion ? {
+        raw_sha256: ingestion.raw_sha256,
+        cleaned_sha256: ingestion.cleaned_sha256,
+        transformations: ingestion.transformations,
+        error: ingestion.error ?? null,
+      } : null,
+    };
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
