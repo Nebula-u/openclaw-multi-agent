@@ -10,6 +10,7 @@ import {
   closeSync,
   existsSync,
   fsyncSync,
+  lstatSync,
   openSync,
   readFileSync,
   readdirSync,
@@ -20,6 +21,7 @@ import { isAbsolute, join, resolve, sep } from 'node:path';
 
 const VALIDATOR_NAME = 'ajv';
 const LOG_EXCERPT_LIMIT = 16 * 1024;
+const VALIDATOR_CACHE = new Map();
 const APPROVAL_TRIGGERS = [
   'REQUIREMENT_AMBIGUITY', 'IMPLEMENTATION_TRADEOFF', 'PUBLIC_API_BREAKING_CHANGE',
   'IRREVERSIBLE_DATA_OP', 'NEEDS_INSTALL_OR_NETWORK', 'NEEDS_CREDENTIALS',
@@ -42,6 +44,14 @@ function createAjv(schema) {
   const ajv = new AjvClass(ajvOptions());
   addFormats(ajv);
   return ajv;
+}
+
+function compiledValidator(schema) {
+  const cacheKey = createHash('sha256').update(canonicalJson(schema), 'utf8').digest('hex');
+  if (!VALIDATOR_CACHE.has(cacheKey)) {
+    VALIDATOR_CACHE.set(cacheKey, createAjv(schema).compile(schema));
+  }
+  return VALIDATOR_CACHE.get(cacheKey);
 }
 
 function parseArgs(argv) {
@@ -189,7 +199,7 @@ function findPlaceholders(value, path = '$', errors = []) {
 function validateInstance(value, schema, { allowPlaceholders = false } = {}) {
   const errors = [];
   try {
-    const validate = createAjv(schema).compile(schema);
+    const validate = compiledValidator(schema);
     if (!validate(value)) {
       errors.push(...(validate.errors ?? []).map(ajvIssue));
     }
@@ -276,12 +286,65 @@ function isSameRealPath(left, right) {
   }
 }
 
-function jsonFiles(path, suffix = '.json') {
+function jsonFiles(path, suffix = '.json', errors = null) {
   if (!existsSync(path)) return [];
-  return readdirSync(path)
-    .filter((name) => name.endsWith(suffix))
-    .sort()
-    .map((name) => join(path, name));
+  const files = [];
+  for (const entry of readdirSync(path, { withFileTypes: true })) {
+    if (!entry.name.endsWith(suffix)) continue;
+    const entryPath = join(path, entry.name);
+    let metadata;
+    try {
+      metadata = lstatSync(entryPath);
+    } catch (error) {
+      errors?.push(issue('CONTROL_FILE_UNREADABLE', entryPath, error.message));
+      continue;
+    }
+    if (metadata.isSymbolicLink()) {
+      errors?.push(issue('CONTROL_FILE_SYMLINK', entryPath, 'control JSON files must not be symbolic links'));
+      continue;
+    }
+    if (!metadata.isFile()) {
+      errors?.push(issue('CONTROL_FILE_NOT_REGULAR', entryPath, 'control JSON entry must be a regular file'));
+      continue;
+    }
+    files.push(entryPath);
+  }
+  return files.sort();
+}
+
+function validateTrustedRuntimeLayout(runtimeRoot, workflowId, errors) {
+  let trustedRuntimeRoot;
+  try {
+    trustedRuntimeRoot = realpathSync(runtimeRoot);
+  } catch (error) {
+    errors.push(issue('RUNTIME_ROOT_UNREADABLE', runtimeRoot, error.message));
+    return null;
+  }
+  for (const runtimeSubtree of [['control', 'workflows'], ['artifacts'], ['worktrees']]) {
+    const subtreeRoot = join(runtimeRoot, ...runtimeSubtree);
+    if (!isRealPathWithin(trustedRuntimeRoot, subtreeRoot)) {
+      errors.push(issue('RUNTIME_ROOT_ESCAPE', subtreeRoot, `${runtimeSubtree.join(sep)} must resolve below the trusted runtime root`));
+    }
+  }
+  const workflowRoot = join(runtimeRoot, 'control', 'workflows');
+  const workflowDir = join(workflowRoot, workflowId);
+  if (!isRealPathWithin(workflowRoot, workflowDir)) {
+    errors.push(issue('WORKFLOW_DIR_ESCAPE', workflowDir, 'workflow directory must resolve inside runtime control/workflows'));
+  }
+  return workflowDir;
+}
+
+function rejectSymlink(path, errors, code = 'CONTROL_FILE_SYMLINK') {
+  try {
+    if (lstatSync(path).isSymbolicLink()) {
+      errors.push(issue(code, path, 'trusted runtime files must not be symbolic links'));
+      return true;
+    }
+  } catch (error) {
+    errors.push(issue('CONTROL_FILE_UNREADABLE', path, error.message));
+    return true;
+  }
+  return false;
 }
 
 function nonEmptyFile(path) {
@@ -303,7 +366,9 @@ function validateWorkflowSnapshots(workflow, workflowDir, errors) {
   ];
   for (const [fileName, hashField] of snapshots) {
     const path = join(workflowDir, fileName);
-    if (!nonEmptyFile(path)) {
+    if (existsSync(path) && lstatSync(path).isSymbolicLink()) {
+      errors.push(issue('WORKFLOW_SNAPSHOT_SYMLINK', path, `${fileName} must not be a symbolic link`));
+    } else if (!nonEmptyFile(path)) {
       errors.push(issue('WORKFLOW_SNAPSHOT_REQUIRED', path, `${fileName} must exist and be non-empty`));
     } else if (sha256File(path) !== workflow[hashField]) {
       errors.push(issue('WORKFLOW_SNAPSHOT_HASH_MISMATCH', path, `${fileName} does not match workflow ${hashField}`));
@@ -415,9 +480,18 @@ function taskRequiresArtifact(task) {
 }
 
 function addSchemaErrors(errors, value, schema, source, options = {}) {
+  const before = errors.length;
   for (const error of validateInstance(value, schema, options)) {
     errors.push({ ...error, source });
   }
+  return errors.length === before;
+}
+
+function redactSensitiveExcerpt(content) {
+  return content
+    .replaceAll(/((?:api[_-]?key|authorization|password|secret|token)\s*[=:]\s*)[^\s,;"']+/giu, '$1<REDACTED>')
+    .replaceAll(/(bearer\s+)[A-Za-z0-9._~+\/-]+/giu, '$1<REDACTED>')
+    .slice(0, LOG_EXCERPT_LIMIT);
 }
 
 function validateStructuredOutputs(task, taskFile, projectRoot, errors) {
@@ -481,7 +555,7 @@ function validationFailureRecord({ options, schemaPath, filePath, errors }) {
     validator: VALIDATOR_NAME,
     validator_errors: errors,
     invalid_content_sha256: createHash('sha256').update(rawContent, 'utf8').digest('hex'),
-    invalid_content_excerpt: rawContent.slice(0, LOG_EXCERPT_LIMIT),
+    invalid_content_excerpt: redactSensitiveExcerpt(rawContent),
     retry_count: options['retry-count'] === undefined ? 0 : Number(options['retry-count']),
     retry_prompt_path_abs: options['retry-prompt'] ? resolve(options['retry-prompt']) : null,
     final_status: 'FAILED',
@@ -659,8 +733,23 @@ function validateEventChain(events, workflow, machine, eventSchema, errors) {
   }
   let previous = null;
   const taskStatusByRun = new Map();
+  const eventIds = new Set();
+  let previousTimestamp = null;
   for (const [index, event] of events.entries()) {
-    addSchemaErrors(errors, event, eventSchema, `events.jsonl:${index + 1}`);
+    const eventSchemaValid = addSchemaErrors(errors, event, eventSchema, `events.jsonl:${index + 1}`);
+    if (!eventSchemaValid) {
+      previous = event;
+      continue;
+    }
+    if (eventIds.has(event.event_id)) {
+      errors.push(issue('DUPLICATE_EVENT_ID', `events.jsonl:${index + 1}`, `event_id is repeated: ${event.event_id}`));
+    }
+    eventIds.add(event.event_id);
+    const eventTimestamp = Date.parse(event.timestamp);
+    if (previousTimestamp !== null && eventTimestamp < previousTimestamp) {
+      errors.push(issue('EVENT_TIMESTAMP_REGRESSION', `events.jsonl:${index + 1}`, 'event timestamp is earlier than the preceding event'));
+    }
+    previousTimestamp = eventTimestamp;
     const expectedSequence = index + 1;
     if (event.seq !== expectedSequence || event.state_revision !== expectedSequence) {
       errors.push(issue('EVENT_SEQUENCE_MISMATCH', `events.jsonl:${index + 1}`, `expected seq and state_revision ${expectedSequence}`));
@@ -740,7 +829,7 @@ function validateTasks({ workflow, workflowDir, projectRoot, eventRecords, error
   const reviewSchema = readJson(join(projectRoot, 'contracts', 'review-findings.schema.json'));
   const releaseSchema = readJson(join(projectRoot, 'contracts', 'release-decision.schema.json'));
   const contextSchema = readJson(join(projectRoot, 'contracts', 'context-manifest.schema.json'));
-  const taskFiles = jsonFiles(join(workflowDir, 'tasks'));
+  const taskFiles = jsonFiles(join(workflowDir, 'tasks'), '.json', errors);
   const tasks = [];
   const blockingFindings = [];
   const currentCandidateFindings = [];
@@ -756,7 +845,8 @@ function validateTasks({ workflow, workflowDir, projectRoot, eventRecords, error
     const task = readJsonForCheck(taskFile, errors);
     if (!task) continue;
     tasks.push(task);
-    addSchemaErrors(errors, task, taskSchema, taskFile);
+    const taskSchemaValid = addSchemaErrors(errors, task, taskSchema, taskFile);
+    if (!taskSchemaValid) continue;
     if (!taskFile.endsWith(`${sep}${task.task_id}.json`)) {
       errors.push(issue('TASK_FILENAME_MISMATCH', taskFile, 'task file name must equal task_id.json'));
     }
@@ -807,7 +897,7 @@ function validateTasks({ workflow, workflowDir, projectRoot, eventRecords, error
           errors.push(issue('RESULT_AGENT_MISMATCH', `${resultPath}:agent_id`, 'result agent_id does not match assigned_agent'));
         }
         for (const field of ['worktree_path_abs', 'artifact_root_abs']) {
-          if (!isAbsolute(result[field]) || resolve(result[field]) !== resolve(task[field])) {
+          if (!isAbsolute(result[field]) || !isSameRealPath(result[field], task[field])) {
             errors.push(issue('RESULT_PATH_MISMATCH', `${resultPath}:${field}`, `result ${field} does not match task`));
           }
         }
@@ -1029,13 +1119,14 @@ function validateApprovals({ workflow, workflowDir, projectRoot, taskState, erro
   const requestSchema = readJson(join(projectRoot, 'contracts', 'approval-request.schema.json'));
   const responseSchema = readJson(join(projectRoot, 'contracts', 'approval-response.schema.json'));
   const decisionDir = join(workflowDir, 'decisions');
-  const requestFiles = jsonFiles(decisionDir, '.request.json');
+  const requestFiles = jsonFiles(decisionDir, '.request.json', errors);
   const pendingIds = [];
   const resolvedApprovals = new Map();
   for (const requestFile of requestFiles) {
     const request = readJsonForCheck(requestFile, errors);
     if (!request) continue;
     addSchemaErrors(errors, request, requestSchema, requestFile);
+    if (!isObject(request)) continue;
     if (request.workflow_id !== workflow.workflow_id) {
       errors.push(issue('APPROVAL_WORKFLOW_MISMATCH', `${requestFile}:workflow_id`, 'request workflow_id does not match workflow'));
     }
@@ -1111,11 +1202,12 @@ function validateApprovalAssessments({ workflow, workflowDir, projectRoot, appro
   const assessmentDir = join(workflowDir, 'approval-assessments');
   const assessments = [];
   const seenScopes = new Set();
-  for (const file of jsonFiles(assessmentDir)) {
+  for (const file of jsonFiles(assessmentDir, '.json', errors)) {
     const assessment = readJsonForCheck(file, errors);
     if (!assessment) continue;
     assessments.push({ assessment, file });
     addSchemaErrors(errors, assessment, schema, file);
+    if (!isObject(assessment) || !Array.isArray(assessment.evaluations)) continue;
     const scopeKeyValue = `${assessment.scope}\u0000${assessment.task_id}\u0000${assessment.run_id}`;
     if (seenScopes.has(scopeKeyValue)) errors.push(issue('DUPLICATE_APPROVAL_ASSESSMENT', file, 'approval assessment scope must be unique'));
     seenScopes.add(scopeKeyValue);
@@ -1166,12 +1258,13 @@ function expectedGateOverall(items) {
 
 function validateGates({ workflow, workflowDir, projectRoot, machine, approvals, assessments, taskState, errors }) {
   const gateSchema = readJson(join(projectRoot, 'contracts', 'gate-result.schema.json'));
-  const gateFiles = jsonFiles(join(workflowDir, 'gates'));
+  const gateFiles = jsonFiles(join(workflowDir, 'gates'), '.json', errors);
   let currentReleaseGateCount = 0;
   for (const gateFile of gateFiles) {
     const gate = readJsonForCheck(gateFile, errors);
     if (!gate) continue;
     addSchemaErrors(errors, gate, gateSchema, gateFile);
+    if (!isObject(gate) || !Array.isArray(gate.items)) continue;
     if (gate.workflow_id !== workflow.workflow_id) {
       errors.push(issue('GATE_WORKFLOW_MISMATCH', `${gateFile}:workflow_id`, 'gate workflow_id does not match workflow'));
     }
@@ -1326,6 +1419,9 @@ function checkWorkflowCommand(options, command = 'check-workflow') {
   const workflowPath = join(workflowDir, 'workflow.json');
   const activePath = join(runtimeRoot, 'control', 'active-workflows.json');
   const eventsPath = join(workflowDir, 'events.jsonl');
+  for (const [path, code] of [[workflowPath, 'WORKFLOW_FILE_SYMLINK'], [activePath, 'ACTIVE_INDEX_SYMLINK'], [eventsPath, 'EVENT_CHAIN_SYMLINK']]) {
+    if (existsSync(path)) rejectSymlink(path, errors, code);
+  }
   const workflow = readJsonForCheck(workflowPath, errors);
   const active = readJsonForCheck(activePath, errors);
   if (!workflow || !active) {
@@ -1351,8 +1447,15 @@ function checkWorkflowCommand(options, command = 'check-workflow') {
   if (workflow.workflow_id !== workflowId) {
     errors.push(issue('WORKFLOW_ID_MISMATCH', workflowPath, 'workflow_id does not match requested workflow'));
   }
-  if (resolve(workflow.runtime_root_abs) !== runtimeRoot) {
+  if (!isSameRealPath(workflow.runtime_root_abs, runtimeRoot)) {
     errors.push(issue('RUNTIME_ROOT_MISMATCH', '$.runtime_root_abs', 'workflow runtime root does not match command runtime root'));
+  }
+  const activeWorkflowIds = new Set();
+  for (const entry of active.workflows ?? []) {
+    if (activeWorkflowIds.has(entry.workflow_id)) {
+      errors.push(issue('DUPLICATE_ACTIVE_WORKFLOW_ID', activePath, `active workflow is listed more than once: ${entry.workflow_id}`));
+    }
+    activeWorkflowIds.add(entry.workflow_id);
   }
   const activeEntries = (active.workflows ?? []).filter((entry) => entry.workflow_id === workflowId);
   const isTerminal = new Set(machine.workflow?.terminal_statuses ?? []).has(workflow.status);
@@ -1379,7 +1482,7 @@ function checkWorkflowCommand(options, command = 'check-workflow') {
         errors.push(issue('ACTIVE_WORKFLOW_MISMATCH', `${activePath}:${field}`, `active entry does not match workflow ${field}`));
       }
     }
-    if (resolve(entry.workflow_json_abs) !== resolve(workflowPath)) {
+    if (!isSameRealPath(entry.workflow_json_abs, workflowPath)) {
       errors.push(issue('ACTIVE_WORKFLOW_MISMATCH', `${activePath}:workflow_json_abs`, 'active entry points to a different workflow.json'));
     }
   }
@@ -1450,34 +1553,37 @@ function checkTaskPackageCommand(options) {
   if (!/^TASK-[A-Za-z0-9][A-Za-z0-9-]*$/u.test(taskId)) {
     errors.push(issue('INVALID_TASK_ID', '$.task-id', 'task-id must be a complete safe TASK identifier'));
   }
-  const workflowDir = join(runtimeRoot, 'control', 'workflows', workflowId);
+  const workflowDir = validateTrustedRuntimeLayout(runtimeRoot, workflowId, errors)
+    ?? join(runtimeRoot, 'control', 'workflows', workflowId);
   const expectedTaskFile = join(workflowDir, 'tasks', `${taskId}.json`);
-  if (!isSameRealPath(taskFile, expectedTaskFile)) {
+  if (existsSync(expectedTaskFile)) rejectSymlink(expectedTaskFile, errors, 'TASK_CONTROL_FILE_SYMLINK');
+  if (!isRealPathWithin(join(workflowDir, 'tasks'), expectedTaskFile)
+    || !isSameRealPath(taskFile, expectedTaskFile)) {
     errors.push(issue('TASK_CONTROL_PATH_MISMATCH', taskFile, 'task-file must be the canonical control/workflows/<workflow>/tasks/<task>.json path'));
   }
   const workflow = readJsonForCheck(join(workflowDir, 'workflow.json'), errors);
   const task = readJsonForCheck(taskFile, errors);
   if (workflow) {
     const workflowSchema = readJson(join(projectRoot, 'contracts', 'workflow.schema.json'));
-    addSchemaErrors(errors, workflow, workflowSchema, join(workflowDir, 'workflow.json'));
-    if (resolve(workflow.runtime_root_abs) !== runtimeRoot) {
+    const workflowSchemaValid = addSchemaErrors(errors, workflow, workflowSchema, join(workflowDir, 'workflow.json'));
+    if (workflowSchemaValid && !isSameRealPath(workflow.runtime_root_abs, runtimeRoot)) {
       errors.push(issue('RUNTIME_ROOT_MISMATCH', '$.runtime_root_abs', 'workflow runtime root does not match command runtime root'));
     }
   }
   if (task) {
     const taskSchema = readJson(join(projectRoot, 'contracts', 'task.schema.json'));
     const contextSchema = readJson(join(projectRoot, 'contracts', 'context-manifest.schema.json'));
-    addSchemaErrors(errors, task, taskSchema, taskFile);
-    if (task.task_id !== taskId) {
+    const taskSchemaValid = addSchemaErrors(errors, task, taskSchema, taskFile);
+    if (taskSchemaValid && task.task_id !== taskId) {
       errors.push(issue('TASK_ID_MISMATCH', taskFile, 'task task_id does not match requested task-id'));
     }
-    if (workflow && task.workflow_id !== workflow.workflow_id) {
+    if (taskSchemaValid && workflow && task.workflow_id !== workflow.workflow_id) {
       errors.push(issue('TASK_WORKFLOW_MISMATCH', taskFile, 'task workflow_id does not match workflow'));
     }
-    if (workflow) validateTaskPaths(task, taskFile, workflow, errors);
+    if (taskSchemaValid && workflow) validateTaskPaths(task, taskFile, workflow, errors);
     // A dispatch preflight always requires the complete immutable input package,
     // even while the control task is still in CREATED or READY state.
-    validateTaskContext(task, taskFile, contextSchema, errors);
+    if (taskSchemaValid) validateTaskContext(task, taskFile, contextSchema, errors);
   }
   if (errors.length > 0) {
     appendGuardFailureLog(options, taskFile, errors);

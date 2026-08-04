@@ -352,6 +352,19 @@ test('check-task-package rejects a noncanonical worktree before dispatch', () =>
   } finally { fixture.cleanup(); }
 });
 
+test('check-task-package reports malformed task schema without a usage error', () => {
+  const fixture = makeRuntime({ taskIds: [TASK_ID], withCurrentCandidate: true });
+  try {
+    const task = scopedTask(fixture);
+    delete task.artifact_root_abs;
+    writeJson(join(fixture.workflowDir, 'tasks', `${task.task_id}.json`), task);
+    const result = checkTaskPackage(fixture, task);
+    assert.equal(result.status, 1);
+    assert.match(result.stdout, /SCHEMA_REQUIRED/);
+    assert.doesNotMatch(result.stdout, /GUARD_USAGE_ERROR/);
+  } finally { fixture.cleanup(); }
+});
+
 test('check-workflow requires every declared structured output for a completed task', () => {
   const fixture = makeRuntime({ taskIds: [TASK_ID], withCurrentCandidate: true });
   try {
@@ -1647,6 +1660,21 @@ test('append-event preserves a pre-existing lock on conflict', () => {
     assert.equal(result.status, 1);
     assert.match(result.stdout, /EVENT_LOCK_CONFLICT/);
     assert.equal(existsSync(`${eventsPath}.lock`), true);
+  } finally { fixture.cleanup(); }
+});
+
+test('check-workflow rejects duplicate event ids', () => {
+  const first = signedEvent({ seq: 1, event_type: 'WORKFLOW_CREATED', to_status: 'CREATED', to_phase: 'INTAKE' });
+  const second = signedEvent({ seq: 2, event_type: 'PHASE_ADVANCED', from_status: 'CREATED', to_status: 'ANALYZING_REQUIREMENTS', from_phase: 'INTAKE', to_phase: 'REQUIREMENTS', previous_event_hash: first.event_hash });
+  second.event_id = first.event_id;
+  const unsigned = { ...second };
+  delete unsigned.event_hash;
+  second.event_hash = createHash('sha256').update(JSON.stringify(canonicalize(unsigned)), 'utf8').digest('hex');
+  const fixture = makeRuntime({ status: 'ANALYZING_REQUIREMENTS', phase: 'REQUIREMENTS', revision: 2, events: [first, second] });
+  try {
+    const result = checkWorkflow(fixture);
+    assert.equal(result.status, 1);
+    assert.match(result.stdout, /DUPLICATE_EVENT_ID/);
   } finally { fixture.cleanup(); }
 });
 
