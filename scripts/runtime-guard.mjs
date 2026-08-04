@@ -18,6 +18,19 @@ import {
 } from 'node:fs';
 import { isAbsolute, join, resolve, sep } from 'node:path';
 import { serializeJson } from './runtime-core/atomic-store.mjs';
+import {
+  createDispatchIntent,
+  currentDispatchState,
+  dispatchDirectory,
+  dispatchIdempotencyKey,
+  dispatchIsTerminal,
+  loadDispatch,
+  reconcileDispatch,
+  recordCompletionReceipt,
+  recordDeadLetter,
+  recordDispatchReceipt,
+  scanDispatches,
+} from './runtime-core/dispatch-ledger.mjs';
 import { createTaskRunArchive, taskRunArchivePath } from './runtime-core/task-run-store.mjs';
 import { commitTransaction, recoverTransactions } from './runtime-core/transaction-store.mjs';
 import { acquireWorkflowLock } from './runtime-core/workflow-lock.mjs';
@@ -92,6 +105,18 @@ function parseArgs(argv) {
       'attempt',
       'retry-count',
       'retry-prompt',
+      'dispatch-id',
+      'session-key',
+      'session-id',
+      'lease-seconds',
+      'max-retries',
+      'status',
+      'input-manifest',
+      'result-file',
+      'error-code',
+      'error-message',
+      'reason',
+      'last-error',
     ].includes(name)) {
       throw new Error(`unknown option: --${name}`);
     }
@@ -1006,6 +1031,304 @@ function recoverTransactionsCommand(options) {
   }
 }
 
+function parseIntegerOption(options, name, { defaultValue = null, minimum = 0, maximum = Number.MAX_SAFE_INTEGER } = {}) {
+  if (options[name] === undefined) return defaultValue;
+  if (!/^\d+$/u.test(String(options[name]))) throw new Error(`--${name} must be an integer`);
+  const value = Number(options[name]);
+  if (!Number.isSafeInteger(value) || value < minimum || value > maximum) {
+    throw new Error(`--${name} must be between ${minimum} and ${maximum}`);
+  }
+  return value;
+}
+
+function dispatchCommandLayout(options, command) {
+  const projectRoot = resolve(requireOption(options, 'project-root'));
+  const runtimeRoot = resolve(requireOption(options, 'runtime-root'));
+  const workflowId = requireOption(options, 'workflow-id');
+  const errors = [];
+  if (!/^WF-[A-Za-z0-9][A-Za-z0-9-]*$/u.test(workflowId)) {
+    errors.push(issue('INVALID_WORKFLOW_ID', '$.workflow-id', 'workflow-id must be a complete safe WF identifier'));
+  }
+  const workflowDir = errors.length === 0 ? validateTrustedRuntimeLayout(runtimeRoot, workflowId, errors) : null;
+  if (!workflowDir || errors.length > 0) {
+    emit({ ok: false, command, workflow_id: workflowId, effective_status: 'HOLD', errors }, 1);
+    return null;
+  }
+  return { projectRoot, runtimeRoot, workflowId, workflowDir };
+}
+
+function emitDispatchCommandError(command, workflowId, error, fallbackPath) {
+  const code = String(error.code ?? '').startsWith('DISPATCH_') || error.code === 'WORKFLOW_LOCK_CONFLICT'
+    ? error.code
+    : 'DISPATCH_LEDGER_ERROR';
+  emit({
+    ok: false,
+    command,
+    workflow_id: workflowId,
+    effective_status: 'HOLD',
+    errors: [error.guardIssue ?? issue(code, error.path ?? fallbackPath, error.message)],
+  }, 1);
+}
+
+function requireSafeDispatchId(options) {
+  const dispatchId = requireOption(options, 'dispatch-id');
+  if (!/^DSP-[A-Za-z0-9][A-Za-z0-9-]*$/u.test(dispatchId)) {
+    throw transactionError('DISPATCH_ID_INVALID', '$.dispatch-id', 'dispatch-id must be a complete safe DSP identifier');
+  }
+  return dispatchId;
+}
+
+function dispatchContractErrors(record, projectRoot) {
+  const errors = [];
+  const mappings = [
+    [record.intent, 'dispatch-intent.schema.json', join(record.directory, 'intent.json')],
+    ...record.receipts.map((receipt, index) => [receipt, 'dispatch-receipt.schema.json', `${join(record.directory, 'receipts.jsonl')}:${index + 1}`]),
+    ...(record.completion ? [[record.completion, 'completion-receipt.schema.json', join(record.directory, 'completion-receipt.json')]] : []),
+    ...(record.dead_letter ? [[record.dead_letter, 'dead-letter.schema.json', join(record.directory, 'dead-letter.json')]] : []),
+  ];
+  for (const [value, schemaName, source] of mappings) {
+    addSchemaErrors(errors, value, readJson(join(projectRoot, 'contracts', schemaName)), source);
+  }
+  return errors;
+}
+
+function emitDispatchContractFailure(command, workflowId, dispatchId, errors) {
+  emit({ ok: false, command, workflow_id: workflowId, dispatch_id: dispatchId, effective_status: 'HOLD', errors }, 1);
+}
+
+function prepareDispatchCommand(options) {
+  const layout = dispatchCommandLayout(options, 'prepare-dispatch');
+  if (!layout) return;
+  const { projectRoot, runtimeRoot, workflowId, workflowDir } = layout;
+  const taskId = requireOption(options, 'task-id');
+  const runId = requireOption(options, 'run-id');
+  const agentId = requireOption(options, 'agent-id');
+  const taskFile = resolve(requireOption(options, 'task-file'));
+  const sessionKey = requireOption(options, 'session-key');
+  const requestedAttempt = parseIntegerOption(options, 'attempt', { minimum: 1 });
+  const leaseSeconds = parseIntegerOption(options, 'lease-seconds', { defaultValue: 900, minimum: 30, maximum: 86400 });
+  let lock;
+  try {
+    lock = acquireWorkflowLock(join(workflowDir, '.workflow.lock'), { purpose: 'prepare-dispatch' });
+    const recoveredTransactions = recoverTransactions(workflowDir);
+    const errors = [];
+    const workflowPath = join(workflowDir, 'workflow.json');
+    const expectedTaskFile = join(workflowDir, 'tasks', `${taskId}.json`);
+    if (!isSameRealPath(taskFile, expectedTaskFile)) errors.push(issue('TASK_CONTROL_PATH_MISMATCH', taskFile, 'task-file must be the canonical current task snapshot'));
+    const workflow = readJsonForCheck(workflowPath, errors);
+    const task = readJsonForCheck(taskFile, errors);
+    if (!workflow || !task) {
+      emit({ ok: false, command: 'prepare-dispatch', workflow_id: workflowId, task_id: taskId, effective_status: 'HOLD', errors }, 1);
+      return;
+    }
+    const workflowSchema = readJson(join(projectRoot, 'contracts', 'workflow.schema.json'));
+    const taskSchema = readJson(join(projectRoot, 'contracts', 'task.schema.json'));
+    const contextSchema = readJson(join(projectRoot, 'contracts', 'context-manifest.schema.json'));
+    const workflowValid = addSchemaErrors(errors, workflow, workflowSchema, workflowPath);
+    const taskValid = addSchemaErrors(errors, task, taskSchema, taskFile);
+    if (!workflowValid || !taskValid) {
+      emit({ ok: false, command: 'prepare-dispatch', workflow_id: workflowId, task_id: taskId, effective_status: 'HOLD', errors }, 1);
+      return;
+    }
+    for (const [field, expected, actual] of [
+      ['workflow_id', workflowId, task.workflow_id],
+      ['task_id', taskId, task.task_id],
+      ['run_id', runId, task.run_id],
+      ['assigned_agent', agentId, task.assigned_agent],
+      ['attempt', requestedAttempt, task.attempt],
+    ]) {
+      if (!equalJson(expected, actual)) errors.push(issue('DISPATCH_TASK_SCOPE_MISMATCH', `${taskFile}:${field}`, `requested ${field} does not match task`));
+    }
+    if (task.status !== 'READY') errors.push(issue('DISPATCH_TASK_NOT_READY', taskFile, `task must be READY before dispatch, found ${task.status}`));
+    validateTaskPaths(task, taskFile, workflow, errors);
+    validateTaskContext(task, taskFile, contextSchema, errors);
+    const inputManifestPath = resolve(options['input-manifest'] ?? task.context_manifest_path_abs);
+    if (!isSameRealPath(inputManifestPath, task.context_manifest_path_abs)) {
+      errors.push(issue('DISPATCH_INPUT_MANIFEST_MISMATCH', inputManifestPath, 'dispatch input manifest must equal task context_manifest_path_abs'));
+    }
+    const retryCount = parseIntegerOption(options, 'retry-count', { defaultValue: Math.max(task.attempt - 1, 0), minimum: 0 });
+    const maxRetries = parseIntegerOption(options, 'max-retries', { defaultValue: Math.max(task.max_attempts - 1, 0), minimum: 0 });
+    if (retryCount > maxRetries) errors.push(issue('DISPATCH_RETRY_LIMIT', '$.retry-count', 'retry_count cannot exceed max_retries'));
+    const dispatchId = options['dispatch-id'] ?? undefined;
+    if (dispatchId && !/^DSP-[A-Za-z0-9][A-Za-z0-9-]*$/u.test(dispatchId)) errors.push(issue('INVALID_DISPATCH_ID', '$.dispatch-id', 'dispatch-id must be a complete safe DSP identifier'));
+    if (errors.length > 0) {
+      emit({ ok: false, command: 'prepare-dispatch', workflow_id: workflowId, task_id: taskId, effective_status: 'HOLD', errors }, 1);
+      return;
+    }
+    const ledgerContractErrors = scanDispatches(workflowDir)
+      .flatMap((record) => dispatchContractErrors(record, projectRoot));
+    if (ledgerContractErrors.length > 0) {
+      emitDispatchContractFailure('prepare-dispatch', workflowId, null, ledgerContractErrors);
+      return;
+    }
+    const created = createDispatchIntent({
+      workflowDir,
+      workflowId,
+      task,
+      taskFile,
+      inputManifestPath,
+      sessionKey,
+      leaseSeconds,
+      retryCount,
+      maxRetries,
+      dispatchId,
+    });
+    const intentSchema = readJson(join(projectRoot, 'contracts', 'dispatch-intent.schema.json'));
+    const intentErrors = validateInstance(created.intent, intentSchema);
+    if (intentErrors.length > 0) throw transactionError('DISPATCH_INTENT_INVALID', created.intent.dispatch_id, 'created dispatch intent failed its contract');
+    emit({
+      ok: true,
+      command: 'prepare-dispatch',
+      workflow_id: workflowId,
+      task_id: taskId,
+      run_id: runId,
+      dispatch_id: created.intent.dispatch_id,
+      idempotent: created.idempotent,
+      intent: created.intent,
+      recovered_transactions: recoveredTransactions,
+    });
+  } catch (error) {
+    emitDispatchCommandError('prepare-dispatch', workflowId, error, taskFile);
+  } finally {
+    lock?.release();
+  }
+}
+
+function recordDispatchReceiptCommand(options) {
+  const layout = dispatchCommandLayout(options, 'record-dispatch-receipt');
+  if (!layout) return;
+  const { projectRoot, workflowId, workflowDir } = layout;
+  let dispatchId;
+  try {
+    dispatchId = requireSafeDispatchId(options);
+  } catch (error) {
+    emitDispatchCommandError('record-dispatch-receipt', workflowId, error, workflowDir);
+    return;
+  }
+  const status = requireOption(options, 'status');
+  const sessionKey = requireOption(options, 'session-key');
+  const sessionId = requireOption(options, 'session-id');
+  if (!['SENT', 'ACKNOWLEDGED', 'RUNNING'].includes(status)) {
+    emit({ ok: false, command: 'record-dispatch-receipt', workflow_id: workflowId, effective_status: 'HOLD', errors: [issue('DISPATCH_RECEIPT_STATUS', '$.status', 'status must be SENT, ACKNOWLEDGED, or RUNNING')] }, 1);
+    return;
+  }
+  try {
+    const contractErrors = dispatchContractErrors(loadDispatch(workflowDir, dispatchId), projectRoot);
+    if (contractErrors.length > 0) {
+      emitDispatchContractFailure('record-dispatch-receipt', workflowId, dispatchId, contractErrors);
+      return;
+    }
+    const receipt = recordDispatchReceipt({ workflowDir, dispatchId, status, sessionKey, sessionId });
+    const schema = readJson(join(projectRoot, 'contracts', 'dispatch-receipt.schema.json'));
+    const errors = validateInstance(receipt, schema);
+    if (errors.length > 0) throw transactionError('DISPATCH_RECEIPT_INVALID', dispatchId, 'created dispatch receipt failed its contract');
+    emit({ ok: true, command: 'record-dispatch-receipt', workflow_id: workflowId, dispatch_id: dispatchId, receipt });
+  } catch (error) {
+    emitDispatchCommandError('record-dispatch-receipt', workflowId, error, dispatchDirectory(workflowDir, dispatchId));
+  }
+}
+
+function recordCompletionReceiptCommand(options) {
+  const layout = dispatchCommandLayout(options, 'record-completion-receipt');
+  if (!layout) return;
+  const { projectRoot, workflowId, workflowDir } = layout;
+  let dispatchId;
+  try {
+    dispatchId = requireSafeDispatchId(options);
+  } catch (error) {
+    emitDispatchCommandError('record-completion-receipt', workflowId, error, workflowDir);
+    return;
+  }
+  const status = requireOption(options, 'status');
+  const sessionKey = requireOption(options, 'session-key');
+  const sessionId = requireOption(options, 'session-id');
+  if (!['SUCCEEDED', 'FAILED', 'LOST'].includes(status)) {
+    emit({ ok: false, command: 'record-completion-receipt', workflow_id: workflowId, effective_status: 'HOLD', errors: [issue('DISPATCH_COMPLETION_STATUS', '$.status', 'status must be SUCCEEDED, FAILED, or LOST')] }, 1);
+    return;
+  }
+  try {
+    const contractErrors = dispatchContractErrors(loadDispatch(workflowDir, dispatchId), projectRoot);
+    if (contractErrors.length > 0) {
+      emitDispatchContractFailure('record-completion-receipt', workflowId, dispatchId, contractErrors);
+      return;
+    }
+    const result = recordCompletionReceipt({
+      workflowDir,
+      dispatchId,
+      status,
+      sessionKey,
+      sessionId,
+      resultPath: options['result-file'] ? resolve(options['result-file']) : null,
+      errorCode: options['error-code'] ?? null,
+      errorMessage: options['error-message'] ?? null,
+    });
+    const schema = readJson(join(projectRoot, 'contracts', 'completion-receipt.schema.json'));
+    const errors = validateInstance(result.completion, schema);
+    if (errors.length > 0) throw transactionError('DISPATCH_COMPLETION_INVALID', dispatchId, 'created completion receipt failed its contract');
+    emit({ ok: true, command: 'record-completion-receipt', workflow_id: workflowId, dispatch_id: dispatchId, idempotent: result.idempotent, completion: result.completion });
+  } catch (error) {
+    emitDispatchCommandError('record-completion-receipt', workflowId, error, dispatchDirectory(workflowDir, dispatchId));
+  }
+}
+
+function deadLetterDispatchCommand(options) {
+  const layout = dispatchCommandLayout(options, 'dead-letter-dispatch');
+  if (!layout) return;
+  const { projectRoot, workflowId, workflowDir } = layout;
+  let dispatchId;
+  try {
+    dispatchId = requireSafeDispatchId(options);
+  } catch (error) {
+    emitDispatchCommandError('dead-letter-dispatch', workflowId, error, workflowDir);
+    return;
+  }
+  const reason = requireOption(options, 'reason');
+  try {
+    const contractErrors = dispatchContractErrors(loadDispatch(workflowDir, dispatchId), projectRoot);
+    if (contractErrors.length > 0) {
+      emitDispatchContractFailure('dead-letter-dispatch', workflowId, dispatchId, contractErrors);
+      return;
+    }
+    const result = recordDeadLetter({
+      workflowDir,
+      dispatchId,
+      reason,
+      lastError: options['last-error'] ?? null,
+    });
+    const schema = readJson(join(projectRoot, 'contracts', 'dead-letter.schema.json'));
+    const errors = validateInstance(result.dead_letter, schema);
+    if (errors.length > 0) throw transactionError('DISPATCH_DEAD_LETTER_INVALID', dispatchId, 'created dead letter failed its contract');
+    emit({ ok: true, command: 'dead-letter-dispatch', workflow_id: workflowId, dispatch_id: dispatchId, idempotent: result.idempotent, dead_letter: result.dead_letter });
+  } catch (error) {
+    emitDispatchCommandError('dead-letter-dispatch', workflowId, error, dispatchDirectory(workflowDir, dispatchId));
+  }
+}
+
+function reconcileDispatchCommand(options) {
+  const layout = dispatchCommandLayout(options, 'reconcile-dispatch');
+  if (!layout) return;
+  const { projectRoot, workflowId, workflowDir } = layout;
+  try {
+    const selectedDispatchId = options['dispatch-id'] ? requireSafeDispatchId(options) : null;
+    const records = selectedDispatchId
+      ? [loadDispatch(workflowDir, selectedDispatchId)]
+      : scanDispatches(workflowDir);
+    const errors = records.flatMap((record) => dispatchContractErrors(record, projectRoot));
+    if (errors.length > 0) {
+      emitDispatchContractFailure('reconcile-dispatch', workflowId, selectedDispatchId, errors);
+      return;
+    }
+    emit({
+      ok: true,
+      command: 'reconcile-dispatch',
+      workflow_id: workflowId,
+      dispatches: records.map((record) => reconcileDispatch(record)),
+    });
+  } catch (error) {
+    emitDispatchCommandError('reconcile-dispatch', workflowId, error, workflowDir);
+  }
+}
+
 function validateStateMachine(machine, errors) {
   if (machine?.schema_version !== 1) {
     errors.push(issue('STATE_MACHINE_VERSION', '$.schema_version', 'workflow state machine schema_version must be 1'));
@@ -1507,7 +1830,162 @@ function validateTasks({ workflow, workflowDir, projectRoot, eventRecords, error
   if (!sameStringSet(tasks.map((task) => task.task_id), workflow.task_ids)) {
     errors.push(issue('WORKFLOW_TASK_INDEX_MISMATCH', '$.task_ids', 'workflow task_ids do not match control task files'));
   }
-  return { tasks, blockingFindings, currentCandidateReviewEvidenceIds, currentReleaseTaskKey, releaseDecisions, evidenceByScope, allEvidenceIds };
+  const knownTaskScopes = new Map(tasks.map((task) => [scopeKey(task.task_id, task.run_id), task]));
+  for (const archive of taskRunArchives.values()) {
+    knownTaskScopes.set(scopeKey(archive.task_id, archive.run_id), archive.task_snapshot);
+  }
+  return { tasks, blockingFindings, currentCandidateReviewEvidenceIds, currentReleaseTaskKey, releaseDecisions, evidenceByScope, allEvidenceIds, knownTaskScopes };
+}
+
+function dispatchIdentityMatches(record, intent) {
+  return ['dispatch_id', 'idempotency_key', 'workflow_id', 'task_id', 'run_id', 'agent_id', 'attempt']
+    .every((field) => equalJson(record[field], intent[field]));
+}
+
+function validateDispatchLedgers({ workflow, workflowDir, projectRoot, taskState, errors }) {
+  const root = join(workflowDir, 'dispatch');
+  if (!existsSync(root)) return;
+  const schemas = {
+    intent: readJson(join(projectRoot, 'contracts', 'dispatch-intent.schema.json')),
+    receipt: readJson(join(projectRoot, 'contracts', 'dispatch-receipt.schema.json')),
+    completion: readJson(join(projectRoot, 'contracts', 'completion-receipt.schema.json')),
+    deadLetter: readJson(join(projectRoot, 'contracts', 'dead-letter.schema.json')),
+  };
+  const records = [];
+  const dispatchIds = new Set();
+  const idempotencyKeys = new Set();
+  for (const entry of readdirSync(root, { withFileTypes: true })) {
+    const directory = join(root, entry.name);
+    if (entry.isSymbolicLink()) {
+      errors.push(issue('DISPATCH_DIR_SYMLINK', directory, 'dispatch directories must not be symbolic links'));
+      continue;
+    }
+    if (!entry.isDirectory() || !/^DSP-[A-Za-z0-9][A-Za-z0-9-]*$/u.test(entry.name)) {
+      errors.push(issue('DISPATCH_LAYOUT_INVALID', directory, 'dispatch entries must be DSP-* directories'));
+      continue;
+    }
+    for (const fileName of ['intent.json', 'receipts.jsonl', 'completion-receipt.json', 'dead-letter.json']) {
+      const path = join(directory, fileName);
+      if (existsSync(path)) rejectSymlink(path, errors, 'DISPATCH_RECORD_SYMLINK');
+    }
+    let record;
+    try {
+      record = loadDispatch(workflowDir, entry.name);
+    } catch (error) {
+      errors.push(issue('DISPATCH_LEDGER_READ_ERROR', directory, error.message));
+      continue;
+    }
+    const intentPath = join(directory, 'intent.json');
+    const intentValid = addSchemaErrors(errors, record.intent, schemas.intent, intentPath);
+    if (!intentValid) continue;
+    records.push(record);
+    const intent = record.intent;
+    if (intent.dispatch_id !== entry.name) errors.push(issue('DISPATCH_ID_MISMATCH', intentPath, 'dispatch directory does not match intent dispatch_id'));
+    if (dispatchIds.has(intent.dispatch_id)) errors.push(issue('DUPLICATE_DISPATCH_ID', intentPath, `dispatch_id is repeated: ${intent.dispatch_id}`));
+    dispatchIds.add(intent.dispatch_id);
+    if (idempotencyKeys.has(intent.idempotency_key)) errors.push(issue('DUPLICATE_DISPATCH_IDEMPOTENCY_KEY', intentPath, `idempotency key is repeated: ${intent.idempotency_key}`));
+    idempotencyKeys.add(intent.idempotency_key);
+    if (intent.idempotency_key !== dispatchIdempotencyKey(intent)) errors.push(issue('DISPATCH_IDEMPOTENCY_KEY_MISMATCH', intentPath, 'idempotency key does not match workflow/task/run/agent/attempt'));
+    if (intent.workflow_id !== workflow.workflow_id) errors.push(issue('DISPATCH_WORKFLOW_MISMATCH', intentPath, 'dispatch belongs to a different workflow'));
+    const task = taskState.knownTaskScopes.get(scopeKey(intent.task_id, intent.run_id));
+    if (!task) {
+      errors.push(issue('DISPATCH_TASK_NOT_FOUND', intentPath, 'dispatch task/run has no current or archived task snapshot'));
+    } else {
+      if (task.assigned_agent !== intent.agent_id || task.attempt !== intent.attempt) {
+        errors.push(issue('DISPATCH_TASK_SCOPE_MISMATCH', intentPath, 'dispatch agent or attempt does not match task snapshot'));
+      }
+      const expectedTaskPath = join(workflowDir, 'tasks', `${intent.task_id}.json`);
+      if (resolve(intent.task_file_abs) !== resolve(expectedTaskPath)) errors.push(issue('DISPATCH_TASK_PATH_MISMATCH', intentPath, 'dispatch task_file_abs is not canonical'));
+      if (!isSameRealPath(intent.input_manifest_path_abs, task.context_manifest_path_abs)) {
+        errors.push(issue('DISPATCH_INPUT_MANIFEST_MISMATCH', intentPath, 'dispatch input manifest does not match task snapshot'));
+      } else if (sha256File(intent.input_manifest_path_abs) !== intent.input_manifest_sha256) {
+        errors.push(issue('DISPATCH_INPUT_MANIFEST_HASH_MISMATCH', intentPath, 'dispatch input manifest hash changed after prepare'));
+      }
+    }
+    if (Date.parse(intent.lease_deadline) <= Date.parse(intent.lease_started_at)) errors.push(issue('DISPATCH_LEASE_INVALID', intentPath, 'lease_deadline must be later than lease_started_at'));
+    if (intent.retry_count > intent.max_retries) errors.push(issue('DISPATCH_RETRY_LIMIT', intentPath, 'retry_count cannot exceed max_retries'));
+    const receiptIds = new Set();
+    const sessionIds = new Set();
+    let priorOrder = 0;
+    let priorReceiptTime = Date.parse(intent.created_at);
+    for (const [index, receipt] of record.receipts.entries()) {
+      const source = `${join(directory, 'receipts.jsonl')}:${index + 1}`;
+      if (!addSchemaErrors(errors, receipt, schemas.receipt, source)) continue;
+      if (receiptIds.has(receipt.receipt_id)) errors.push(issue('DUPLICATE_DISPATCH_RECEIPT_ID', source, `receipt_id is repeated: ${receipt.receipt_id}`));
+      receiptIds.add(receipt.receipt_id);
+      if (!dispatchIdentityMatches(receipt, intent)) errors.push(issue('DISPATCH_RECEIPT_SCOPE_MISMATCH', source, 'receipt identity does not match intent'));
+      if (receipt.session_key !== intent.session_key || receipt.lease_deadline !== intent.lease_deadline
+        || receipt.input_manifest_sha256 !== intent.input_manifest_sha256) {
+        errors.push(issue('DISPATCH_RECEIPT_BINDING_MISMATCH', source, 'receipt session, lease, or input hash does not match intent'));
+      }
+      sessionIds.add(receipt.session_id);
+      const order = new Map([['SENT', 1], ['ACKNOWLEDGED', 2], ['RUNNING', 3]]).get(receipt.status);
+      if (order <= priorOrder) errors.push(issue('DISPATCH_RECEIPT_ORDER', source, 'dispatch receipt statuses must advance monotonically'));
+      priorOrder = order;
+      const recordedAt = Date.parse(receipt.recorded_at);
+      if (recordedAt < priorReceiptTime) errors.push(issue('DISPATCH_RECEIPT_TIME_REGRESSION', source, 'receipt timestamp is earlier than the previous dispatch record'));
+      priorReceiptTime = recordedAt;
+    }
+    if (sessionIds.size > 1) errors.push(issue('DISPATCH_SESSION_ID_MISMATCH', directory, 'one dispatch cannot bind multiple session IDs'));
+    if (record.completion) {
+      const completionPath = join(directory, 'completion-receipt.json');
+      if (addSchemaErrors(errors, record.completion, schemas.completion, completionPath)) {
+        if (!dispatchIdentityMatches(record.completion, intent)) errors.push(issue('DISPATCH_COMPLETION_SCOPE_MISMATCH', completionPath, 'completion identity does not match intent'));
+        if (record.receipts.length === 0 || !sessionIds.has(record.completion.session_id)
+          || record.completion.session_key !== intent.session_key) {
+          errors.push(issue('DISPATCH_COMPLETION_SESSION_MISMATCH', completionPath, 'completion does not match the recorded dispatch session'));
+        }
+        if (Date.parse(record.completion.completed_at) < priorReceiptTime) errors.push(issue('DISPATCH_COMPLETION_TIME_REGRESSION', completionPath, 'completion timestamp is earlier than the latest receipt'));
+        if (record.completion.status === 'SUCCEEDED' && task) {
+          const expectedResult = join(task.artifact_root_abs, 'output', 'result.json');
+          if (!isSameRealPath(record.completion.result_path_abs, expectedResult)) {
+            errors.push(issue('DISPATCH_RESULT_PATH_MISMATCH', completionPath, 'successful completion must bind canonical output/result.json'));
+          } else if (sha256File(expectedResult) !== record.completion.result_sha256) {
+            errors.push(issue('DISPATCH_RESULT_HASH_MISMATCH', completionPath, 'completion result hash does not match output/result.json'));
+          }
+        }
+      }
+    }
+    if (record.dead_letter) {
+      const deadLetterPath = join(directory, 'dead-letter.json');
+      if (addSchemaErrors(errors, record.dead_letter, schemas.deadLetter, deadLetterPath)) {
+        if (!dispatchIdentityMatches(record.dead_letter, intent)) errors.push(issue('DISPATCH_DEAD_LETTER_SCOPE_MISMATCH', deadLetterPath, 'dead letter identity does not match intent'));
+        if (record.dead_letter.retry_count !== intent.retry_count || record.dead_letter.max_retries !== intent.max_retries
+          || intent.retry_count < intent.max_retries) {
+          errors.push(issue('DISPATCH_DEAD_LETTER_RETRY_MISMATCH', deadLetterPath, 'dead letter retry counters must match an exhausted intent'));
+        }
+        if (!record.completion || record.completion.status === 'SUCCEEDED') errors.push(issue('DISPATCH_DEAD_LETTER_FAILURE_REQUIRED', deadLetterPath, 'dead letter requires a FAILED or LOST completion'));
+      }
+    }
+    if (!dispatchIsTerminal(record) && Date.now() > Date.parse(intent.lease_deadline)) {
+      errors.push(issue('DISPATCH_LEASE_EXPIRED', intentPath, 'dispatch lease expired; query the recorded session before marking LOST or retrying'));
+    }
+  }
+  const unresolvedByScope = new Map();
+  for (const record of records) {
+    if (dispatchIsTerminal(record)) continue;
+    const key = scopeKey(record.intent.task_id, record.intent.run_id);
+    if (unresolvedByScope.has(key)) errors.push(issue('DISPATCH_SCOPE_CONFLICT', record.directory, `task/run has multiple unresolved dispatches: ${record.intent.task_id}/${record.intent.run_id}`));
+    unresolvedByScope.set(key, record.intent.dispatch_id);
+  }
+  for (const task of taskState.tasks) {
+    const matching = records
+      .filter((record) => record.intent.task_id === task.task_id && record.intent.run_id === task.run_id && record.intent.attempt === task.attempt)
+      .sort((left, right) => left.intent.created_at.localeCompare(right.intent.created_at));
+    if (matching.length === 0) continue;
+    const latestState = currentDispatchState(matching.at(-1));
+    const allowedStates = {
+      READY: ['PREPARED', 'FAILED', 'LOST', 'DEAD_LETTER'],
+      DISPATCHED: ['SENT', 'ACKNOWLEDGED', 'RUNNING'],
+      RUNNING: ['RUNNING'],
+      COMPLETED: ['SUCCEEDED'],
+      FAILED: ['FAILED', 'DEAD_LETTER'],
+      LOST: ['LOST', 'DEAD_LETTER'],
+    }[task.status];
+    if (allowedStates && !allowedStates.includes(latestState)) {
+      errors.push(issue('DISPATCH_TASK_STATE_MISMATCH', task.task_id, `task status ${task.status} is inconsistent with dispatch state ${latestState}`));
+    }
+  }
 }
 
 function validateApprovals({ workflow, workflowDir, projectRoot, taskState, errors }) {
@@ -1966,6 +2444,7 @@ function checkWorkflowCommand(options, command = 'check-workflow') {
     return;
   }
   const taskState = validateTasks({ workflow, workflowDir, projectRoot, eventRecords, errors });
+  validateDispatchLedgers({ workflow, workflowDir, projectRoot, taskState, errors });
   const approvals = validateApprovals({ workflow, workflowDir, projectRoot, taskState, errors });
   const assessments = validateApprovalAssessments({ workflow, workflowDir, projectRoot, approvals, taskState, errors });
   validateGates({ workflow, workflowDir, projectRoot, machine, approvals, assessments, taskState, errors });
@@ -2137,6 +2616,26 @@ function main() {
     }
     if (command === 'recover-transactions') {
       recoverTransactionsCommand(options);
+      return;
+    }
+    if (command === 'prepare-dispatch') {
+      prepareDispatchCommand(options);
+      return;
+    }
+    if (command === 'record-dispatch-receipt') {
+      recordDispatchReceiptCommand(options);
+      return;
+    }
+    if (command === 'record-completion-receipt') {
+      recordCompletionReceiptCommand(options);
+      return;
+    }
+    if (command === 'dead-letter-dispatch') {
+      deadLetterDispatchCommand(options);
+      return;
+    }
+    if (command === 'reconcile-dispatch') {
+      reconcileDispatchCommand(options);
       return;
     }
     if (command === 'check-workflow') {

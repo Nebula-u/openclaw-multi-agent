@@ -124,7 +124,7 @@ D:\MicroConnect\project\openclaw-multi-agent\runtime\
 ├── control\
 │   ├── workflows\<workflow-id>\{workflow.json,user-request.md,context-summary.md,
 │   │                            rules-snapshot.md,events.jsonl,tasks\,task-runs\,
-│   │                            transactions\,decisions\,gates\,final-report.md}
+│   │                            transactions\,dispatch\,decisions\,gates\,final-report.md}
 │   ├── active-workflows.json
 │   ├── install-manifest.json      # 记录 runtime_root_abs、package/Agent 绝对路径、配置变更、校验结果
 │   └── config-snapshots\
@@ -142,6 +142,8 @@ D:\MicroConnect\project\openclaw-multi-agent\runtime\
 - `append-event`：为事件草稿补入连续的序号、修订号和哈希后，追加到 JSONL 链。
 - `commit-transition`：校验期望 revision 与全部下一版快照，在 workflow 锁内以事务日志和原子 rename 提交关键状态。
 - `recover-transactions`：按 SHA-256 幂等滚动完成崩溃时遗留的 `PREPARED` / `APPLYING` 事务。
+- `prepare-dispatch` / `record-dispatch-receipt` / `record-completion-receipt`：在 spawn 前后持久化幂等 intent、真实 session 与完成事实。
+- `reconcile-dispatch` / `dead-letter-dispatch`：对账 lease/session，重试耗尽且已有失败事实后进入 dead letter。
 - `check-workflow`：核对工作流快照、活动索引、事件链、任务/结果、审批、Gate 与候选 Git commit。
 - `self-check`：用 Ajv strict mode 编译 contracts、校验状态机和受映射模板。
 

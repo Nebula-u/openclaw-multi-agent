@@ -34,6 +34,7 @@
     ├── tasks\<task-id>.json      # 当前 run 指针
     ├── task-runs\<task-id>\<run-id>.json  # 不可变历史 run 快照
     ├── transactions\TXN-*\transaction.json # 状态提交事务日志
+    ├── dispatch\DSP-*\{intent.json,receipts.jsonl,completion-receipt.json,dead-letter.json}
     ├── decisions\<dec-id>.request.json / <dec-id>.response.json
     ├── gates\<phase>-<n>.json
     └── final-report.md
@@ -66,6 +67,12 @@
 
 `tasks/<task-id>.json` 只代表该任务当前 run。切换 `run_id` 前，旧指针按 `contracts/task-run.schema.json` 固化到 `task-runs/<task-id>/<run-id>.json`；终态 run 也固化一次。历史 archive 与 artifact 共同接受 Guard 校验，已有 archive 不允许以不同内容覆盖。
 
+### 3.6 Dispatch ledger 与 lease
+
+每次 `sessions_spawn` 之前，manager 必须先调用 `prepare-dispatch`。Intent 保存 `dispatch_id`、`workflow/task/run/agent/attempt` 幂等键、session key、input manifest SHA-256、lease deadline 和 retry budget。spawn 返回后用 `record-dispatch-receipt` 依次记录 `SENT`、可选 `ACKNOWLEDGED` 和 `RUNNING`，所有 receipt 必须绑定同一个 session ID；Agent 结果落盘后再写 `SUCCEEDED` / `FAILED` / `LOST` completion receipt。只有 retry 已耗尽且已有 FAILED/LOST completion 时才能写 dead letter。
+
+同一 task/run 在任一时刻最多一个非终态 dispatch；prepare 使用短暂 workflow 锁消除竞态，不同 task/run 随后可以并行执行。`reconcile-dispatch` 发现 lease 过期时只返回 `QUERY_SESSION_BEFORE_RETRY`：manager 必须先用原 session key/ID 查询 session/history 和已有 completion，不得仅因工具超时再次 spawn。
+
 ## 4. ID 规范
 
 所有 workflow / task / run / decision / finding / evidence 均有唯一 ID：
@@ -86,9 +93,10 @@ WF-<UUID> · TASK-<UUID> · RUN-<UUID> · DEC-<UUID> · FIND-<UUID> · EVD-<UUID
 2. **恰好一个**活动 workflow → 读其 `workflow.json`、`events.jsonl`、`context-summary.md`、未决 `decisions/`、Git 状态后恢复。
 3. **多个**活动 workflow → **让用户选择**，不擅自挑选。
 4. 对选定 workflow 先运行 `recover-transactions --runtime-root <runtime> --workflow-id <WF-...>`；只允许按日志和哈希滚动完成，不猜测业务状态。
-5. 运行 `recovery-check --project-root <project> --runtime-root <runtime> [--workflow-id <WF-...>]`。未指定 ID 时仅允许恰好一个活动 workflow；该命令执行完整 `check-workflow` 校验，涵盖事务日志、事件链、状态机迁移、最新快照、当前与历史任务结果、审批、Gate 与 Git 候选 commit。
-6. Guard 失败或发现无法证明安全的不一致 → manager 通过新的合法事务将 workflow 置 **`HOLD`**，保留证据，向用户报告差异，等待指示；**不擅自猜测或覆盖**。
-7. **绝不因聊天上下文丢失而丢失工作流。**
+5. 运行 `reconcile-dispatch --project-root <project> --runtime-root <runtime> --workflow-id <WF-...>`；对每个未终结 dispatch 先按已记录 session key/ID 查询原会话，补齐 receipt 或 completion，再决定是否置 LOST/重试。
+6. 运行 `recovery-check --project-root <project> --runtime-root <runtime> [--workflow-id <WF-...>]`。未指定 ID 时仅允许恰好一个活动 workflow；该命令执行完整 `check-workflow` 校验，涵盖事务日志、dispatch ledger、事件链、状态机迁移、最新快照、当前与历史任务结果、审批、Gate 与 Git 候选 commit。
+7. Guard 失败或发现无法证明安全的不一致 → manager 通过新的合法事务将 workflow 置 **`HOLD`**，保留证据，向用户报告差异，等待指示；**不擅自猜测或覆盖**。
+8. **绝不因聊天上下文丢失而丢失工作流。**
 
 ## 6. 不可变性与重做
 

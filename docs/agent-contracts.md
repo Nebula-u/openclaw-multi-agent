@@ -68,7 +68,7 @@
 
 ### 6.0 manager-agent
 
-`manager-agent` 不产出 `result.json`，而是维护**控制层文件**（唯一逻辑写入者）：`workflow.json`、`events.jsonl`、`active-workflows.json`、`context-summary.md`、`rules-snapshot.md`、`tasks/`、`task-runs/`、`transactions/`、`decisions`（approval-request/response）、`gates/`（gate-result），以及工作流结束时的 `final-report.md`。它对每个工作 Agent 结果执行 §2/§4 校验与 Gate（见 `manager-orchestration.md`），并对工作 Agent 声明的 JSON / JSONL 输出再次执行 Ajv schema 校验。Runtime Guard 不调度工作 Agent；它按 manager 的显式请求执行 fail-closed 校验，并用 `commit-transition` 原子持久化关键控制快照。终态 workflow 必须有非空 `final-report.md` 且已从 `active-workflows.json` 移除。
+`manager-agent` 不产出 `result.json`，而是维护**控制层文件**（唯一逻辑写入者）：`workflow.json`、`events.jsonl`、`active-workflows.json`、`context-summary.md`、`rules-snapshot.md`、`tasks/`、`task-runs/`、`transactions/`、`dispatch/`、`decisions`（approval-request/response）、`gates/`（gate-result），以及工作流结束时的 `final-report.md`。它对每个工作 Agent 结果执行 §2/§4 校验与 Gate（见 `manager-orchestration.md`），并对工作 Agent 声明的 JSON / JSONL 输出再次执行 Ajv schema 校验。Runtime Guard 不调度工作 Agent；它按 manager 的显式请求执行 fail-closed 校验，用 `commit-transition` 原子持久化关键控制快照，并记录 manager 调用原生 session 工具前后的 dispatch 事实。终态 workflow 必须有非空 `final-report.md` 且已从 `active-workflows.json` 移除。
 
 ### 6.A requirement-agent（§16.A）
 

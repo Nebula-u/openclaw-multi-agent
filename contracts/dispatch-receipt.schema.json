@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://microconnect.local/contracts/dispatch-receipt.schema.json",
+  "title": "Dispatch Receipt",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "record_type", "receipt_id", "dispatch_id",
+    "idempotency_key", "workflow_id", "task_id", "run_id", "agent_id",
+    "attempt", "status", "session_key", "session_id", "lease_deadline",
+    "input_manifest_sha256", "recorded_at"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "record_type": { "const": "DISPATCH_RECEIPT" },
+    "receipt_id": { "type": "string", "pattern": "^DRC-[A-Za-z0-9-]+$" },
+    "dispatch_id": { "type": "string", "pattern": "^DSP-[A-Za-z0-9-]+$" },
+    "idempotency_key": { "type": "string", "minLength": 1 },
+    "workflow_id": { "type": "string", "pattern": "^WF-[A-Za-z0-9-]+$" },
+    "task_id": { "type": "string", "pattern": "^TASK-[A-Za-z0-9-]+$" },
+    "run_id": { "type": "string", "pattern": "^RUN-[A-Za-z0-9-]+$" },
+    "agent_id": { "type": "string", "minLength": 1 },
+    "attempt": { "type": "integer", "minimum": 1 },
+    "status": { "enum": ["SENT", "ACKNOWLEDGED", "RUNNING"] },
+    "session_key": { "type": "string", "minLength": 1 },
+    "session_id": { "type": "string", "minLength": 1 },
+    "lease_deadline": { "type": "string", "format": "date-time" },
+    "input_manifest_sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "recorded_at": { "type": "string", "format": "date-time" }
+  }
+}

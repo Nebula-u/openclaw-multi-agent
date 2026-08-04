@@ -1,0 +1,37 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://microconnect.local/contracts/dispatch-intent.schema.json",
+  "title": "Dispatch Intent",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "record_type", "dispatch_id", "idempotency_key",
+    "workflow_id", "task_id", "run_id", "agent_id", "attempt",
+    "task_file_abs", "input_manifest_path_abs", "input_manifest_sha256",
+    "session_key", "lease_started_at", "lease_deadline", "retry_count",
+    "max_retries", "created_at", "status"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "record_type": { "const": "DISPATCH_INTENT" },
+    "dispatch_id": { "type": "string", "pattern": "^DSP-[A-Za-z0-9-]+$" },
+    "idempotency_key": { "type": "string", "minLength": 1 },
+    "workflow_id": { "type": "string", "pattern": "^WF-[A-Za-z0-9-]+$" },
+    "task_id": { "type": "string", "pattern": "^TASK-[A-Za-z0-9-]+$" },
+    "run_id": { "type": "string", "pattern": "^RUN-[A-Za-z0-9-]+$" },
+    "agent_id": {
+      "enum": ["requirement-agent", "architect-agent", "developer-agent", "review-agent", "test-agent", "release-agent"]
+    },
+    "attempt": { "type": "integer", "minimum": 1 },
+    "task_file_abs": { "type": "string", "minLength": 1 },
+    "input_manifest_path_abs": { "type": "string", "minLength": 1 },
+    "input_manifest_sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "session_key": { "type": "string", "minLength": 1 },
+    "lease_started_at": { "type": "string", "format": "date-time" },
+    "lease_deadline": { "type": "string", "format": "date-time" },
+    "retry_count": { "type": "integer", "minimum": 0 },
+    "max_retries": { "type": "integer", "minimum": 0 },
+    "created_at": { "type": "string", "format": "date-time" },
+    "status": { "const": "PREPARED" }
+  }
+}

@@ -288,6 +288,15 @@ function prepareWorkflowTransition(fixture) {
   };
 }
 
+function prepareDispatchArgs(fixture, task, sessionKey = `session-key:${task.task_id}:${task.run_id}`) {
+  return [
+    'prepare-dispatch', '--project-root', ROOT, '--runtime-root', fixture.runtimeRoot,
+    '--workflow-id', WORKFLOW_ID, '--task-id', task.task_id, '--run-id', task.run_id,
+    '--task-file', join(fixture.workflowDir, 'tasks', `${task.task_id}.json`),
+    '--agent-id', task.assigned_agent, '--attempt', String(task.attempt), '--session-key', sessionKey,
+  ];
+}
+
 function checkTaskPackage(fixture, task) {
   return runGuard([
     'check-task-package',
@@ -1154,6 +1163,126 @@ test('recover-transactions rejects a journal target outside the workflow transac
     assert.equal(recovery.status, 1);
     assert.match(recovery.stdout, /TRANSACTION_JOURNAL_UNSAFE/);
     assert.equal(existsSync(escapedTarget), false);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('dispatch ledger persists intent, session receipts, completion, and validates against the task', () => {
+  const fixture = makeRuntime({ taskIds: [TASK_ID], withCurrentCandidate: true });
+  try {
+    const task = scopedTask(fixture, { status: 'READY' });
+    const prepared = runGuard(prepareDispatchArgs(fixture, task));
+    assert.equal(prepared.status, 0, prepared.stdout || prepared.stderr);
+    const preparedBody = JSON.parse(prepared.stdout);
+    const dispatchId = preparedBody.dispatch_id;
+    const repeated = runGuard(prepareDispatchArgs(fixture, task));
+    assert.equal(repeated.status, 0, repeated.stdout || repeated.stderr);
+    assert.equal(JSON.parse(repeated.stdout).idempotent, true);
+    const receiptBase = [
+      '--project-root', ROOT, '--runtime-root', fixture.runtimeRoot, '--workflow-id', WORKFLOW_ID,
+      '--dispatch-id', dispatchId, '--session-key', preparedBody.intent.session_key, '--session-id', 'session-001',
+    ];
+    for (const status of ['SENT', 'ACKNOWLEDGED', 'RUNNING']) {
+      const receipt = runGuard(['record-dispatch-receipt', ...receiptBase, '--status', status]);
+      assert.equal(receipt.status, 0, receipt.stdout || receipt.stderr);
+    }
+    task.status = 'COMPLETED';
+    task.updated_at = '2026-07-29T00:00:04Z';
+    writeJson(join(fixture.workflowDir, 'tasks', `${task.task_id}.json`), task);
+    writeTaskResult(task);
+    const completion = runGuard([
+      'record-completion-receipt', ...receiptBase, '--status', 'SUCCEEDED',
+      '--result-file', join(task.artifact_root_abs, 'output', 'result.json'),
+    ]);
+    assert.equal(completion.status, 0, completion.stdout || completion.stderr);
+    appendTaskLifecycle(fixture, task);
+    const reconciled = runGuard(['reconcile-dispatch', '--project-root', ROOT, '--runtime-root', fixture.runtimeRoot, '--workflow-id', WORKFLOW_ID, '--dispatch-id', dispatchId]);
+    assert.equal(reconciled.status, 0, reconciled.stdout || reconciled.stderr);
+    assert.equal(JSON.parse(reconciled.stdout).dispatches[0].state, 'SUCCEEDED');
+    const checked = checkWorkflow(fixture);
+    assert.equal(checked.status, 0, checked.stdout || checked.stderr);
+    const receiptsPath = join(fixture.workflowDir, 'dispatch', dispatchId, 'receipts.jsonl');
+    const receipts = readFileSync(receiptsPath, 'utf8').trim().split(/\r?\n/u).map((line) => JSON.parse(line));
+    receipts[1].session_id = 'session-tampered';
+    writeFileSync(receiptsPath, `${receipts.map((receipt) => JSON.stringify(receipt)).join('\n')}\n`, 'utf8');
+    const tampered = checkWorkflow(fixture);
+    assert.equal(tampered.status, 1);
+    assert.match(tampered.stdout, /DISPATCH_SESSION_ID_MISMATCH|DISPATCH_COMPLETION_SESSION_MISMATCH/);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('prepare-dispatch serializes one task/run while allowing a different task', () => {
+  const fixture = makeRuntime({ taskIds: [TASK_ID, TASK_ID_2], withCurrentCandidate: true });
+  try {
+    const firstTask = scopedTask(fixture, { status: 'READY' });
+    const secondTask = scopedTask(fixture, { task_id: TASK_ID_2, run_id: RUN_ID_2, status: 'READY' });
+    const first = runGuard(prepareDispatchArgs(fixture, firstTask));
+    assert.equal(first.status, 0, first.stdout || first.stderr);
+    const second = runGuard(prepareDispatchArgs(fixture, secondTask));
+    assert.equal(second.status, 0, second.stdout || second.stderr);
+    firstTask.attempt = 2;
+    writeJson(join(fixture.workflowDir, 'tasks', `${firstTask.task_id}.json`), firstTask);
+    const conflict = runGuard(prepareDispatchArgs(fixture, firstTask, 'session-key:retry'));
+    assert.equal(conflict.status, 1);
+    assert.match(conflict.stdout, /DISPATCH_SCOPE_CONFLICT/);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('failed dispatch can enter dead letter only after its retry budget is exhausted', () => {
+  const fixture = makeRuntime({ taskIds: [TASK_ID], withCurrentCandidate: true });
+  try {
+    const task = scopedTask(fixture, { status: 'READY', attempt: 2, max_attempts: 2 });
+    const prepared = runGuard([...prepareDispatchArgs(fixture, task), '--retry-count', '1', '--max-retries', '1']);
+    assert.equal(prepared.status, 0, prepared.stdout || prepared.stderr);
+    const body = JSON.parse(prepared.stdout);
+    const common = [
+      '--project-root', ROOT, '--runtime-root', fixture.runtimeRoot, '--workflow-id', WORKFLOW_ID,
+      '--dispatch-id', body.dispatch_id, '--session-key', body.intent.session_key, '--session-id', 'session-lost',
+    ];
+    const sent = runGuard(['record-dispatch-receipt', ...common, '--status', 'SENT']);
+    assert.equal(sent.status, 0, sent.stdout || sent.stderr);
+    const lost = runGuard(['record-completion-receipt', ...common, '--status', 'LOST', '--error-code', 'SESSION_TIMEOUT', '--error-message', 'session lease expired']);
+    assert.equal(lost.status, 0, lost.stdout || lost.stderr);
+    const dead = runGuard([
+      'dead-letter-dispatch', '--project-root', ROOT, '--runtime-root', fixture.runtimeRoot,
+      '--workflow-id', WORKFLOW_ID, '--dispatch-id', body.dispatch_id,
+      '--reason', 'retry budget exhausted', '--last-error', 'SESSION_TIMEOUT',
+    ]);
+    assert.equal(dead.status, 0, dead.stdout || dead.stderr);
+    const reconciled = runGuard(['reconcile-dispatch', '--project-root', ROOT, '--runtime-root', fixture.runtimeRoot, '--workflow-id', WORKFLOW_ID, '--dispatch-id', body.dispatch_id]);
+    assert.equal(JSON.parse(reconciled.stdout).dispatches[0].state, 'DEAD_LETTER');
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('reconcile-dispatch reports an expired lease and requires session lookup before retry', () => {
+  const fixture = makeRuntime({ taskIds: [TASK_ID], withCurrentCandidate: true });
+  try {
+    const task = scopedTask(fixture, { status: 'READY' });
+    const prepared = runGuard(prepareDispatchArgs(fixture, task));
+    assert.equal(prepared.status, 0, prepared.stdout || prepared.stderr);
+    const body = JSON.parse(prepared.stdout);
+    const intentPath = join(fixture.workflowDir, 'dispatch', body.dispatch_id, 'intent.json');
+    const intent = JSON.parse(readFileSync(intentPath, 'utf8'));
+    intent.created_at = '2000-01-01T00:00:00Z';
+    intent.lease_started_at = '2000-01-01T00:00:00Z';
+    intent.lease_deadline = '2000-01-01T00:15:00Z';
+    writeJson(intentPath, intent);
+    const reconciled = runGuard(['reconcile-dispatch', '--project-root', ROOT, '--runtime-root', fixture.runtimeRoot, '--workflow-id', WORKFLOW_ID, '--dispatch-id', body.dispatch_id]);
+    assert.equal(reconciled.status, 0, reconciled.stdout || reconciled.stderr);
+    const dispatch = JSON.parse(reconciled.stdout).dispatches[0];
+    assert.equal(dispatch.lease_expired, true);
+    assert.equal(dispatch.action_required, 'QUERY_SESSION_BEFORE_RETRY');
+    appendTaskLifecycle(fixture, task, 'READY');
+    const checked = checkWorkflow(fixture);
+    assert.equal(checked.status, 1);
+    assert.match(checked.stdout, /DISPATCH_LEASE_EXPIRED/);
   } finally {
     fixture.cleanup();
   }
