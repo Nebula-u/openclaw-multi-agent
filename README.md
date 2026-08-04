@@ -134,6 +134,23 @@ npm test
 npm run test:agent-json:offline
 ```
 
+### 单 Schema 的轻量 Agent 通信测试
+
+`scripts/agent-llm-contract-tests/` 为 `contracts/` 下的每一份 JSON Schema 提供对应入口。脚本只经 OpenClaw Gateway 向已注册 Agent 发送消息，**不直接调用 LLM API、不调用 Agent 工具**；每次运行严格发送 10 次独立请求，并由脚本使用 Runtime Guard + Ajv 校验返回的 JSON/JSONL。
+
+```powershell
+# 测试 developer-agent 返回的 result.json 契约：固定 10 次 Agent 调用
+node scripts/agent-llm-contract-tests/run-result.mjs
+
+# 测试 manager-agent 返回的 workflow 契约：固定 10 次 Agent 调用
+node scripts/agent-llm-contract-tests/run-workflow.mjs
+
+# 通用入口：将 schema 文件名替换为 contracts/ 下的任一 *.schema.json
+npm run agent-contract:test -- --schema result.schema.json
+```
+
+运行结果会写入被 Git 忽略的 `artifacts/agent-llm-contract-tests/<run-id>/<schema>/`。`summary.json` 记录 10 次调用的通过/失败数；`errors.json` 是完整失败包，包含原始 Agent 回复、内容哈希、清洗记录、错误分类和 Ajv 诊断；`failures/call-<n>.json` 则便于逐条检查。错误分类覆盖截断、schema drift、enum/type 违规、JSON 格式错误、空输出、无文本回复和 Agent 通信错误。完整入口清单见 `scripts/agent-llm-contract-tests/README.md`。
+
 全量真实测试通过现有 OpenClaw Gateway 的一个持久客户端连接调用已注册角色：20 个 JSON/JSONL 契约场景各 5 条不同需求，默认独立重复 2 轮（200 次首轮调用）。测试仅评估 Agent 的最终 LLM 回复，不调用 Agent 工具、不要求 Agent 写文件，也不会为每个用例启动 OpenClaw CLI。回复会先保守清洗、再由 Guard 校验；首次调用之外最多进行两次分类重写。每次失败都保留原始回复、清洗元数据、Guard 报告和提示，并由中文 `report.md` 汇总在被 Git 忽略的 `artifacts/agent-llm-json/<run-id>/`。
 
 ```bash

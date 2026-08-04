@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdtempSync, readFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -10,6 +10,7 @@ import { runLlmCase } from '../scripts/agent-json-harness/llm-runner.mjs';
 import { collectLlmRun } from '../scripts/agent-json-harness/collect-llm-failures.mjs';
 import { ingestJsonText } from '../scripts/runtime-core/json-ingestion.mjs';
 import { MAX_REPAIR_RETRIES, buildJsonRepairPrompt, classifyLlmFailure } from '../scripts/agent-json-harness/json-repair-prompts.mjs';
+import { CONTRACT_SCENARIOS, getContractScenario } from '../scripts/agent-llm-contract-tests/contract-scenarios.mjs';
 
 const EXPECTED_SCHEMAS = [
   'acceptance-criteria.schema.json', 'active-workflows.schema.json', 'agent-package.schema.json',
@@ -27,6 +28,16 @@ test('LLM 场景矩阵覆盖每份契约的 5 个不同需求', () => {
     assert.equal(new Set(scenario.cases.map((item) => item.id)).size, 5);
     assert.equal(new Set(scenario.cases.map((item) => item.topic)).size, 5);
     assert.notEqual(scenario.agentId, 'dialogue-agent');
+  }
+});
+
+test('轻量 Agent 契约测试为每个 JSON Schema 定义对应 Agent 与格式', () => {
+  const contractFiles = readdirSync(join(process.cwd(), 'contracts')).filter((name) => name.endsWith('.schema.json')).sort();
+  assert.deepEqual(Object.keys(CONTRACT_SCENARIOS).sort(), contractFiles);
+  for (const schemaFile of contractFiles) {
+    const scenario = getContractScenario(schemaFile);
+    assert.match(scenario.agentId, /-agent$/u);
+    assert.equal(typeof scenario.jsonl, 'boolean');
   }
 });
 

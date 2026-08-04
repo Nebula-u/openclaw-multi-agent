@@ -9,7 +9,8 @@
     "test:agent-json:offline": "node --test tests/agent-llm-json-harness.test.mjs",
     "test:agent-json": "npm run test:agent-json:offline",
     "agent-json:real": "node scripts/agent-json-harness/collect-llm-failures.mjs",
-    "agent-json:collect": "npm run agent-json:real"
+    "agent-json:collect": "npm run agent-json:real",
+    "agent-contract:test": "node scripts/agent-llm-contract-tests/run-contract.mjs"
   },
   "dependencies": {
     "ajv": "^8.17.1",
