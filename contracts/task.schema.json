@@ -12,6 +12,7 @@
   ],
   "properties": {
     "schema_version": { "type": "integer", "minimum": 1 },
+    "output_contract_version": { "type": "integer", "minimum": 1 },
     "workflow_id": { "type": "string", "pattern": "^WF-[A-Za-z0-9][A-Za-z0-9-]*$" },
     "task_id": { "type": "string", "pattern": "^TASK-[A-Za-z0-9][A-Za-z0-9-]*$" },
     "run_id": { "type": "string", "pattern": "^RUN-[A-Za-z0-9][A-Za-z0-9-]*$" },

@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { ingestJsonText } from '../runtime-core/json-ingestion.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 export const PROJECT_ROOT = resolve(HERE, '..', '..');
@@ -32,10 +33,20 @@ export function validateLlmResponse(response, scenario) {
   const directory = mkdtempSync(join(tmpdir(), 'openclaw-llm-json-'));
   const artifact = join(directory, scenario.jsonl ? 'response.jsonl' : 'response.json');
   try {
-    writeFileSync(artifact, response ?? '', 'utf8');
+    let content = response ?? '';
+    let ingestion = null;
+    if (!scenario.jsonl && typeof response === 'string' && response.trim()) {
+      try {
+        ingestion = ingestJsonText(response);
+        content = ingestion.text;
+      } catch {
+        // Preserve raw text: Runtime Guard produces the canonical parse error and failure package.
+      }
+    }
+    writeFileSync(artifact, content, 'utf8');
     const args = ['validate-file', '--schema', join(PROJECT_ROOT, 'contracts', scenario.schemaFile), '--file', artifact];
     if (scenario.jsonl) args.push('--jsonl');
-    return invoke(args);
+    return { ...invoke(args), ingestion: ingestion ? { raw_sha256: ingestion.raw_sha256, transformations: ingestion.transformations } : null };
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }

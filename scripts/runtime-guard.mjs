@@ -36,6 +36,8 @@ import { commitTransaction, recoverTransactions } from './runtime-core/transacti
 import { acquireWorkflowLock } from './runtime-core/workflow-lock.mjs';
 
 const VALIDATOR_NAME = 'ajv';
+const JSONL_MAX_BYTES = 5 * 1024 * 1024;
+const JSONL_MAX_LINE_BYTES = 1024 * 1024;
 const LOG_EXCERPT_LIMIT = 16 * 1024;
 const ZERO_HASH = '0'.repeat(64);
 const VALIDATOR_CACHE = new Map();
@@ -194,9 +196,19 @@ function readJson(path) {
 
 function readJsonLines(path) {
   const text = readFileSync(path, 'utf8');
+  if (Buffer.byteLength(text, 'utf8') > JSONL_MAX_BYTES) {
+    const failure = new Error(`JSONL exceeds ${JSONL_MAX_BYTES} bytes: ${path}`);
+    failure.guardIssue = issue('JSONL_TOTAL_SIZE_EXCEEDED', path, 'JSONL exceeds the total size limit');
+    throw failure;
+  }
   const values = [];
   for (const [index, rawLine] of text.split(/\r?\n/u).entries()) {
     if (!rawLine.trim()) continue;
+    if (Buffer.byteLength(rawLine, 'utf8') > JSONL_MAX_LINE_BYTES) {
+      const failure = new Error(`JSONL line exceeds ${JSONL_MAX_LINE_BYTES} bytes: ${path}:${index + 1}`);
+      failure.guardIssue = issue('JSONL_LINE_SIZE_EXCEEDED', `${path}:${index + 1}`, 'JSONL line exceeds the size limit');
+      throw failure;
+    }
     try {
       values.push({ line: index + 1, value: JSON.parse(rawLine) });
     } catch (error) {
@@ -531,6 +543,19 @@ function validateStructuredOutputs(task, taskFile, projectRoot, errors) {
   const outputRoot = join(task.artifact_root_abs, 'output');
   const contractsRoot = join(projectRoot, 'contracts');
   const seenPaths = new Set();
+  const policy = readJsonForCheck(join(projectRoot, 'config', 'task-output-contracts.json'), errors);
+  if (task.output_contract_version === policy?.schema_version) {
+    const taskPolicy = policy.task_types?.[task.task_type];
+    if (taskPolicy && taskPolicy.agent !== task.assigned_agent) {
+      errors.push(issue('TASK_OUTPUT_CONTRACT_AGENT_MISMATCH', taskFile, 'task type must be assigned to its configured agent'));
+    }
+    for (const required of policy.defaults?.required ?? []) {
+      const expectedPath = join(outputRoot, required.relative_path);
+      const matches = (task.structured_outputs ?? []).some((entry) => entry.path_abs === expectedPath
+        && entry.schema_path_abs === join(contractsRoot, required.schema) && entry.format === required.format && entry.required);
+      if (!matches) errors.push(issue('TASK_OUTPUT_CONTRACT_MISSING', taskFile, `missing required output declaration: ${required.relative_path}`));
+    }
+  }
   for (const entry of task.structured_outputs ?? []) {
     if (entry.producer !== task.assigned_agent) {
       errors.push(issue('STRUCTURED_OUTPUT_PRODUCER_MISMATCH', taskFile, `structured output producer must equal assigned_agent: ${entry.path_abs}`));
@@ -560,9 +585,19 @@ function validateStructuredOutputs(task, taskFile, projectRoot, errors) {
     const records = entry.format === 'jsonl'
       ? readJsonLinesForCheck(entry.path_abs, errors)
       : [{ line: null, value: readJsonForCheck(entry.path_abs, errors) }];
+    if (entry.format === 'jsonl' && records.length === 0) {
+      errors.push(issue('JSONL_EMPTY', entry.path_abs, 'declared JSONL output must contain at least one record'));
+    }
+    const idField = entry.schema_path_abs.endsWith('evidence.schema.json') ? 'evidence_id'
+      : entry.schema_path_abs.endsWith('command-record.schema.json') ? 'command_record_id' : null;
+    const ids = new Set();
     for (const record of records) {
       if (record.value === null) continue;
       addSchemaErrors(errors, record.value, schema, record.line ? `${entry.path_abs}:${record.line}` : entry.path_abs);
+      if (idField && typeof record.value[idField] === 'string') {
+        if (ids.has(record.value[idField])) errors.push(issue('JSONL_DUPLICATE_ID', `${entry.path_abs}:${record.line}`, `${idField} must be unique within JSONL`));
+        ids.add(record.value[idField]);
+      }
     }
   }
 }
@@ -649,6 +684,12 @@ function validateFileCommand(options) {
     emit({ ok: false, command: 'validate-file', file: filePath, validator: VALIDATOR_NAME, errors: [parseIssue] }, 1);
     return;
   }
+  if (options.jsonl && records.length === 0) {
+    errors.push(issue('JSONL_EMPTY', filePath, 'JSONL input must contain at least one record'));
+  }
+  const idField = schemaPath.endsWith('evidence.schema.json') ? 'evidence_id'
+    : schemaPath.endsWith('command-record.schema.json') ? 'command_record_id' : null;
+  const ids = new Set();
   for (const record of records) {
     const recordErrors = validateInstance(record.value, schema, {
       allowPlaceholders: Boolean(options['allow-placeholders']),
@@ -687,6 +728,10 @@ function appendEventCommand(options) {
         error.code === 'WORKFLOW_LOCK_CONFLICT' ? 'events chain is already locked' : error.message,
       );
       throw error;
+    }
+    if (idField && typeof record.value[idField] === 'string') {
+      if (ids.has(record.value[idField])) errors.push(issue('JSONL_DUPLICATE_ID', `${filePath}:${record.line}`, `${idField} must be unique within JSONL`));
+      ids.add(record.value[idField]);
     }
     const existing = existsSync(eventsPath) ? readJsonLines(eventsPath).map((record) => record.value) : [];
     const previous = existing.at(-1) ?? null;

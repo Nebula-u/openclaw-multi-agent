@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "description": "Manager 在创建 task.structured_outputs 前使用的最小契约。额外输出仍必须显式声明并指向 contracts/ 中的 schema。",
+  "defaults": {
+    "required": [
+      { "relative_path": "result.json", "schema": "result.schema.json", "format": "json" },
+      { "relative_path": "evidence.jsonl", "schema": "evidence.schema.json", "format": "jsonl" },
+      { "relative_path": "command-records.jsonl", "schema": "command-record.schema.json", "format": "jsonl" }
+    ]
+  },
+  "task_types": {
+    "REQUIREMENTS": { "agent": "requirement-agent" },
+    "ARCHITECTURE": { "agent": "architect-agent" },
+    "DEVELOPMENT": { "agent": "developer-agent" },
+    "DEVELOPER_REWORK": { "agent": "developer-agent" },
+    "CODE_REVIEW": { "agent": "review-agent" },
+    "TEST_CODE_REVIEW": { "agent": "review-agent" },
+    "TEST_IMPLEMENTATION": { "agent": "test-agent" },
+    "FAILURE_TRIAGE": { "agent": "developer-agent" },
+    "RELEASE_VERIFICATION": { "agent": "release-agent" }
+  }
+}

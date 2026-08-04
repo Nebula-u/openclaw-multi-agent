@@ -38,6 +38,10 @@
 
 所有 JSON / JSONL 产物都必须用 Runtime Guard + Ajv 按对应 `contracts/*.schema.json` 本地强校验。首次失败只允许一次 JSON-only retry，只重新生成失败 JSON / JSONL，不重新完整分析；校验错误写入 `raw-logs/json-validation-errors.jsonl`，记录格式见 `contracts/json-validation-error.schema.json`。
 
+新建任务应设置 `output_contract_version=1`，并按 `config/task-output-contracts.json` 声明 `result.json`、`evidence.jsonl`、`command-records.jsonl`。为兼容历史 run，缺少该字段的旧 task 仅按其已声明契约读取；不得回写或伪造旧 run 的声明。
+
+JSON ingestion 保留原文 SHA-256，只允许两个确定性转换：移除 UTF-8 BOM，或在全文恰好为一个 JSON Markdown fence 时解包。不会自动补字段、修 enum、修改 ID 或篡改业务结论。JSONL 受 5 MiB 总量、1 MiB 单行限制；空 JSONL 与 evidence/command record 重复 ID 均 fail-closed。
+
 ## 4. `result.json` 关键字段（以 contract 为准）
 
 来源 `contracts/result.schema.json`。`required`：

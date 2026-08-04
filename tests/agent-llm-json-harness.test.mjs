@@ -8,6 +8,7 @@ import { LLM_SCENARIOS, buildEmptyLlmRetryPrompt, buildLlmCasePrompt } from '../
 import { textFromMessage } from '../scripts/agent-json-harness/gateway-llm-client.mjs';
 import { runLlmCase } from '../scripts/agent-json-harness/llm-runner.mjs';
 import { collectLlmRun } from '../scripts/agent-json-harness/collect-llm-failures.mjs';
+import { ingestJsonText } from '../scripts/runtime-core/json-ingestion.mjs';
 
 const EXPECTED_SCHEMAS = [
   'acceptance-criteria.schema.json', 'active-workflows.schema.json', 'agent-package.schema.json',
@@ -77,6 +78,13 @@ test('空回复重试提示明确要求 JSON 且禁止空输出', () => {
 test('工具调用没有文本时不被误认为空 LLM 回复', () => {
   assert.equal(textFromMessage({ role: 'assistant', content: [{ type: 'function_call', name: 'read_file', arguments: '{}' }] }), null);
   assert.equal(textFromMessage({ role: 'assistant', content: '' }), '');
+});
+
+test('确定性 ingestion 只剥离 BOM 或完整单 JSON fence，不修复业务字段', () => {
+  const ingested = ingestJsonText('\uFEFF```json\n{"status":"UNKNOWN","id":"A"}\n```');
+  assert.deepEqual(ingested.value, { status: 'UNKNOWN', id: 'A' });
+  assert.deepEqual(ingested.transformations, ['STRIP_UTF8_BOM', 'UNWRAP_SINGLE_JSON_FENCE']);
+  assert.throws(() => ingestJsonText('说明\n```json\n{}\n```'), SyntaxError);
 });
 
 test('收集器只创建一个 Gateway 客户端并打包每个最终失败回复', async () => {
