@@ -108,7 +108,7 @@
 
 - **威胁**：状态被并发写坏、事件链断裂、会话中断导致工作流丢失。
 - **缓解**：
-  - manager-agent 是 `control/workflows`、`active-workflows.json`、任务 `input`、`decisions`、`gates` 的**唯一写入者**。
+  - manager-agent 是 `control/workflows`、`active-workflows.json`、任务 `input`、`decisions`、`gates` 的**唯一逻辑写入者**；关键快照只能由其显式调用 Runtime Guard 事务提交。
   - `events.jsonl` append-only 且 SHA-256 哈希链连续；已完成 run 目录不可变，重做用新 `run_id`。
   - 中断后按恢复算法仅凭文件恢复；不一致则 `HOLD` 并上报（见 `docs/troubleshooting.md` 第 8 节）。
 

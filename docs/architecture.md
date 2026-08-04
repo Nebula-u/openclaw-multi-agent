@@ -55,7 +55,7 @@
 │    control/config-snapshots/                                                │
 │    artifacts/<wf>/<task>/<run>/{input,output,raw-logs,checksums.sha256}     │
 └───────────────┬────────────────────────────────────────────────────────────┘
-                │ Runtime Guard 边界校验（无状态；不调度、不写控制快照）
+                │ Runtime Guard 边界校验与显式事务提交（不调度、不驻留）
                 │ 分支 / worktree / commit / diff（仅本地 Git）
                 ▼
 ┌──────────────────────────────────────────────────────────────────────────┐
@@ -123,7 +123,8 @@ D:\MicroConnect\project\openclaw-multi-agent\runtime\
 ├── agents\<agent-id>\state\       # 即 agentDir
 ├── control\
 │   ├── workflows\<workflow-id>\{workflow.json,user-request.md,context-summary.md,
-│   │                            rules-snapshot.md,events.jsonl,tasks\,decisions\,gates\,final-report.md}
+│   │                            rules-snapshot.md,events.jsonl,tasks\,task-runs\,
+│   │                            transactions\,decisions\,gates\,final-report.md}
 │   ├── active-workflows.json
 │   ├── install-manifest.json      # 记录 runtime_root_abs、package/Agent 绝对路径、配置变更、校验结果
 │   └── config-snapshots\
@@ -131,7 +132,7 @@ D:\MicroConnect\project\openclaw-multi-agent\runtime\
 └── artifacts\<workflow-id>\<task-id>\<run-id>\{input,output,raw-logs,checksums.sha256}
 ```
 
-写入边界：`manager-agent` 是 `control/workflows`、`active-workflows.json`、任务 `input/`、`decisions/`、`gates/` 的**唯一写入者**；工作 Agent 只能写入本次 run 的 `output/`、`raw-logs/` 与被分配的 worktree。Runtime Guard 不是 daemon、dispatcher 或第二控制平面：它不派发任务、不维护状态，也不写控制快照；`append-event` 仅作为 manager 显式调用的原子追加操作写入并 fsync `events.jsonl`，不转移控制文件的写入权。已派发任务的 `input/` 与已完成 run 目录**不可变**；重做必须新建 `run_id` 与新目录，不覆盖旧报告/日志/结果。
+写入边界：`manager-agent` 是 `control/workflows`、`active-workflows.json`、任务 `input/`、`decisions/`、`gates/` 的**唯一逻辑写入者**；工作 Agent 只能写入本次 run 的 `output/`、`raw-logs/` 与被分配的 worktree。Runtime Guard 不是 daemon、dispatcher 或第二控制平面：它只在 manager 显式调用时执行校验或持久化。关键状态变化必须使用 `commit-transition`，由 Guard 在 workflow 锁内以 CAS 和事务日志一次提交 `events.jsonl`、`workflow.json`、`active-workflows.json` 与可选任务指针；`append-event` 仅为旧流程保留兼容。已派发任务的 `input/` 与已完成 run 目录**不可变**；`tasks/<task-id>.json` 只指向当前 run，重做时旧快照归档到 `task-runs/<task-id>/<run-id>.json`，不得覆盖旧报告/日志/结果。
 
 ## 6.1 Runtime Guard 可信边界
 
@@ -139,6 +140,8 @@ D:\MicroConnect\project\openclaw-multi-agent\runtime\
 
 - `validate-file`：用 Ajv 按本地 JSON Schema 校验一个 JSON 或 JSONL 文件，并拒绝未解析的运行时占位符；失败时可通过 `--log-file` 写入 `contracts/json-validation-error.schema.json` 约束的 JSONL 错误日志。
 - `append-event`：为事件草稿补入连续的序号、修订号和哈希后，追加到 JSONL 链。
+- `commit-transition`：校验期望 revision 与全部下一版快照，在 workflow 锁内以事务日志和原子 rename 提交关键状态。
+- `recover-transactions`：按 SHA-256 幂等滚动完成崩溃时遗留的 `PREPARED` / `APPLYING` 事务。
 - `check-workflow`：核对工作流快照、活动索引、事件链、任务/结果、审批、Gate 与候选 Git commit。
 - `self-check`：用 Ajv strict mode 编译 contracts、校验状态机和受映射模板。
 

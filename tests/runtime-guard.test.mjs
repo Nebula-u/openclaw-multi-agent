@@ -6,12 +6,13 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   rmSync,
   renameSync,
   symlinkSync,
   writeFileSync,
 } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { hostname, tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import test from 'node:test';
@@ -36,10 +37,11 @@ const APPROVAL_TRIGGERS = [
   'RELEASE_HOLD_OVERRIDE', 'MAX_REWORK_EXCEEDED', 'DESTRUCTIVE_OR_CROSS_PROJECT',
 ];
 
-function runGuard(args) {
+function runGuard(args, { env = {} } = {}) {
   return spawnSync(process.execPath, [GUARD, ...args], {
     cwd: ROOT,
     encoding: 'utf8',
+    env: { ...process.env, ...env },
   });
 }
 
@@ -226,6 +228,64 @@ function recoveryCheck(fixture, workflowId = null) {
   const args = ['recovery-check', '--project-root', ROOT, '--runtime-root', fixture.runtimeRoot];
   if (workflowId) args.push('--workflow-id', workflowId);
   return runGuard(args);
+}
+
+function prepareWorkflowTransition(fixture) {
+  const eventPath = join(fixture.root, 'transition-event.json');
+  const workflowPath = join(fixture.root, 'next-workflow.json');
+  const activePath = join(fixture.root, 'next-active.json');
+  const timestamp = '2026-07-29T00:00:01Z';
+  const nextWorkflow = {
+    ...fixture.workflow,
+    status: 'ANALYZING_REQUIREMENTS',
+    status_reason: 'requirements analysis started',
+    current_phase: 'REQUIREMENTS',
+    state_revision: 2,
+    updated_at: timestamp,
+  };
+  const nextActive = JSON.parse(readFileSync(join(fixture.runtimeRoot, 'control', 'active-workflows.json'), 'utf8'));
+  Object.assign(nextActive.workflows[0], {
+    status: nextWorkflow.status,
+    current_phase: nextWorkflow.current_phase,
+    current_candidate_commit: nextWorkflow.current_candidate_commit,
+    state_revision: nextWorkflow.state_revision,
+    updated_at: nextWorkflow.updated_at,
+  });
+  writeJson(eventPath, {
+    event_id: 'EVT-00000000-0000-0000-0000-000000000002',
+    timestamp,
+    workflow_id: WORKFLOW_ID,
+    task_id: null,
+    run_id: null,
+    actor: 'manager-agent',
+    event_type: 'PHASE_ADVANCED',
+    from_status: 'CREATED',
+    to_status: nextWorkflow.status,
+    from_phase: 'INTAKE',
+    to_phase: nextWorkflow.current_phase,
+    task_status_before: null,
+    task_status_after: null,
+    candidate_commit: null,
+    payload: {},
+  });
+  writeJson(workflowPath, nextWorkflow);
+  writeJson(activePath, nextActive);
+  return {
+    eventPath,
+    workflowPath,
+    activePath,
+    nextWorkflow,
+    args: [
+      'commit-transition',
+      '--project-root', ROOT,
+      '--runtime-root', fixture.runtimeRoot,
+      '--workflow-id', WORKFLOW_ID,
+      '--event', eventPath,
+      '--next-workflow', workflowPath,
+      '--next-active', activePath,
+      '--expected-revision', '1',
+    ],
+  };
 }
 
 function checkTaskPackage(fixture, task) {
@@ -911,6 +971,189 @@ test('append-event creates a deterministic first hash', () => {
     assert.equal(event.state_revision, 1);
     assert.equal(event.previous_event_hash, ZERO_HASH);
     assert.equal(event.event_hash, FIRST_EVENT_HASH);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('check-workflow accepts a historical artifact run with an immutable task-run archive', () => {
+  const fixture = makeRuntime({ taskIds: [TASK_ID], withCurrentCandidate: true });
+  try {
+    const historicalTask = scopedTask(fixture, { run_id: RUN_ID_2 });
+    writeTaskResult(historicalTask);
+    writeJson(join(fixture.workflowDir, 'task-runs', TASK_ID, `${RUN_ID_2}.json`), {
+      schema_version: 1,
+      workflow_id: WORKFLOW_ID,
+      task_id: TASK_ID,
+      run_id: RUN_ID_2,
+      archived_at: '2026-07-29T00:00:01Z',
+      archived_state_revision: 1,
+      task_snapshot_sha256: createHash('sha256').update(JSON.stringify(canonicalizeCodePoints(historicalTask)), 'utf8').digest('hex'),
+      task_snapshot: historicalTask,
+    });
+    const currentTask = scopedTask(fixture);
+    appendTaskLifecycle(fixture, currentTask);
+    writeTaskResult(currentTask);
+    const result = checkWorkflow(fixture);
+    assert.equal(result.status, 0, result.stdout || result.stderr);
+    assert.doesNotMatch(result.stdout, /ORPHAN_ARTIFACT_RUN/);
+  } finally { fixture.cleanup(); }
+});
+
+test('commit-transition atomically advances event, workflow, and active snapshots', () => {
+  const fixture = makeRuntime();
+  try {
+    const transition = prepareWorkflowTransition(fixture);
+    const result = runGuard(transition.args);
+    assert.equal(result.status, 0, result.stdout || result.stderr);
+    const response = JSON.parse(result.stdout);
+    assert.match(response.transaction_id, /^TXN-/u);
+    assert.equal(response.state_revision, 2);
+    const workflow = JSON.parse(readFileSync(join(fixture.workflowDir, 'workflow.json'), 'utf8'));
+    const active = JSON.parse(readFileSync(join(fixture.runtimeRoot, 'control', 'active-workflows.json'), 'utf8'));
+    const events = readFileSync(join(fixture.workflowDir, 'events.jsonl'), 'utf8').trim().split(/\r?\n/u).map((line) => JSON.parse(line));
+    assert.equal(workflow.state_revision, 2);
+    assert.equal(active.workflows[0].state_revision, 2);
+    assert.equal(events.length, 2);
+    assert.equal(events[1].event_hash, response.event.event_hash);
+    const journal = JSON.parse(readFileSync(join(fixture.workflowDir, 'transactions', response.transaction_id, 'transaction.json'), 'utf8'));
+    assert.equal(journal.status, 'COMMITTED');
+    assert.ok(journal.operations.every((operation) => operation.applied));
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('commit-transition archives a superseded run before moving the task pointer', () => {
+  const fixture = makeRuntime({ taskIds: [TASK_ID], withCurrentCandidate: true });
+  try {
+    const oldTask = scopedTask(fixture, { status: 'FAILED' });
+    const nextTask = scopedTask(fixture, { run_id: RUN_ID_2, status: 'READY', attempt: 2 });
+    writeJson(join(fixture.workflowDir, 'tasks', `${TASK_ID}.json`), oldTask);
+    const nextTaskDraft = join(fixture.root, 'next-task.json');
+    writeJson(nextTaskDraft, nextTask);
+    const timestamp = '2026-07-29T00:00:01Z';
+    const nextWorkflow = { ...fixture.workflow, state_revision: 2, updated_at: timestamp };
+    const nextWorkflowDraft = join(fixture.root, 'next-workflow-task.json');
+    writeJson(nextWorkflowDraft, nextWorkflow);
+    const nextActive = JSON.parse(readFileSync(join(fixture.runtimeRoot, 'control', 'active-workflows.json'), 'utf8'));
+    nextActive.workflows[0].state_revision = 2;
+    nextActive.workflows[0].updated_at = timestamp;
+    const nextActiveDraft = join(fixture.root, 'next-active-task.json');
+    writeJson(nextActiveDraft, nextActive);
+    const eventDraft = join(fixture.root, 'next-task-event.json');
+    writeJson(eventDraft, {
+      event_id: 'EVT-00000000-0000-0000-0000-000000000002', timestamp,
+      workflow_id: WORKFLOW_ID, task_id: TASK_ID, run_id: RUN_ID_2,
+      actor: 'manager-agent', event_type: 'TASK_READY',
+      from_status: 'CREATED', to_status: 'CREATED', from_phase: 'INTAKE', to_phase: 'INTAKE',
+      task_status_before: 'CREATED', task_status_after: 'READY', candidate_commit: fixture.currentCandidateCommit, payload: {},
+    });
+    const result = runGuard([
+      'commit-transition', '--project-root', ROOT, '--runtime-root', fixture.runtimeRoot,
+      '--workflow-id', WORKFLOW_ID, '--event', eventDraft,
+      '--next-workflow', nextWorkflowDraft, '--next-active', nextActiveDraft,
+      '--next-task', nextTaskDraft, '--expected-revision', '1',
+    ]);
+    assert.equal(result.status, 0, result.stdout || result.stderr);
+    const current = JSON.parse(readFileSync(join(fixture.workflowDir, 'tasks', `${TASK_ID}.json`), 'utf8'));
+    const archived = JSON.parse(readFileSync(join(fixture.workflowDir, 'task-runs', TASK_ID, `${RUN_ID}.json`), 'utf8'));
+    assert.equal(current.run_id, RUN_ID_2);
+    assert.equal(archived.task_snapshot.run_id, RUN_ID);
+    assert.equal(archived.task_snapshot.status, 'FAILED');
+    const checked = checkWorkflow(fixture);
+    assert.equal(checked.status, 0, checked.stdout || checked.stderr);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('commit-transition rejects stale state_revision without changing control files', () => {
+  const fixture = makeRuntime();
+  try {
+    const transition = prepareWorkflowTransition(fixture);
+    const beforeWorkflow = readFileSync(join(fixture.workflowDir, 'workflow.json'), 'utf8');
+    const beforeEvents = readFileSync(join(fixture.workflowDir, 'events.jsonl'), 'utf8');
+    const staleArgs = [...transition.args];
+    staleArgs[staleArgs.indexOf('--expected-revision') + 1] = '0';
+    const result = runGuard(staleArgs);
+    assert.equal(result.status, 1);
+    assert.match(result.stdout, /STATE_REVISION_CONFLICT/);
+    assert.equal(readFileSync(join(fixture.workflowDir, 'workflow.json'), 'utf8'), beforeWorkflow);
+    assert.equal(readFileSync(join(fixture.workflowDir, 'events.jsonl'), 'utf8'), beforeEvents);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('commit-transition reports malformed next snapshots without a usage error', () => {
+  const fixture = makeRuntime();
+  try {
+    const transition = prepareWorkflowTransition(fixture);
+    const malformed = JSON.parse(readFileSync(transition.workflowPath, 'utf8'));
+    delete malformed.task_ids;
+    writeJson(transition.workflowPath, malformed);
+    const result = runGuard(transition.args);
+    assert.equal(result.status, 1);
+    assert.match(result.stdout, /SCHEMA_REQUIRED/);
+    assert.doesNotMatch(result.stdout, /GUARD_USAGE_ERROR/);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+for (const crashPoint of [
+  'after-prepared',
+  'after-applying',
+  'after-operation:event-chain',
+  'after-operation:workflow',
+  'after-operation:active-index',
+  'after-committed',
+]) {
+  test(`recover-transactions rolls forward a crash at ${crashPoint}`, () => {
+    const fixture = makeRuntime();
+    try {
+      const transition = prepareWorkflowTransition(fixture);
+      const crashed = runGuard(transition.args, { env: { RUNTIME_GUARD_TEST_CRASH_AFTER: crashPoint } });
+      assert.equal(crashed.status, 86, crashed.stdout || crashed.stderr);
+      const recovery = runGuard([
+        'recover-transactions',
+        '--runtime-root', fixture.runtimeRoot,
+        '--workflow-id', WORKFLOW_ID,
+      ]);
+      assert.equal(recovery.status, 0, recovery.stdout || recovery.stderr);
+      const workflow = JSON.parse(readFileSync(join(fixture.workflowDir, 'workflow.json'), 'utf8'));
+      const active = JSON.parse(readFileSync(join(fixture.runtimeRoot, 'control', 'active-workflows.json'), 'utf8'));
+      const events = readFileSync(join(fixture.workflowDir, 'events.jsonl'), 'utf8').trim().split(/\r?\n/u).map((line) => JSON.parse(line));
+      assert.equal(workflow.state_revision, 2);
+      assert.equal(active.workflows[0].state_revision, 2);
+      assert.equal(events.length, 2);
+      const transactionDirs = readdirSync(join(fixture.workflowDir, 'transactions'));
+      assert.equal(transactionDirs.length, 1);
+      const journal = JSON.parse(readFileSync(join(fixture.workflowDir, 'transactions', transactionDirs[0], 'transaction.json'), 'utf8'));
+      assert.equal(journal.status, 'COMMITTED');
+    } finally {
+      fixture.cleanup();
+    }
+  });
+}
+
+test('recover-transactions rejects a journal target outside the workflow transaction boundary', () => {
+  const fixture = makeRuntime();
+  try {
+    const transition = prepareWorkflowTransition(fixture);
+    const crashed = runGuard(transition.args, { env: { RUNTIME_GUARD_TEST_CRASH_AFTER: 'after-prepared' } });
+    assert.equal(crashed.status, 86, crashed.stdout || crashed.stderr);
+    const transactionId = readdirSync(join(fixture.workflowDir, 'transactions'))[0];
+    const journalPath = join(fixture.workflowDir, 'transactions', transactionId, 'transaction.json');
+    const journal = JSON.parse(readFileSync(journalPath, 'utf8'));
+    const escapedTarget = join(fixture.root, 'escaped-control.json');
+    journal.operations[0].target_path_abs = escapedTarget;
+    writeJson(journalPath, journal);
+    const recovery = runGuard(['recover-transactions', '--runtime-root', fixture.runtimeRoot, '--workflow-id', WORKFLOW_ID]);
+    assert.equal(recovery.status, 1);
+    assert.match(recovery.stdout, /TRANSACTION_JOURNAL_UNSAFE/);
+    assert.equal(existsSync(escapedTarget), false);
   } finally {
     fixture.cleanup();
   }
@@ -1675,6 +1918,28 @@ test('check-workflow rejects duplicate event ids', () => {
     const result = checkWorkflow(fixture);
     assert.equal(result.status, 1);
     assert.match(result.stdout, /DUPLICATE_EVENT_ID/);
+  } finally { fixture.cleanup(); }
+});
+
+test('append-event recovers a lock owned by a dead local process', () => {
+  const fixture = makeRuntime();
+  try {
+    const eventsPath = join(fixture.workflowDir, 'events.jsonl');
+    writeJson(`${eventsPath}.lock`, {
+      schema_version: 1,
+      nonce: '00000000-0000-4000-8000-000000000001',
+      pid: 2147483647,
+      hostname: hostname(),
+      purpose: 'append-event',
+      acquired_at: new Date().toISOString(),
+      expires_at: new Date(Date.now() + 120000).toISOString(),
+    });
+    const draftPath = join(fixture.root, 'draft.json');
+    writeJson(draftPath, { event_id: 'EVT-00000000-0000-0000-0000-000000000002', timestamp: '2026-07-29T00:00:01Z', workflow_id: WORKFLOW_ID, task_id: null, run_id: null, actor: 'manager-agent', event_type: 'PHASE_ADVANCED', from_status: 'CREATED', to_status: 'ANALYZING_REQUIREMENTS', from_phase: 'INTAKE', to_phase: 'REQUIREMENTS', task_status_before: null, task_status_after: null, candidate_commit: null, payload: {} });
+    const result = runGuard(['append-event', '--project-root', ROOT, '--events', eventsPath, '--event', draftPath]);
+    assert.equal(result.status, 0, result.stdout || result.stderr);
+    assert.equal(existsSync(`${eventsPath}.lock`), false);
+    assert.ok(readdirSync(fixture.workflowDir).some((name) => name.startsWith('events.jsonl.lock.stale-')));
   } finally { fixture.cleanup(); }
 });
 

@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://microconnect.local/contracts/task-run.schema.json",
+  "title": "Immutable Task Run Archive",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "workflow_id",
+    "task_id",
+    "run_id",
+    "archived_at",
+    "archived_state_revision",
+    "task_snapshot_sha256",
+    "task_snapshot"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "workflow_id": { "type": "string", "pattern": "^WF-[A-Za-z0-9-]+$" },
+    "task_id": { "type": "string", "pattern": "^TASK-[A-Za-z0-9-]+$" },
+    "run_id": { "type": "string", "pattern": "^RUN-[A-Za-z0-9-]+$" },
+    "archived_at": { "type": "string", "format": "date-time" },
+    "archived_state_revision": { "type": "integer", "minimum": 1 },
+    "task_snapshot_sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "task_snapshot": { "type": "object" }
+  }
+}

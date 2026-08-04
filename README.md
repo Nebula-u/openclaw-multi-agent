@@ -40,7 +40,7 @@
 
 ## Runtime Guard
 
-仓库提供无状态的 Node.js Runtime Guard，用于在工作流边界验证文件、事件链与快照一致性。它不派发任务、不作为 daemon 运行，也不写 workflow 或 active-workflows 快照；`manager-agent` 仍是唯一编排者和控制文件写入者。
+仓库提供按需调用的 Node.js Runtime Guard，用于在工作流边界验证文件、事件链与快照一致性。它不派发任务、不作为 daemon 运行；`manager-agent` 仍是唯一编排者，并通过 Guard 的事务命令提交关键控制文件，避免事件、workflow、active index 与任务指针分步写入后失同步。
 
 首次使用前安装 Runtime Guard 依赖：
 
@@ -66,6 +66,22 @@ node scripts/runtime-guard.mjs check-task-package \
   --task-id TASK-<uuid> \
   --task-file /abs/path/openclaw-runtime/control/workflows/WF-<uuid>/tasks/TASK-<uuid>.json
 
+# 用 CAS + 事务日志一次提交事件、workflow、active index，并可选提交任务指针
+node scripts/runtime-guard.mjs commit-transition \
+  --project-root /abs/path/openclaw-sdlc-multi-agent \
+  --runtime-root /abs/path/openclaw-runtime \
+  --workflow-id WF-<uuid> \
+  --expected-revision 7 \
+  --event /abs/path/event-draft.json \
+  --next-workflow /abs/path/next-workflow.json \
+  --next-active /abs/path/next-active-workflows.json \
+  [--next-task /abs/path/next-task.json]
+
+# 崩溃后显式滚动完成 PREPARED / APPLYING 事务
+node scripts/runtime-guard.mjs recover-transactions \
+  --runtime-root /abs/path/openclaw-runtime \
+  --workflow-id WF-<uuid>
+
 # 恢复入口：未指定 workflow ID 时仅允许恰好一个活动工作流
 node scripts/runtime-guard.mjs recovery-check \
   --project-root /abs/path/openclaw-sdlc-multi-agent \
@@ -73,7 +89,7 @@ node scripts/runtime-guard.mjs recovery-check \
   [--workflow-id WF-<uuid>]
 ```
 
-Guard 使用 Ajv / ajv-formats 作为本地 JSON Schema validator。Guard 失败会以非零退出码和 `effective_status=HOLD` 阻止推进。它校验控制任务与 canonical artifact task/run 一一对应、任务依赖与最大尝试次数、完成任务的 `user-summary.md` / `manager-summary.md`、上下文 manifest 绑定与逐文件 SHA-256、`rules.md` 哈希，以及 workflow 的规则/上下文快照哈希。事件链使用 JSONL、按 Unicode 码点（含数字形态键）递归排序的 canonical JSON 与 SHA-256；非终态快照与活动索引一致，终态则要求 0 条活动记录和非空 `final-report.md`。每个 intake 与已派发任务还必须完成 15 项审批 trigger 评估；ArchitectureGate PASS 必须引用该阶段所有命中的已批准 decision。Review/Security Gate 的 PASS 需要能绑定 current candidate 的 `review-agent` 证据；旧 candidate 的 finding 只保留为历史。ReleaseReadinessGate 仍按 task/run 绑定 decision，但历史 release gate 只做自身内部一致性校验；release 终态必须恰好有一个 current candidate 的最新 release task/run gate，并只由它参与终态映射。
+Guard 使用 Ajv / ajv-formats 作为本地 JSON Schema validator。Guard 失败会以非零退出码和 `effective_status=HOLD` 阻止推进。关键状态提交使用 workflow 级所有者锁、`state_revision` CAS、`PREPARED → APPLYING → COMMITTED` 事务日志、fsync 与同目录原子 rename；进程崩溃后按内容哈希幂等滚动完成，死亡进程遗留锁可安全回收。`tasks/<task-id>.json` 是当前 run 指针，旧 run 固化到 `task-runs/<task-id>/<run-id>.json`，因此历史 artifact 不再被误判为 orphan。Guard 还校验任务依赖与最大尝试次数、完成任务的 `user-summary.md` / `manager-summary.md`、上下文 manifest 绑定与逐文件 SHA-256、`rules.md` 哈希，以及 workflow 的规则/上下文快照哈希。事件链使用 JSONL、按 Unicode 码点（含数字形态键）递归排序的 canonical JSON 与 SHA-256；非终态快照与活动索引一致，终态则要求 0 条活动记录和非空 `final-report.md`。每个 intake 与已派发任务还必须完成 15 项审批 trigger 评估；ArchitectureGate PASS 必须引用该阶段所有命中的已批准 decision。Review/Security Gate 的 PASS 需要能绑定 current candidate 的 `review-agent` 证据；旧 candidate 的 finding 只保留为历史。ReleaseReadinessGate 仍按 task/run 绑定 decision，但历史 release gate 只做自身内部一致性校验；release 终态必须恰好有一个 current candidate 的最新 release task/run gate，并只由它参与终态映射。
 
 `check-task-package` 是派发前必经检查：它要求完整 input package、canonical artifact/worktree 路径与 manifest SHA-256 均正确，才允许写入派发事件。每份任务还必须在 `structured_outputs[]` 声明跨 Agent JSON/JSONL 的路径、受信任 Schema、格式和产出者；完成任务时 Guard 再次校验这些文件。`QUARANTINED` 是不可恢复的审计终态，必须保留 `quarantine-report.md` 和 `final-report.md`，且不得重写历史 input、event 或 artifact。
 

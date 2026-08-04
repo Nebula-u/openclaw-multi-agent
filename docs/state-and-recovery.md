@@ -5,7 +5,7 @@
 
 ## 1. 本文用途
 
-本文说明新架构的**文件化状态模型**（取代旧架构的 Python `state_store` / recovery 服务）与**恢复规则**：状态完全落在文件上，`manager-agent` 是控制层文件的唯一写入者；`manager-agent` 或 Gateway 会话中断后，新的 `manager-agent` 会话必须能**仅凭文件恢复**。Runtime Guard 只校验或追加事件，不维护快照、不调度任务。聊天记录**不是**唯一状态源。
+本文说明新架构的**文件化状态模型**（取代旧架构的 Python `state_store` / recovery 服务）与**恢复规则**：状态完全落在文件上，`manager-agent` 是控制层文件的唯一逻辑写入者；关键快照由 manager 显式调用 Runtime Guard 事务提交。`manager-agent` 或 Gateway 会话中断后，新的 `manager-agent` 会话必须能**仅凭文件恢复**。聊天记录**不是**唯一状态源。
 
 ## 2. 唯一事实来源
 
@@ -31,7 +31,9 @@
     ├── context-summary.md        # 逐阶段裁剪后的上下文摘要
     ├── rules-snapshot.md         # 固化规则版本与哈希
     ├── events.jsonl              # append-only 事件哈希链（SHA-256）
-    ├── tasks\<task-id>.json
+    ├── tasks\<task-id>.json      # 当前 run 指针
+    ├── task-runs\<task-id>\<run-id>.json  # 不可变历史 run 快照
+    ├── transactions\TXN-*\transaction.json # 状态提交事务日志
     ├── decisions\<dec-id>.request.json / <dec-id>.response.json
     ├── gates\<phase>-<n>.json
     └── final-report.md
@@ -47,7 +49,7 @@
 
 ### 3.3 `events.jsonl`（append-only 哈希链，SHA-256）
 
-`events.jsonl` 是 JSONL 的 append-only 哈希链。manager 每次状态变化创建事件草稿；`append-event` 写入 `schema_version=1`、连续的 `seq` 和 `state_revision`、前一行的 `previous_event_hash`（首行是 64 个 `0`），并在 fsync 后追加，既有行永不改写。每条事件还含 `event_id`、`timestamp`、`workflow_id`、`task_id`、`run_id`、`actor`、`event_type`、状态/阶段前后值、候选 commit、`payload` 与 `event_hash`。
+`events.jsonl` 是逻辑 append-only 的 JSONL 哈希链。manager 每次状态变化创建事件草稿；常规流程由 `commit-transition` 写入 `schema_version=1`、连续的 `seq` 和 `state_revision`、前一行的 `previous_event_hash`（首行是 64 个 `0`），并与其余快照一起原子提交。兼容命令 `append-event` 仍可只追加并 fsync 事件，但不能用于需要同步更新快照的新流程。既有事件内容永不改写。每条事件还含 `event_id`、`timestamp`、`workflow_id`、`task_id`、`run_id`、`actor`、`event_type`、状态/阶段前后值、候选 commit、`payload` 与 `event_hash`。
 
 哈希规则：移除 `event_hash` 后，递归按 Unicode 码点排序 JSON 对象键（数组顺序不变），直接序列化排序后的键值对，将 canonical JSON 用 UTF-8 编码并计算 SHA-256。数字形态的键仍按字符串排序，例如 `"10"` 必须位于 `"2"` 之前，且嵌套对象遵守同一规则；不得先构造普通 JavaScript 对象再依赖 `JSON.stringify` 的整数键重排。`previous_event_hash → event_hash` 形成连续链；第 *n* 条的 `seq` 和 `state_revision` 均为 *n*。最新事件的 `to_status`、`to_phase`、`candidate_commit` 与 `state_revision` 必须分别等于 `workflow.json` 的 `status`、`current_phase`、`current_candidate_commit` 与 `state_revision`；非终态的 `active-workflows.json` 同名快照字段再与 workflow 一致。
 
@@ -57,6 +59,12 @@
 - `rules-snapshot.md`：固化当前规则版本与哈希；改规则须新建快照，不改已派发 input（见 `context-and-rule-passing.md`）。
 - `decisions/`：`approval-request.schema.json` / `approval-response.schema.json` 文件。
 - `gates/`：`gate-result.schema.json` 文件。
+
+### 3.5 原子状态事务与 run 历史
+
+关键状态变化使用 `commit-transition`，不能再先追加事件、再分别覆盖 workflow/active/task。命令先取得带 `nonce`、PID、主机名与时间戳的 workflow 锁，对当前 `state_revision` 执行 CAS，再将完整事件链、下一版 workflow、下一版 active index 与可选任务指针写入 staging 文件并 fsync。`transactions/TXN-*/transaction.json` 记录 `PREPARED → APPLYING → COMMITTED`；每个目标通过同目录原子 rename 应用，进程在任一步崩溃后都可由 `recover-transactions` 按 SHA-256 幂等滚动完成。锁属于已死亡的本机 PID 或超过租期时会先保留 stale 副本再回收，活跃锁冲突则 fail-closed。
+
+`tasks/<task-id>.json` 只代表该任务当前 run。切换 `run_id` 前，旧指针按 `contracts/task-run.schema.json` 固化到 `task-runs/<task-id>/<run-id>.json`；终态 run 也固化一次。历史 archive 与 artifact 共同接受 Guard 校验，已有 archive 不允许以不同内容覆盖。
 
 ## 4. ID 规范
 
@@ -77,9 +85,10 @@ WF-<UUID> · TASK-<UUID> · RUN-<UUID> · DEC-<UUID> · FIND-<UUID> · EVD-<UUID
 1. 读 `<runtime_root_abs>\control\active-workflows.json`。
 2. **恰好一个**活动 workflow → 读其 `workflow.json`、`events.jsonl`、`context-summary.md`、未决 `decisions/`、Git 状态后恢复。
 3. **多个**活动 workflow → **让用户选择**，不擅自挑选。
-4. 运行 `recovery-check --project-root <project> --runtime-root <runtime> [--workflow-id <WF-...>]`。未指定 ID 时仅允许恰好一个活动 workflow；该命令执行完整 `check-workflow` 校验，涵盖事件链、状态机迁移、最新快照、任务/结果、审批、Gate 与 Git 候选 commit。
-5. Guard 失败或发现不一致 → manager 将 workflow 按合法迁移置 **`HOLD`**（Guard 本身不写快照），保留证据，向用户报告差异，等待指示；**不擅自修复**。
-6. **绝不因聊天上下文丢失而丢失工作流。**
+4. 对选定 workflow 先运行 `recover-transactions --runtime-root <runtime> --workflow-id <WF-...>`；只允许按日志和哈希滚动完成，不猜测业务状态。
+5. 运行 `recovery-check --project-root <project> --runtime-root <runtime> [--workflow-id <WF-...>]`。未指定 ID 时仅允许恰好一个活动 workflow；该命令执行完整 `check-workflow` 校验，涵盖事务日志、事件链、状态机迁移、最新快照、当前与历史任务结果、审批、Gate 与 Git 候选 commit。
+6. Guard 失败或发现无法证明安全的不一致 → manager 通过新的合法事务将 workflow 置 **`HOLD`**，保留证据，向用户报告差异，等待指示；**不擅自猜测或覆盖**。
+7. **绝不因聊天上下文丢失而丢失工作流。**
 
 ## 6. 不可变性与重做
 

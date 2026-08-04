@@ -5,7 +5,7 @@
 
 ## 1. 本文用途
 
-本文说明标准 SDLC 主流程的 **13 个阶段**（每阶段职责与产出），并列出**任务状态机**与**工作流状态机**的**全部枚举值**。状态枚举、合法迁移和阶段—状态约束以 `config/workflow-state-machine.json` 为准，contracts 约束快照字段。主流程由 `manager-agent` 驱动；Runtime Guard 只在边界 fail-closed 校验，不编排也不写控制快照。
+本文说明标准 SDLC 主流程的 **13 个阶段**（每阶段职责与产出），并列出**任务状态机**与**工作流状态机**的**全部枚举值**。状态枚举、合法迁移和阶段—状态约束以 `config/workflow-state-machine.json` 为准，contracts 约束快照字段。主流程由 `manager-agent` 驱动；Runtime Guard 不编排任务，在边界执行 fail-closed 校验，并仅按 manager 的显式调用原子提交关键控制快照。
 
 ## 2. 13 阶段主流程
 

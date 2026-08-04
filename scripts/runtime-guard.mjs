@@ -15,12 +15,16 @@ import {
   readFileSync,
   readdirSync,
   realpathSync,
-  unlinkSync,
 } from 'node:fs';
 import { isAbsolute, join, resolve, sep } from 'node:path';
+import { serializeJson } from './runtime-core/atomic-store.mjs';
+import { createTaskRunArchive, taskRunArchivePath } from './runtime-core/task-run-store.mjs';
+import { commitTransaction, recoverTransactions } from './runtime-core/transaction-store.mjs';
+import { acquireWorkflowLock } from './runtime-core/workflow-lock.mjs';
 
 const VALIDATOR_NAME = 'ajv';
 const LOG_EXCERPT_LIMIT = 16 * 1024;
+const ZERO_HASH = '0'.repeat(64);
 const VALIDATOR_CACHE = new Map();
 const APPROVAL_TRIGGERS = [
   'REQUIREMENT_AMBIGUITY', 'IMPLEMENTATION_TRADEOFF', 'PUBLIC_API_BREAKING_CHANGE',
@@ -80,6 +84,10 @@ function parseArgs(argv) {
       'agent-id',
       'task-id',
       'task-file',
+      'next-workflow',
+      'next-active',
+      'next-task',
+      'expected-revision',
       'run-id',
       'attempt',
       'retry-count',
@@ -644,13 +652,15 @@ function appendEventCommand(options) {
   const machine = readJson(join(projectRoot, 'config', 'workflow-state-machine.json'));
   const lockPath = `${eventsPath}.lock`;
   let lock;
-  let acquired = false;
   try {
     try {
-      lock = openSync(lockPath, 'wx');
-      acquired = true;
+      lock = acquireWorkflowLock(lockPath, { purpose: 'append-event' });
     } catch (error) {
-      error.guardIssue = issue('EVENT_LOCK_CONFLICT', lockPath, 'events chain is already locked');
+      error.guardIssue = issue(
+        error.code === 'WORKFLOW_LOCK_CONFLICT' ? 'EVENT_LOCK_CONFLICT' : 'EVENT_LOCK_ERROR',
+        lockPath,
+        error.code === 'WORKFLOW_LOCK_CONFLICT' ? 'events chain is already locked' : error.message,
+      );
       throw error;
     }
     const existing = existsSync(eventsPath) ? readJsonLines(eventsPath).map((record) => record.value) : [];
@@ -687,8 +697,312 @@ function appendEventCommand(options) {
     }
     emit({ ok: true, command: 'append-event', event });
   } finally {
-    if (lock !== undefined) closeSync(lock);
-    if (acquired && existsSync(lockPath)) unlinkSync(lockPath);
+    lock?.release();
+  }
+}
+
+function parseRevisionOption(options, name = 'expected-revision') {
+  const raw = options[name];
+  if (raw === undefined) return null;
+  if (!/^\d+$/u.test(String(raw))) throw new Error(`--${name} must be a non-negative integer`);
+  return Number(raw);
+}
+
+function transactionError(code, path, message) {
+  const error = new Error(message);
+  error.guardIssue = issue(code, path, message);
+  return error;
+}
+
+function transactionPath(workflowDir, fileName) {
+  return join(workflowDir, fileName);
+}
+
+function safeReadJson(path, label) {
+  try {
+    return readJson(path);
+  } catch (error) {
+    throw transactionError('TRANSACTION_INPUT_INVALID', path, `${label}: ${error.message}`);
+  }
+}
+
+function eventChainText(events) {
+  return `${events.map((event) => JSON.stringify(event)).join('\n')}\n`;
+}
+
+function validateActiveSnapshotForTransition(active, workflow, workflowPath, activePath, machine, errors) {
+  const activeEntries = (active.workflows ?? []).filter((entry) => entry.workflow_id === workflow.workflow_id);
+  const terminal = new Set(machine.workflow?.terminal_statuses ?? []).has(workflow.status);
+  if (terminal && activeEntries.length !== 0) {
+    errors.push(issue('TERMINAL_ACTIVE_WORKFLOW_ENTRY', activePath, 'terminal workflow must have zero active entries'));
+  } else if (!terminal && activeEntries.length !== 1) {
+    errors.push(issue('ACTIVE_WORKFLOW_ENTRY_COUNT', activePath, 'nonterminal workflow requires one active entry'));
+  }
+  if (terminal) return;
+  const entry = activeEntries[0];
+  if (!entry) return;
+  for (const field of ['status', 'current_phase', 'current_candidate_commit', 'state_revision', 'updated_at']) {
+    if (!equalJson(entry[field], workflow[field])) {
+      errors.push(issue('ACTIVE_WORKFLOW_MISMATCH', `${activePath}:${field}`, `active entry does not match next workflow ${field}`));
+    }
+  }
+  if (resolve(entry.workflow_json_abs) !== resolve(workflowPath)) {
+    errors.push(issue('ACTIVE_WORKFLOW_MISMATCH', `${activePath}:workflow_json_abs`, 'active entry must point to workflow.json'));
+  }
+}
+
+function validateTransitionTask(nextTask, taskPath, workflow, event, taskSchema, errors) {
+  if (!nextTask) return false;
+  const valid = addSchemaErrors(errors, nextTask, taskSchema, taskPath);
+  if (!valid) return false;
+  if (nextTask.workflow_id !== workflow.workflow_id) {
+    errors.push(issue('TASK_WORKFLOW_MISMATCH', taskPath, 'next task workflow_id does not match workflow'));
+  }
+  if (event.task_id !== nextTask.task_id || event.run_id !== nextTask.run_id) {
+    errors.push(issue('TASK_EVENT_SCOPE_MISMATCH', taskPath, 'next task must match event task_id and run_id'));
+  }
+  if (event.task_status_after !== nextTask.status) {
+    errors.push(issue('TASK_EVENT_MISMATCH', taskPath, 'next task status must match event task_status_after'));
+  }
+  const expectedPath = transactionPath(join(workflow.runtime_root_abs, 'control', 'workflows', workflow.workflow_id), 'tasks');
+  if (resolve(taskPath) !== resolve(join(expectedPath, `${nextTask.task_id}.json`))) {
+    errors.push(issue('TASK_CONTROL_PATH_MISMATCH', taskPath, 'next task must be written to its canonical control task path'));
+  }
+  return true;
+}
+
+function prepareTaskRunOperations({ workflowDir, expectedRevision, event, currentTask, nextTask, errors }) {
+  const operations = [];
+  const archives = new Map();
+  const addArchive = (task, revision) => {
+    if (!task) return;
+    const path = taskRunArchivePath(workflowDir, task.task_id, task.run_id);
+    const archive = createTaskRunArchive(task, revision, event.timestamp);
+    const serialized = serializeJson(archive);
+    if (existsSync(path)) {
+      try {
+        const existing = readJson(path);
+        if (existing.task_snapshot_sha256 !== archive.task_snapshot_sha256) {
+          errors.push(issue('TASK_RUN_ARCHIVE_IMMUTABLE', path, 'immutable task run archive already exists with different content'));
+        }
+      } catch (error) {
+        errors.push(issue('TASK_RUN_ARCHIVE_INVALID', path, error.message));
+      }
+      return;
+    }
+    if (!archives.has(path)) {
+      archives.set(path, true);
+      operations.push({ kind: 'task-run-history', targetPath: path, content: serialized });
+    }
+  };
+  if (currentTask && nextTask && currentTask.run_id !== nextTask.run_id) addArchive(currentTask, expectedRevision);
+  if (nextTask && ['COMPLETED', 'FAILED', 'CANCELLED', 'SUPERSEDED'].includes(nextTask.status)) addArchive(nextTask, expectedRevision + 1);
+  return operations;
+}
+
+function commitTransitionCommand(options) {
+  const projectRoot = resolve(requireOption(options, 'project-root'));
+  const runtimeRoot = resolve(requireOption(options, 'runtime-root'));
+  const workflowId = requireOption(options, 'workflow-id');
+  const eventDraftPath = resolve(requireOption(options, 'event'));
+  const nextWorkflowPath = resolve(requireOption(options, 'next-workflow'));
+  const nextActivePath = resolve(requireOption(options, 'next-active'));
+  const nextTaskPath = options['next-task'] ? resolve(options['next-task']) : null;
+  if (!/^WF-[A-Za-z0-9][A-Za-z0-9-]*$/u.test(workflowId)) {
+    emit({ ok: false, command: 'commit-transition', workflow_id: workflowId, effective_status: 'HOLD', errors: [issue('INVALID_WORKFLOW_ID', '$.workflow-id', 'workflow-id must be a complete safe WF identifier')] }, 1);
+    return;
+  }
+  const layoutErrors = [];
+  const workflowDir = validateTrustedRuntimeLayout(runtimeRoot, workflowId, layoutErrors);
+  if (!workflowDir || layoutErrors.length > 0) {
+    emit({ ok: false, command: 'commit-transition', workflow_id: workflowId, effective_status: 'HOLD', errors: layoutErrors.length > 0 ? layoutErrors : [issue('RUNTIME_ROOT_UNREADABLE', runtimeRoot, 'runtime root is not readable')] }, 1);
+    return;
+  }
+  const workflowPath = join(workflowDir, 'workflow.json');
+  const activePath = join(runtimeRoot, 'control', 'active-workflows.json');
+  const eventsPath = join(workflowDir, 'events.jsonl');
+  const lockPath = join(workflowDir, '.workflow.lock');
+  let lock;
+  try {
+    lock = acquireWorkflowLock(lockPath, { purpose: 'commit-transition' });
+    const recoveredTransactions = recoverTransactions(workflowDir);
+    const errors = [];
+    const workflowSchema = safeReadJson(join(projectRoot, 'contracts', 'workflow.schema.json'), 'workflow schema');
+    const activeSchema = safeReadJson(join(projectRoot, 'contracts', 'active-workflows.schema.json'), 'active workflow schema');
+    const eventSchema = safeReadJson(join(projectRoot, 'contracts', 'workflow-event.schema.json'), 'workflow event schema');
+    const taskSchema = safeReadJson(join(projectRoot, 'contracts', 'task.schema.json'), 'task schema');
+    const contextSchema = safeReadJson(join(projectRoot, 'contracts', 'context-manifest.schema.json'), 'context manifest schema');
+    const machine = safeReadJson(join(projectRoot, 'config', 'workflow-state-machine.json'), 'workflow state machine');
+    validateStateMachine(machine, errors);
+    const expectedRevisionOption = parseRevisionOption(options);
+    const currentWorkflow = existsSync(workflowPath) ? safeReadJson(workflowPath, 'current workflow') : null;
+    const currentActive = existsSync(activePath) ? safeReadJson(activePath, 'current active index') : null;
+    const currentEvents = existsSync(eventsPath) ? readJsonLines(eventsPath).map((record) => record.value) : [];
+    const nextWorkflow = safeReadJson(nextWorkflowPath, 'next workflow');
+    const nextActive = safeReadJson(nextActivePath, 'next active index');
+    const eventDraft = safeReadJson(eventDraftPath, 'event draft');
+    const nextTask = nextTaskPath ? safeReadJson(nextTaskPath, 'next task') : null;
+    const taskPath = nextTask && typeof nextTask.task_id === 'string'
+      ? join(workflowDir, 'tasks', `${nextTask.task_id}.json`)
+      : null;
+    const currentTask = taskPath && existsSync(taskPath)
+      ? safeReadJson(taskPath, 'current task')
+      : null;
+    const expectedRevision = expectedRevisionOption ?? currentWorkflow?.state_revision ?? 0;
+    if (currentWorkflow) {
+      const currentWorkflowValid = addSchemaErrors(errors, currentWorkflow, workflowSchema, workflowPath);
+      if (!currentWorkflowValid) {
+        appendGuardFailureLog(options, workflowPath, errors);
+        emit({ ok: false, command: 'commit-transition', workflow_id: workflowId, effective_status: 'HOLD', errors }, 1);
+        return;
+      }
+      if (currentWorkflow.workflow_id !== workflowId) errors.push(issue('WORKFLOW_ID_MISMATCH', workflowPath, 'current workflow_id does not match requested workflow'));
+      if (currentWorkflow.state_revision !== expectedRevision) errors.push(issue('STATE_REVISION_CONFLICT', '$.state_revision', `expected ${expectedRevision}, found ${currentWorkflow.state_revision}`));
+    } else if (expectedRevision !== 0) {
+      errors.push(issue('STATE_REVISION_CONFLICT', '$.state_revision', 'new workflow transition must start at revision 0'));
+    }
+    const nextWorkflowValid = addSchemaErrors(errors, nextWorkflow, workflowSchema, nextWorkflowPath);
+    const nextActiveValid = addSchemaErrors(errors, nextActive, activeSchema, nextActivePath);
+    if (!nextWorkflowValid || !nextActiveValid) {
+      appendGuardFailureLog(options, nextWorkflowPath, errors);
+      emit({ ok: false, command: 'commit-transition', workflow_id: workflowId, effective_status: 'HOLD', errors }, 1);
+      return;
+    }
+    if (nextWorkflow.workflow_id !== workflowId) errors.push(issue('WORKFLOW_ID_MISMATCH', nextWorkflowPath, 'next workflow_id does not match requested workflow'));
+    if (nextWorkflow.state_revision !== expectedRevision + 1) errors.push(issue('STATE_REVISION_CONFLICT', nextWorkflowPath, `next workflow state_revision must be ${expectedRevision + 1}`));
+    if (currentWorkflow) {
+      for (const field of ['target_project_root_abs', 'runtime_root_abs', 'integration_branch', 'base_commit', 'created_at']) {
+        if (!equalJson(currentWorkflow[field], nextWorkflow[field])) errors.push(issue('WORKFLOW_IMMUTABLE_FIELD_CHANGED', `${nextWorkflowPath}:${field}`, `${field} cannot change during a transition`));
+      }
+    }
+    const event = {
+      ...eventDraft,
+      schema_version: 1,
+      seq: expectedRevision + 1,
+      state_revision: expectedRevision + 1,
+      previous_event_hash: currentEvents.at(-1)?.event_hash ?? ZERO_HASH,
+    };
+    delete event.event_hash;
+    event.event_hash = eventHash(event);
+    const eventValid = addSchemaErrors(errors, event, eventSchema, eventDraftPath);
+    if (!eventValid) {
+      appendGuardFailureLog(options, eventDraftPath, errors);
+      emit({ ok: false, command: 'commit-transition', workflow_id: workflowId, effective_status: 'HOLD', errors }, 1);
+      return;
+    }
+    if (event.workflow_id !== workflowId) errors.push(issue('EVENT_WORKFLOW_MISMATCH', eventDraftPath, 'event workflow_id does not match requested workflow'));
+    if (event.to_status !== nextWorkflow.status || event.to_phase !== nextWorkflow.current_phase
+      || event.candidate_commit !== nextWorkflow.current_candidate_commit) {
+      errors.push(issue('TRANSITION_SNAPSHOT_MISMATCH', nextWorkflowPath, 'next workflow status, phase and candidate must match event'));
+    }
+    if (nextWorkflow.updated_at !== event.timestamp) errors.push(issue('TRANSITION_TIMESTAMP_MISMATCH', nextWorkflowPath, 'next workflow updated_at must equal event timestamp'));
+    validateEventChain([...currentEvents, event], {
+      workflow_id: workflowId,
+      status: nextWorkflow.status,
+      current_phase: nextWorkflow.current_phase,
+      current_candidate_commit: nextWorkflow.current_candidate_commit,
+      state_revision: nextWorkflow.state_revision,
+    }, machine, eventSchema, errors);
+    if (currentActive && !addSchemaErrors(errors, currentActive, activeSchema, activePath)) {
+      appendGuardFailureLog(options, activePath, errors);
+      emit({ ok: false, command: 'commit-transition', workflow_id: workflowId, effective_status: 'HOLD', errors }, 1);
+      return;
+    }
+    validateActiveSnapshotForTransition(nextActive, nextWorkflow, workflowPath, activePath, machine, errors);
+    if (nextTask) {
+      const nextTaskValid = validateTransitionTask(nextTask, taskPath, nextWorkflow, event, taskSchema, errors);
+      if (nextTaskValid) {
+        validateTaskPaths(nextTask, taskPath, nextWorkflow, errors);
+        if (nextTask.status !== 'CREATED') validateTaskContext(nextTask, taskPath, contextSchema, errors);
+      }
+      if (currentTask) {
+        const currentTaskValid = addSchemaErrors(errors, currentTask, taskSchema, taskPath);
+        if (currentTaskValid && currentTask.workflow_id !== nextWorkflow.workflow_id) errors.push(issue('TASK_WORKFLOW_MISMATCH', taskPath, 'current task workflow mismatch'));
+      }
+    } else if (event.task_id !== null || event.run_id !== null || event.task_status_after !== null) {
+      errors.push(issue('TASK_SNAPSHOT_REQUIRED', nextTaskPath ?? '$.next-task', 'task transition requires --next-task'));
+    }
+    if (!nextWorkflow.task_ids.includes(nextTask?.task_id ?? event.task_id ?? '__none__') && nextTask) {
+      errors.push(issue('WORKFLOW_TASK_REFERENCE_MISSING', nextWorkflowPath, 'next workflow task_ids must include next task'));
+    }
+    if (errors.length > 0) {
+      appendGuardFailureLog(options, nextWorkflowPath, errors);
+      emit({ ok: false, command: 'commit-transition', workflow_id: workflowId, effective_status: 'HOLD', errors }, 1);
+      return;
+    }
+    const taskRunOperations = prepareTaskRunOperations({ workflowDir, expectedRevision, event, currentTask, nextTask, errors });
+    if (errors.length > 0) {
+      appendGuardFailureLog(options, nextWorkflowPath, errors);
+      emit({ ok: false, command: 'commit-transition', workflow_id: workflowId, effective_status: 'HOLD', errors }, 1);
+      return;
+    }
+    const operations = [
+      { kind: 'event-chain', targetPath: eventsPath, content: eventChainText([...currentEvents, event]) },
+      ...taskRunOperations,
+      ...(nextTask ? [{ kind: 'task-current', targetPath: taskPath, content: serializeJson(nextTask) }] : []),
+      { kind: 'workflow', targetPath: workflowPath, content: serializeJson(nextWorkflow) },
+      { kind: 'active-index', targetPath: activePath, content: serializeJson(nextActive) },
+    ];
+    const transaction = commitTransaction({
+      workflowDir,
+      workflowId,
+      expectedRevision,
+      targetRevision: nextWorkflow.state_revision,
+      ownerNonce: lock.owner.nonce,
+      operations,
+    });
+    emit({
+      ok: true,
+      command: 'commit-transition',
+      workflow_id: workflowId,
+      state_revision: nextWorkflow.state_revision,
+      event: transaction.operations.find((operation) => operation.kind === 'event-chain') ? event : null,
+      transaction_id: transaction.transaction_id,
+      recovered_transactions: recoveredTransactions,
+    });
+  } catch (error) {
+    const guardIssue = error.guardIssue ?? issue(
+      error.code === 'WORKFLOW_LOCK_CONFLICT' ? 'WORKFLOW_LOCK_CONFLICT'
+        : String(error.code ?? '').startsWith('TRANSACTION_') ? error.code
+          : 'TRANSACTION_COMMIT_FAILED',
+      error.code === 'WORKFLOW_LOCK_CONFLICT' ? lockPath : workflowDir,
+      error.message,
+    );
+    emit({ ok: false, command: 'commit-transition', workflow_id: workflowId, effective_status: 'HOLD', errors: [guardIssue] }, 1);
+  } finally {
+    lock?.release();
+  }
+}
+
+function recoverTransactionsCommand(options) {
+  const runtimeRoot = resolve(requireOption(options, 'runtime-root'));
+  const workflowId = requireOption(options, 'workflow-id');
+  if (!/^WF-[A-Za-z0-9][A-Za-z0-9-]*$/u.test(workflowId)) {
+    emit({ ok: false, command: 'recover-transactions', effective_status: 'HOLD', errors: [issue('INVALID_WORKFLOW_ID', '$.workflow-id', 'workflow-id must be a complete safe WF identifier')] }, 1);
+    return;
+  }
+  const layoutErrors = [];
+  const workflowDir = validateTrustedRuntimeLayout(runtimeRoot, workflowId, layoutErrors);
+  if (!workflowDir || layoutErrors.length > 0) {
+    emit({ ok: false, command: 'recover-transactions', workflow_id: workflowId, effective_status: 'HOLD', errors: layoutErrors }, 1);
+    return;
+  }
+  let lock;
+  try {
+    lock = acquireWorkflowLock(join(workflowDir, '.workflow.lock'), { purpose: 'recover-transactions' });
+    const recovered = recoverTransactions(workflowDir);
+    emit({ ok: true, command: 'recover-transactions', workflow_id: workflowId, recovered_transactions: recovered });
+  } catch (error) {
+    const guardIssue = error.guardIssue ?? issue(
+      error.code === 'WORKFLOW_LOCK_CONFLICT' ? 'WORKFLOW_LOCK_CONFLICT'
+        : String(error.code ?? '').startsWith('TRANSACTION_') ? error.code
+          : 'TRANSACTION_RECOVERY_FAILED',
+      workflowDir,
+      error.message,
+    );
+    emit({ ok: false, command: 'recover-transactions', workflow_id: workflowId, effective_status: 'HOLD', errors: [guardIssue] }, 1);
+  } finally {
+    lock?.release();
   }
 }
 
@@ -821,6 +1135,73 @@ function validateEventChain(events, workflow, machine, eventSchema, errors) {
   }
 }
 
+function validateArchivedTaskArtifacts(task, archivePath, workflow, projectRoot, contextSchema, resultSchema, errors) {
+  validateTaskPaths(task, archivePath, workflow, errors);
+  if (taskRequiresArtifact(task)) validateTaskContext(task, archivePath, contextSchema, errors);
+  const resultPath = join(task.artifact_root_abs, 'output', 'result.json');
+  if (existsSync(resultPath)) {
+    const result = readJsonForCheck(resultPath, errors);
+    if (result) {
+      addSchemaErrors(errors, result, resultSchema, resultPath);
+      for (const field of ['workflow_id', 'task_id', 'run_id']) {
+        if (result[field] !== task[field]) errors.push(issue('RESULT_ID_MISMATCH', `${resultPath}:${field}`, `historical result ${field} does not match task archive`));
+      }
+      if (result.agent_id !== task.assigned_agent) errors.push(issue('RESULT_AGENT_MISMATCH', `${resultPath}:agent_id`, 'historical result agent_id does not match assigned_agent'));
+    }
+  } else if (task.status === 'COMPLETED') {
+    errors.push(issue('RESULT_REQUIRED', resultPath, 'completed historical task run is missing output/result.json'));
+  }
+  if (task.status === 'COMPLETED') {
+    for (const summaryName of ['user-summary.md', 'manager-summary.md']) {
+      const summaryPath = join(task.artifact_root_abs, 'output', summaryName);
+      if (!nonEmptyFile(summaryPath)) errors.push(issue('TASK_SUMMARY_REQUIRED', summaryPath, `completed historical task run is missing ${summaryName}`));
+    }
+  }
+  validateStructuredOutputs(task, archivePath, projectRoot, errors);
+}
+
+function validateTaskRunArchives({ workflow, workflowDir, projectRoot, taskSchema, contextSchema, resultSchema, errors }) {
+  const archivesRoot = join(workflowDir, 'task-runs');
+  const archiveSchema = readJson(join(projectRoot, 'contracts', 'task-run.schema.json'));
+  const archives = new Map();
+  if (!existsSync(archivesRoot)) return archives;
+  for (const taskEntry of readdirSync(archivesRoot, { withFileTypes: true })) {
+    const taskDir = join(archivesRoot, taskEntry.name);
+    if (taskEntry.isSymbolicLink()) {
+      errors.push(issue('TASK_RUN_ARCHIVE_SYMLINK', taskDir, 'task run archive directories must not be symbolic links'));
+      continue;
+    }
+    if (!taskEntry.isDirectory()) {
+      errors.push(issue('TASK_RUN_ARCHIVE_LAYOUT', taskDir, 'task-runs entries must be task directories'));
+      continue;
+    }
+    for (const archivePath of jsonFiles(taskDir, '.json', errors)) {
+      const archive = readJsonForCheck(archivePath, errors);
+      if (!archive) continue;
+      const archiveValid = addSchemaErrors(errors, archive, archiveSchema, archivePath);
+      const taskValid = isObject(archive.task_snapshot)
+        ? addSchemaErrors(errors, archive.task_snapshot, taskSchema, `${archivePath}:task_snapshot`)
+        : false;
+      if (!archiveValid || !taskValid) continue;
+      const task = archive.task_snapshot;
+      const expectedPath = taskRunArchivePath(workflowDir, archive.task_id, archive.run_id);
+      if (resolve(archivePath) !== resolve(expectedPath)) errors.push(issue('TASK_RUN_ARCHIVE_PATH_MISMATCH', archivePath, 'archive path must match task_id and run_id'));
+      for (const field of ['workflow_id', 'task_id', 'run_id']) {
+        if (archive[field] !== task[field]) errors.push(issue('TASK_RUN_ARCHIVE_SCOPE_MISMATCH', `${archivePath}:${field}`, `archive ${field} does not match task snapshot`));
+      }
+      if (archive.workflow_id !== workflow.workflow_id) errors.push(issue('TASK_RUN_ARCHIVE_SCOPE_MISMATCH', archivePath, 'archive belongs to a different workflow'));
+      if (archive.archived_state_revision > workflow.state_revision) errors.push(issue('TASK_RUN_ARCHIVE_FUTURE_REVISION', archivePath, 'archive revision is newer than workflow state'));
+      const expectedHash = createHash('sha256').update(canonicalJson(task), 'utf8').digest('hex');
+      if (archive.task_snapshot_sha256 !== expectedHash) errors.push(issue('TASK_RUN_ARCHIVE_HASH_MISMATCH', archivePath, 'task snapshot hash does not match archive content'));
+      const key = scopeKey(task.task_id, task.run_id);
+      if (archives.has(key)) errors.push(issue('DUPLICATE_TASK_RUN_ARCHIVE', archivePath, 'task_id and run_id archive must be unique'));
+      archives.set(key, archive);
+      validateArchivedTaskArtifacts(task, archivePath, workflow, projectRoot, contextSchema, resultSchema, errors);
+    }
+  }
+  return archives;
+}
+
 function validateTasks({ workflow, workflowDir, projectRoot, eventRecords, errors }) {
   const taskSchema = readJson(join(projectRoot, 'contracts', 'task.schema.json'));
   const resultSchema = readJson(join(projectRoot, 'contracts', 'result.schema.json'));
@@ -841,6 +1222,15 @@ function validateTasks({ workflow, workflowDir, projectRoot, eventRecords, error
   const allEvidenceIds = new Set();
   const taskKeys = new Set();
   const taskIds = new Map();
+  const taskRunArchives = validateTaskRunArchives({
+    workflow,
+    workflowDir,
+    projectRoot,
+    taskSchema,
+    contextSchema,
+    resultSchema,
+    errors,
+  });
   for (const taskFile of taskFiles) {
     const task = readJsonForCheck(taskFile, errors);
     if (!task) continue;
@@ -855,6 +1245,10 @@ function validateTasks({ workflow, workflowDir, projectRoot, eventRecords, error
       errors.push(issue('DUPLICATE_TASK_RUN', taskFile, 'task_id and run_id must be unique in control tasks'));
     }
     taskKeys.add(taskKey);
+    const archivedCurrent = taskRunArchives.get(taskKey);
+    if (archivedCurrent && archivedCurrent.task_snapshot_sha256 !== createHash('sha256').update(canonicalJson(task), 'utf8').digest('hex')) {
+      errors.push(issue('TASK_RUN_ARCHIVE_IMMUTABLE', taskFile, 'current task differs from its immutable archived run snapshot'));
+    }
     if (taskIds.has(task.task_id)) {
       errors.push(issue('DUPLICATE_TASK_ID', taskFile, 'task_id must have exactly one control snapshot'));
     }
@@ -1032,7 +1426,8 @@ function validateTasks({ workflow, workflowDir, projectRoot, eventRecords, error
   const artifactRuns = artifactRunKeys(workflow.runtime_root_abs, workflow.workflow_id);
   const artifactKeys = new Set(artifactRuns.map((run) => scopeKey(run.task_id, run.run_id)));
   for (const run of artifactRuns) {
-    if (!taskKeys.has(scopeKey(run.task_id, run.run_id))) {
+    const runKey = scopeKey(run.task_id, run.run_id);
+    if (!taskKeys.has(runKey) && !taskRunArchives.has(runKey)) {
       errors.push(issue('ORPHAN_ARTIFACT_RUN', run.path, 'artifact task/run has no matching control task snapshot'));
     }
   }
@@ -1382,6 +1777,64 @@ function validateGitCandidate(workflow, errors) {
   }
 }
 
+function validateTransactionJournals(workflow, workflowDir, runtimeRoot, projectRoot, errors) {
+  const transactionsRoot = join(workflowDir, 'transactions');
+  if (!existsSync(transactionsRoot)) return;
+  const schema = readJson(join(projectRoot, 'contracts', 'transaction.schema.json'));
+  for (const entry of readdirSync(transactionsRoot, { withFileTypes: true })) {
+    const transactionDir = join(transactionsRoot, entry.name);
+    if (entry.isSymbolicLink()) {
+      errors.push(issue('TRANSACTION_DIR_SYMLINK', transactionDir, 'transaction directories must not be symbolic links'));
+      continue;
+    }
+    if (!entry.isDirectory() || !entry.name.startsWith('TXN-')) {
+      errors.push(issue('TRANSACTION_LAYOUT_INVALID', transactionDir, 'transactions must be stored in TXN-* directories'));
+      continue;
+    }
+    const journalPath = join(transactionDir, 'transaction.json');
+    if (!existsSync(journalPath)) {
+      errors.push(issue('TRANSACTION_JOURNAL_REQUIRED', journalPath, 'transaction directory is missing transaction.json'));
+      continue;
+    }
+    if (rejectSymlink(journalPath, errors, 'TRANSACTION_JOURNAL_SYMLINK')) continue;
+    const journal = readJsonForCheck(journalPath, errors);
+    if (!journal || !addSchemaErrors(errors, journal, schema, journalPath)) continue;
+    if (journal.transaction_id !== entry.name || journal.workflow_id !== workflow.workflow_id) {
+      errors.push(issue('TRANSACTION_SCOPE_MISMATCH', journalPath, 'transaction directory or workflow scope does not match journal'));
+    }
+    if (journal.target_revision !== journal.expected_revision + 1) {
+      errors.push(issue('TRANSACTION_REVISION_MISMATCH', journalPath, 'target_revision must equal expected_revision + 1'));
+    }
+    if (journal.status !== 'COMMITTED') {
+      errors.push(issue('INCOMPLETE_WORKFLOW_TRANSACTION', journalPath, 'incomplete transaction must be recovered before workflow validation'));
+    } else if (journal.committed_at === null || journal.operations.some((operation) => !operation.applied || operation.applied_at === null)) {
+      errors.push(issue('TRANSACTION_COMMIT_INCOMPLETE', journalPath, 'committed transaction must mark every operation applied'));
+    }
+    const expectedTargets = {
+      'event-chain': join(workflowDir, 'events.jsonl'),
+      workflow: join(workflowDir, 'workflow.json'),
+      'active-index': join(runtimeRoot, 'control', 'active-workflows.json'),
+    };
+    const targetPaths = new Set();
+    for (const operation of journal.operations) {
+      if (targetPaths.has(operation.target_path_abs)) errors.push(issue('TRANSACTION_DUPLICATE_TARGET', journalPath, `transaction target is repeated: ${operation.target_path_abs}`));
+      targetPaths.add(operation.target_path_abs);
+      if (!isPathLexicallyWithin(transactionDir, operation.staged_path_abs)) {
+        errors.push(issue('TRANSACTION_STAGE_PATH_ESCAPE', journalPath, `staged path escapes transaction directory: ${operation.staged_path_abs}`));
+      }
+      if (expectedTargets[operation.kind] && resolve(operation.target_path_abs) !== resolve(expectedTargets[operation.kind])) {
+        errors.push(issue('TRANSACTION_TARGET_MISMATCH', journalPath, `${operation.kind} target is not canonical`));
+      } else if (operation.kind === 'task-current'
+        && (!isPathLexicallyWithin(join(workflowDir, 'tasks'), operation.target_path_abs) || !operation.target_path_abs.endsWith('.json'))) {
+        errors.push(issue('TRANSACTION_TARGET_MISMATCH', journalPath, 'task-current target must be a control task JSON file'));
+      } else if (operation.kind === 'task-run-history'
+        && (!isPathLexicallyWithin(join(workflowDir, 'task-runs'), operation.target_path_abs) || !operation.target_path_abs.endsWith('.json'))) {
+        errors.push(issue('TRANSACTION_TARGET_MISMATCH', journalPath, 'task-run-history target must be an immutable task run JSON file'));
+      }
+    }
+  }
+}
+
 function checkWorkflowCommand(options, command = 'check-workflow') {
   const projectRoot = resolve(requireOption(options, 'project-root'));
   const runtimeRoot = resolve(requireOption(options, 'runtime-root'));
@@ -1489,6 +1942,7 @@ function checkWorkflowCommand(options, command = 'check-workflow') {
 
   const eventRecords = readJsonLinesForCheck(eventsPath, errors).map((record) => record.value);
   validateEventChain(eventRecords, workflow, machine, eventSchema, errors);
+  validateTransactionJournals(workflow, workflowDir, runtimeRoot, projectRoot, errors);
   validateWorkflowSnapshots(workflow, workflowDir, errors);
   // Quarantine is an auditable terminal boundary, not a repair mode. Once the
   // immutable evidence and terminal snapshots are verified, historical task
@@ -1675,6 +2129,14 @@ function main() {
     }
     if (command === 'append-event') {
       appendEventCommand(options);
+      return;
+    }
+    if (command === 'commit-transition') {
+      commitTransitionCommand(options);
+      return;
+    }
+    if (command === 'recover-transactions') {
+      recoverTransactionsCommand(options);
       return;
     }
     if (command === 'check-workflow') {
