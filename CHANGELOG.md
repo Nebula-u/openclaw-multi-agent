@@ -1,5 +1,20 @@
 # Changelog
 
+### 重装已安装 Agent、配置与 runtime 同步
+
+#### 改动了什么
+
+- 新增 `scripts/reinstall-agents.ps1`：动态读取 package manifest，只重装当前配置路径与本项目 runtime 完全匹配的 Agent；OpenClaw 配置乐观锁冲突会刷新配置后有界重试。
+- 重装前备份 OpenClaw 配置及受管理的 Agent workspace/state，并在 package 未指定模型时保存并恢复每 Agent 的既有模型路由；删除后复用 `install.ps1 -Apply` 更新 `agents.list`、runtime workspace、install manifest 和 runtime bundle。
+- 增加重新安装命令与安全边界文档。
+
+#### 验证
+
+- 2026-08-05 已在当前 OpenClaw 环境预演并执行完整卸载和重建：仅处理 `manager-agent`、`requirement-agent`、`architect-agent`、`developer-agent`、`review-agent`、`test-agent`、`release-agent`；未安装或更改 `dialogue-agent`。随后以 `config/agent-models.deepseek-routing.example.json` 恢复这些 Agent 的原有 DeepSeek V4 Pro 路由。
+- `openclaw config validate --json` 通过；`openclaw agents list --json` 为平台 `main` 加上述 7 个项目 Agent。
+- `runtime-bundle.mjs verify` 通过（105 entries，SHA-256 `da0fa5ddba12449a9077ffed06f4b3514062f18d209c4d3f310131e1826f3a3d`）；Control Kernel audit 为 `CONSISTENT`。
+- `npm run test:runtime-bundle`（3 项）和 `node --test tests/validate-install.test.mjs`（2 项）通过。
+
 本项目遵循语义化的变更记录风格。日期格式 `YYYY-MM-DD`。
 
 ## [Unreleased] - 2026-08-05

@@ -11,6 +11,7 @@ param(
   [switch]$Apply,
   [string]$RuntimeRoot = 'runtime',
   [string]$ModelConfig,
+  [string[]]$AgentIds,
   [switch]$SetManagerAsDefault,
   [string]$ManagerBinding,
   [switch]$Yes
@@ -77,6 +78,15 @@ if ($configFileResult.ExitCode -ne 0) { throw "无法获取 OpenClaw 配置文�
 $ConfigFilePath = $configFileResult.Output.Trim()
 
 $Packages = @(Get-AgentPackages -ProjectRoot $ProjectRoot -RuntimeRootAbs $RuntimeRootAbs -ModelConfig $ModelConfig)
+if ($AgentIds) {
+  $rawRequested = @($AgentIds | ForEach-Object { ([string]$_).Split(',', [System.StringSplitOptions]::RemoveEmptyEntries) })
+  $requested = @($rawRequested | Sort-Object -Unique)
+  if ($requested.Count -ne $rawRequested.Count) { throw 'AgentIds 不允许重复。' }
+  $known = @($Packages | ForEach-Object id)
+  $unknown = @($requested | Where-Object { $known -notcontains $_ })
+  if ($unknown.Count -gt 0) { throw "AgentIds 包含未知 package：$($unknown -join ', ')" }
+  $Packages = @($Packages | Where-Object { $requested -contains $_.id })
+}
 $RegisteredPackages = @($Packages | Where-Object register)
 $Manager = Get-ManagerPackage $Packages
 if (-not $Manager.register -or -not $Manager.active) { throw 'manager package 必须 register=true 且 active=true。' }
@@ -294,7 +304,9 @@ $Manifest.config_changes = @($changes)
 $manifestPath = Join-Path $RuntimeRootAbs 'control\install-manifest.json'
 Write-JsonAtomic -Value $Manifest -Path $manifestPath -Depth 12
 $bundleScript = Join-Path $ProjectRoot 'scripts\runtime-bundle.mjs'
-$bundleResult = & node $bundleScript record --project-root $ProjectRoot --runtime-root $RuntimeRootAbs
+$bundleArgs = @($bundleScript, 'record', '--project-root', $ProjectRoot, '--runtime-root', $RuntimeRootAbs)
+if ($AgentIds) { $bundleArgs += @('--agent-ids', ($AgentIds -join ',')) }
+$bundleResult = & node @bundleArgs
 if ($LASTEXITCODE -ne 0) { throw "运行时 bundle 记录失败：$bundleResult" }
 Write-Host "`n同步完成；配置校验通过。" -ForegroundColor Green
 Write-Host "安装清单：$manifestPath"

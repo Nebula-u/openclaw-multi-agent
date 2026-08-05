@@ -64,6 +64,18 @@ Control Kernel 不取代 Runtime Guard：Guard 继续校验 artifact、Gate、�
 npm install
 ```
 
+### 卸载并重新安装项目 Agent（Windows）
+
+当源码 workspace 规则更新、或现有 runtime 缺少 bundle manifest 时，使用受限重装脚本同步**当前已安装**的项目 Agent。它仅处理 workspace/agentDir 与本项目 manifest 完全匹配的 Agent；未安装的 package（例如 `dialogue-agent`）不会被顺带注册。脚本会先备份 OpenClaw 配置及这些 Agent 的 runtime workspace/state，保留已有的每 Agent 模型路由，随后删除、重建、更新 `agents.list` 并校验 runtime bundle。
+
+```powershell
+# 先只查看将处理哪些 Agent
+pwsh -NoProfile -File scripts/reinstall-agents.ps1 -RuntimeRoot runtime
+
+# 执行卸载、重新安装、配置与 runtime 同步
+pwsh -NoProfile -File scripts/reinstall-agents.ps1 -Apply -Yes -RuntimeRoot runtime
+```
+
 ### Runtime Guard（artifact/Gate 与遗留 v1）
 
 ```bash

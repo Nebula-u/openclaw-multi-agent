@@ -50,11 +50,13 @@ function safeRelative(root, path) {
   return value.replaceAll('\\', '/');
 }
 
-function packageManifests(projectRoot) {
+function packageManifests(projectRoot, agentIds = null) {
+  const selected = agentIds === null ? null : new Set(agentIds);
   return filesBelow(join(projectRoot, 'agents', 'packages'))
     .filter((path) => path.endsWith('.json'))
     .map((path) => ({ path, value: JSON.parse(readFileSync(path, 'utf8')) }))
-    .filter(({ value }) => value.kind === 'openclaw-agent-package' && value.lifecycle?.register !== false);
+    .filter(({ value }) => value.kind === 'openclaw-agent-package' && value.lifecycle?.register !== false)
+    .filter(({ value }) => selected === null || selected.has(value.id));
 }
 
 function addTree(entries, projectRoot, runtimeRoot, sourceRoot, targetRoot, kind) {
@@ -70,11 +72,14 @@ function addTree(entries, projectRoot, runtimeRoot, sourceRoot, targetRoot, kind
   }
 }
 
-export function buildBundle(projectRootInput, runtimeRootInput) {
+export function buildBundle(projectRootInput, runtimeRootInput, { agentIds = null } = {}) {
   const projectRoot = resolve(projectRootInput);
   const runtimeRoot = resolve(runtimeRootInput);
+  if (agentIds !== null && (agentIds.length === 0 || new Set(agentIds).size !== agentIds.length)) throw new Error('agentIds must be a non-empty unique list');
   const entries = [];
-  for (const { value: manifest } of packageManifests(projectRoot)) {
+  const manifests = packageManifests(projectRoot, agentIds);
+  if (agentIds !== null && manifests.length !== agentIds.length) throw new Error('one or more selected Agent packages are missing or not registered');
+  for (const { value: manifest } of manifests) {
     const sourceRoot = resolve(projectRoot, manifest.workspace_source_rel);
     const targetWorkspace = resolve(runtimeRoot, manifest.runtime_subdir, 'workspace');
     addTree(entries, projectRoot, runtimeRoot, sourceRoot, targetWorkspace, 'workspace');
@@ -100,6 +105,7 @@ export function buildBundle(projectRootInput, runtimeRootInput) {
   const digestInput = entries.map((entry) => `${entry.kind}\0${entry.source_rel}\0${entry.target_rel}\0${entry.sha256}`).join('\n');
   return {
     schema_version: 1,
+    agent_ids: agentIds === null ? null : [...agentIds].sort(),
     bundle_sha256: createHash('sha256').update(digestInput, 'utf8').digest('hex'),
     entries,
   };
@@ -113,8 +119,8 @@ function gitCommit(projectRoot) {
   }
 }
 
-function record(projectRoot, runtimeRoot) {
-  const bundle = buildBundle(projectRoot, runtimeRoot);
+function record(projectRoot, runtimeRoot, agentIds = null) {
+  const bundle = buildBundle(projectRoot, runtimeRoot, { agentIds });
   const errors = [];
   for (const entry of bundle.entries) {
     const target = join(runtimeRoot, entry.target_rel);
@@ -141,7 +147,7 @@ function verify(projectRoot, runtimeRoot) {
     return { ok: false, command: 'verify', errors: [{ code: 'RUNTIME_BUNDLE_MANIFEST_MISSING', path: manifestPath }] };
   }
   const recorded = JSON.parse(readFileSync(manifestPath, 'utf8'));
-  const current = buildBundle(projectRoot, runtimeRoot);
+  const current = buildBundle(projectRoot, runtimeRoot, { agentIds: recorded.agent_ids ?? null });
   const errors = [];
   if (recorded.bundle_sha256 !== current.bundle_sha256) {
     errors.push({ code: 'RUNTIME_BUNDLE_SOURCE_DRIFT', path: manifestPath, expected: recorded.bundle_sha256, actual: current.bundle_sha256 });
@@ -161,10 +167,11 @@ function main() {
   const { command, options } = parseArgs(process.argv.slice(2));
   const projectRoot = resolve(options['project-root'] ?? process.cwd());
   const runtimeRoot = resolve(options['runtime-root'] ?? join(projectRoot, 'runtime'));
-  if (!['digest', 'record', 'verify'].includes(command)) throw new Error('usage: runtime-bundle.mjs <digest|record|verify> --project-root <abs> --runtime-root <abs>');
+  if (!['digest', 'record', 'verify'].includes(command)) throw new Error('usage: runtime-bundle.mjs <digest|record|verify> --project-root <abs> --runtime-root <abs> [--agent-ids <id,id>]');
+  const agentIds = options['agent-ids'] ? options['agent-ids'].split(',').filter(Boolean) : null;
   const result = command === 'digest'
-    ? { ok: true, command, ...buildBundle(projectRoot, runtimeRoot) }
-    : command === 'record' ? record(projectRoot, runtimeRoot) : verify(projectRoot, runtimeRoot);
+    ? { ok: true, command, ...buildBundle(projectRoot, runtimeRoot, { agentIds }) }
+    : command === 'record' ? record(projectRoot, runtimeRoot, agentIds) : verify(projectRoot, runtimeRoot);
   process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
   if (!result.ok) process.exitCode = 1;
 }

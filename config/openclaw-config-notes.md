@@ -21,6 +21,17 @@ openclaw agents add [name]
 
 > `agents add` **没有** `--subagents` / `--sandbox` 选项。subagent 白名单与 sandbox 模式必须通过 `config set` / `config patch` 写入 `agents.list[*]`。
 
+## 1.1 重新安装项目 Agent
+
+实测卸载命令为 `openclaw agents delete <id> --force --json`。项目提供 `scripts/reinstall-agents.ps1`：它只在当前 `agents.list` 中的 workspace 和 agentDir 与 package manifest 计算出的 runtime 路径完全匹配时才调用 delete，并只重装当前已安装的项目 Agent；未安装 package 不会被自动注册。OpenClaw 返回配置乐观锁冲突时，脚本会刷新 `agents.list`，若目标实际已删除则视为成功。随后运行 `install.ps1 -Apply -AgentIds ...`，更新 `agents.list`、runtime workspace、install manifest 和 runtime bundle；未指定 `-ModelConfig` 时自动从备份恢复当前每 Agent 模型路由。它会先备份配置与项目 Agent 的 workspace/state 到 `runtime/control/reinstall-backups/`。
+
+先预演，再执行：
+
+```powershell
+pwsh -NoProfile -File scripts/reinstall-agents.ps1 -RuntimeRoot runtime
+pwsh -NoProfile -File scripts/reinstall-agents.ps1 -Apply -Yes -RuntimeRoot runtime
+```
+
 ## 2. 配置读写（`openclaw config ...`）
 
 - `openclaw config file` — 打印活动配置文件路径。

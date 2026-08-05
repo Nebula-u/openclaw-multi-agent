@@ -35,8 +35,10 @@ function fixture() {
   return { root, project, runtime, cleanup: () => rmSync(root, { recursive: true, force: true }) };
 }
 
-function run(command, value) {
-  return spawnSync(process.execPath, [SCRIPT, command, '--project-root', value.project, '--runtime-root', value.runtime], { encoding: 'utf8' });
+function run(command, value, agentIds = null) {
+  const args = [SCRIPT, command, '--project-root', value.project, '--runtime-root', value.runtime];
+  if (agentIds) args.push('--agent-ids', agentIds);
+  return spawnSync(process.execPath, args, { encoding: 'utf8' });
 }
 
 test('runtime bundle records and verifies managed workspace content', () => {
@@ -67,3 +69,27 @@ test('runtime bundle rejects source or installed workspace drift', () => {
   } finally { value.cleanup(); }
 });
 
+test('filtered bundle records only selected installed Agents', () => {
+  const value = fixture();
+  try {
+    mkdirSync(join(value.project, 'agents', 'dialogue', 'workspace'), { recursive: true });
+    writeFileSync(join(value.project, 'agents', 'packages', 'builtin', 'dialogue.json'), JSON.stringify({
+      schema_version: 1,
+      kind: 'openclaw-agent-package',
+      id: 'dialogue-agent',
+      workspace_source_rel: 'agents/dialogue/workspace',
+      runtime_subdir: 'agents/dialogue-agent',
+      assembly: { include_common_rules: false, include_templates: false },
+      skills: [],
+      lifecycle: { register: true },
+    }));
+    writeFileSync(join(value.project, 'agents', 'dialogue', 'workspace', 'AGENTS.md'), 'not installed\n');
+
+    const recorded = run('record', value, 'demo');
+    assert.equal(recorded.status, 0, recorded.stdout + recorded.stderr);
+    const manifest = JSON.parse(readFileSync(join(value.runtime, 'control', 'runtime-bundle.json'), 'utf8'));
+    assert.deepEqual(manifest.agent_ids, ['demo']);
+    assert.equal(manifest.entries.some((entry) => entry.target_rel.startsWith('agents/dialogue-agent/')), false);
+    assert.equal(run('verify', value).status, 0);
+  } finally { value.cleanup(); }
+});
