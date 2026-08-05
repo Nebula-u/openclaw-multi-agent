@@ -1,0 +1,30 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://openclaw-sdlc-multi-agent/contracts/active-workflows-v2.schema.json",
+  "title": "Derived active workflow projection v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "projection", "generated_at", "workflows"],
+  "properties": {
+    "schema_version": { "type": "integer", "const": 2 },
+    "projection": { "type": "string", "const": "READ_ONLY_DERIVED" },
+    "generated_at": { "type": "string", "format": "date-time" },
+    "workflows": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["workflow_id", "revision", "phase", "condition", "outcome", "updated_at", "workflow_json_abs"],
+        "properties": {
+          "workflow_id": { "type": "string", "pattern": "^WF-" },
+          "revision": { "type": "integer", "minimum": 1 },
+          "phase": { "type": "string", "minLength": 1 },
+          "condition": { "type": "string", "enum": ["ACTIVE", "WAITING_HUMAN", "HOLD"] },
+          "outcome": { "type": "null" },
+          "updated_at": { "type": "string", "format": "date-time" },
+          "workflow_json_abs": { "type": "string", "minLength": 1 }
+        }
+      }
+    }
+  }
+}

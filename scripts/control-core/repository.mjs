@@ -77,6 +77,21 @@ export function openControlDatabase(pathInput) {
       result_json TEXT NOT NULL,
       committed_at TEXT NOT NULL
     ) STRICT;
+    CREATE TABLE IF NOT EXISTS projection_outbox (
+      projection_id INTEGER PRIMARY KEY AUTOINCREMENT,
+      workflow_id TEXT NOT NULL,
+      revision INTEGER NOT NULL,
+      status TEXT NOT NULL DEFAULT 'PENDING' CHECK(status IN ('PENDING', 'APPLIED', 'FAILED')),
+      attempts INTEGER NOT NULL DEFAULT 0,
+      last_error TEXT,
+      created_at TEXT NOT NULL,
+      applied_at TEXT,
+      UNIQUE(workflow_id, revision),
+      FOREIGN KEY (workflow_id) REFERENCES workflows(workflow_id)
+    ) STRICT;
+    CREATE VIEW IF NOT EXISTS active_workflows AS
+      SELECT workflow_id, revision, phase, condition, outcome, state_json, updated_at
+      FROM workflows WHERE condition <> 'TERMINAL';
     CREATE TRIGGER IF NOT EXISTS workflow_events_no_update
       BEFORE UPDATE ON workflow_events BEGIN SELECT RAISE(ABORT, 'workflow events are immutable'); END;
     CREATE TRIGGER IF NOT EXISTS workflow_events_no_delete
@@ -112,13 +127,18 @@ export function listEvents(database, workflowId) {
   }));
 }
 
+export function listWorkflows(database, { activeOnly = false } = {}) {
+  const source = activeOnly ? 'active_workflows' : 'workflows';
+  return database.prepare(`SELECT state_json FROM ${source} ORDER BY workflow_id`).all().map((row) => parseJson(row.state_json));
+}
+
 function validateOrThrow(validate, value, code) {
   if (!validate(value)) {
     throw validationError(code, 'JSON Schema validation failed', { errors: structuredClone(validate.errors ?? []) });
   }
 }
 
-function storedEventHash(event) {
+export function storedEventHash(event) {
   const hashInput = {
     workflow_id: event.workflow_id,
     seq: event.seq,
@@ -202,6 +222,10 @@ export function createControlRepository(projectRootInput, database) {
           INSERT INTO control_commands(command_id, workflow_id, command_sha256, command_json, result_json, committed_at)
           VALUES (?, ?, ?, ?, ?, ?)
         `).run(command.command_id, command.workflow_id, commandHash, commandJson, json(result), new Date().toISOString());
+        database.prepare(`
+          INSERT INTO projection_outbox(workflow_id, revision, status, attempts, created_at)
+          VALUES (?, ?, 'PENDING', 0, ?)
+        `).run(command.workflow_id, next.revision, command.occurred_at);
         database.exec('COMMIT');
         return { ...result, idempotent_replay: false };
       } catch (error) {
@@ -211,6 +235,6 @@ export function createControlRepository(projectRootInput, database) {
     },
     get(workflowId) { return loadWorkflow(database, workflowId); },
     events(workflowId) { return listEvents(database, workflowId); },
+    workflows(options) { return listWorkflows(database, options); },
   };
 }
-

@@ -1,10 +1,12 @@
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import test from 'node:test';
 import { createControlRepository, openControlDatabase } from '../scripts/control-core/repository.mjs';
+import { auditControlDatabase } from '../scripts/control-core/audit.mjs';
+import { exportControlProjections } from '../scripts/control-core/projections.mjs';
 
 const ROOT = resolve(import.meta.dirname, '..');
 const WORKFLOW_ID = 'WF-control-kernel-test';
@@ -144,5 +146,66 @@ test('control kernel only completes an active FINAL_REPORT workflow with a relea
     assert.equal(completed.state.outcome, 'READY_FOR_OPERATIONS_HANDOFF');
     assert.throws(() => value.repository.apply(command('SET_CANDIDATE', revision + 1, { candidate_commit: 'abc' })),
       (error) => error.code === 'CONTROL_WORKFLOW_TERMINAL');
+  } finally { value.close(); }
+});
+
+test('control projections derive workflow, events, and active index from SQLite', () => {
+  const value = fixture();
+  const runtime = mkdtempSync(join(tmpdir(), 'control-projection-'));
+  try {
+    bootstrap(value.repository);
+    assert.equal(value.database.prepare("SELECT COUNT(*) AS count FROM projection_outbox WHERE status='PENDING'").get().count, 1);
+    const projected = exportControlProjections(value.database, runtime);
+    assert.equal(projected.active_workflows, 1);
+    const root = join(runtime, 'control', 'v2');
+    const state = JSON.parse(readFileSync(join(root, 'workflows', WORKFLOW_ID, 'workflow.json'), 'utf8'));
+    assert.equal(state.revision, 1);
+    const active = JSON.parse(readFileSync(join(root, 'active-workflows.json'), 'utf8'));
+    assert.equal(active.projection, 'READ_ONLY_DERIVED');
+    assert.equal(active.workflows[0].workflow_id, WORKFLOW_ID);
+    assert.equal(value.database.prepare("SELECT COUNT(*) AS count FROM projection_outbox WHERE status='APPLIED'").get().count, 1);
+    assert.equal(auditControlDatabase(value.database, { runtimeRoot: runtime, projections: true }).ok, true);
+    value.repository.apply(command('QUARANTINE', 1));
+    exportControlProjections(value.database, runtime);
+    const terminalActive = JSON.parse(readFileSync(join(root, 'active-workflows.json'), 'utf8'));
+    assert.deepEqual(terminalActive.workflows, []);
+  } finally {
+    value.close();
+    rmSync(runtime, { recursive: true, force: true });
+  }
+});
+
+test('projection audit detects drift and recoverable export restores it', () => {
+  const value = fixture();
+  const runtime = mkdtempSync(join(tmpdir(), 'control-projection-drift-'));
+  try {
+    bootstrap(value.repository);
+    exportControlProjections(value.database, runtime);
+    const path = join(runtime, 'control', 'v2', 'workflows', WORKFLOW_ID, 'workflow.json');
+    const state = JSON.parse(readFileSync(path, 'utf8'));
+    state.phase = 'DEVELOPMENT';
+    writeFileSync(path, `${JSON.stringify(state, null, 2)}\n`);
+    const drifted = auditControlDatabase(value.database, { runtimeRoot: runtime, projections: true });
+    assert.equal(drifted.ok, false);
+    assert.ok(drifted.errors.some((error) => error.code === 'CONTROL_PROJECTION_STATE_DRIFT'));
+    exportControlProjections(value.database, runtime);
+    assert.equal(auditControlDatabase(value.database, { runtimeRoot: runtime, projections: true }).ok, true);
+  } finally {
+    value.close();
+    rmSync(runtime, { recursive: true, force: true });
+  }
+});
+
+test('database audit detects current state that no longer matches the immutable event chain', () => {
+  const value = fixture();
+  try {
+    bootstrap(value.repository);
+    const changed = value.repository.get(WORKFLOW_ID);
+    changed.phase = 'DEVELOPMENT';
+    value.database.prepare('UPDATE workflows SET phase=?, state_json=? WHERE workflow_id=?')
+      .run(changed.phase, JSON.stringify(changed), WORKFLOW_ID);
+    const audit = auditControlDatabase(value.database);
+    assert.equal(audit.ok, false);
+    assert.ok(audit.errors.some((error) => error.code === 'CONTROL_CURRENT_STATE_MISMATCH'));
   } finally { value.close(); }
 });

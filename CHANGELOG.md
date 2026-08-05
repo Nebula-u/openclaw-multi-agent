@@ -59,6 +59,34 @@
 - Runtime Guard `self-check` 成功编译 28 份 contract；两份 Kernel 内部 contract 明确不进入 LLM 通信场景。
 - `git diff --check` 通过。
 
+### P2：派生投影、active view 与确定性恢复
+
+#### 改动了什么
+
+- 新增 SQLite `active_workflows` view，以 `condition != TERMINAL` 自动派生活动工作流。
+- 每个成功 transition 同事务写入 projection outbox；投影器在全局锁内生成 v2 workflow、events JSONL 和 active index 只读文件。
+- 新增数据库审计：SQLite integrity、事件 seq/revision、前序哈希、事件哈希、from/to state、command/event 对应、当前快照和 active view 全部重算。
+- 新增投影漂移审计和 `recover`：只有权威数据库通过审计时才允许重建投影；权威状态损坏时失败关闭为 HOLD。
+- 新增 `active`、`project`、`audit`、`recover` Control Kernel CLI 命令及 v2 event/active projection Schema。
+
+#### 为什么要改
+
+- 全局 `active-workflows.json` 由各 workflow 事务分别覆盖时存在跨 workflow 丢更新风险，也会成为第三份状态事实源。
+- 多文件事务崩溃恢复复杂；JSON/JSONL 更适合作为可重建审计视图，而不是当前状态的写入入口。
+
+#### 改后的效果
+
+- active 状态不再人工同步；终态提交后自动从 view 和下一次投影中消失。
+- 投影可以删除后重建，任何投影修改都不会反向污染权威状态。
+- 恢复先证明数据库和事件链一致，再处理投影，不会根据聊天或滞后 JSON 猜测。
+
+#### 验证
+
+- Control Kernel 9 项测试通过，覆盖投影/active 派生、投影漂移恢复及权威状态/事件不一致检测。
+- 完整回归通过：Runtime Guard 105 项通过、2 项 Windows 符号链接场景跳过；Agent JSON 12 项、runtime bundle 2 项、安装测试 2 项全部通过。
+- Runtime Guard `self-check` 成功编译 30 份 contract。
+- `git diff --check` 通过。
+
 ## [0.3.0-dev.0] - 2026-08-04
 
 ### 改动了什么

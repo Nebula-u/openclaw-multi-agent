@@ -5,6 +5,8 @@ import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { ControlTransitionError } from './control-core/reducer.mjs';
 import { createControlRepository, openControlDatabase } from './control-core/repository.mjs';
+import { auditControlDatabase } from './control-core/audit.mjs';
+import { exportControlProjections } from './control-core/projections.mjs';
 
 function parseArgs(argv) {
   const [command, ...tokens] = argv;
@@ -46,8 +48,28 @@ function main() {
     } else if (command === 'events') {
       const workflowId = required(options, 'workflow-id');
       emit({ ok: true, command: 'events', workflow_id: workflowId, events: repository.events(workflowId) });
+    } else if (command === 'active') {
+      emit({ ok: true, command: 'active', workflows: repository.workflows({ activeOnly: true }) });
+    } else if (command === 'project') {
+      const runtimeRoot = resolve(required(options, 'runtime-root'));
+      emit({ ...exportControlProjections(database, runtimeRoot), command: 'project' });
+    } else if (command === 'audit') {
+      const runtimeRoot = options['runtime-root'] ? resolve(options['runtime-root']) : null;
+      const result = auditControlDatabase(database, { runtimeRoot, projections: options.projections === 'true' });
+      emit({ ...result, command: 'audit', effective_status: result.ok ? 'CONSISTENT' : 'HOLD' }, result.ok ? 0 : 1);
+    } else if (command === 'recover') {
+      const runtimeRoot = resolve(required(options, 'runtime-root'));
+      const before = auditControlDatabase(database);
+      if (!before.ok) {
+        emit({ ...before, command: 'recover', effective_status: 'HOLD', recovered: false }, 1);
+      } else {
+        const projection = exportControlProjections(database, runtimeRoot);
+        database.exec('PRAGMA wal_checkpoint(FULL)');
+        const after = auditControlDatabase(database, { runtimeRoot, projections: true });
+        emit({ ...after, command: 'recover', effective_status: after.ok ? 'CONSISTENT' : 'HOLD', recovered: after.ok, projection }, after.ok ? 0 : 1);
+      }
     } else {
-      throw new Error('usage: control-kernel.mjs <init|apply|get|events> [options]');
+      throw new Error('usage: control-kernel.mjs <init|apply|get|events|active|project|audit|recover> [options]');
     }
   } catch (error) {
     const code = error instanceof ControlTransitionError ? error.code : 'CONTROL_KERNEL_ERROR';
@@ -58,4 +80,3 @@ function main() {
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) main();
-

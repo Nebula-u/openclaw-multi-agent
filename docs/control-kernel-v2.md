@@ -24,5 +24,16 @@ v2 将阶段和暂停/终结条件分离：
 
 `BOOTSTRAP`、`ADVANCE_PHASE`、`WAIT_HUMAN`、`HOLD`、`RESUME`、`SET_CANDIDATE`、`COMPLETE`、`FAIL`、`CANCEL`、`QUARANTINE`。
 
-P1 只建立权威状态和事件事务。P2 将增加审计、恢复和只读 JSON/JSONL 投影；P3 再把 task、dispatch 与 Agent 结果摄取纳入相同边界。
+## 只读投影与恢复
 
+SQLite 是唯一当前状态源。`project` 在全局 projection lock 内从数据库生成：
+
+- `runtime/control/v2/workflows/<workflow-id>/workflow.json`
+- `runtime/control/v2/workflows/<workflow-id>/events.jsonl`
+- `runtime/control/v2/active-workflows.json`
+
+这些文件均标记为 `READ_ONLY_DERIVED`；丢失或篡改时由 `recover` 重建，不允许导入回数据库。每次状态事务会写 projection outbox，投影成功后置为 `APPLIED`。
+
+`active_workflows` 是 SQLite view，只选择 `condition != TERMINAL` 的 workflow，不再维护第二份可写状态数组。`audit` 会重算事件哈希和前序链、核对事件数/revision、最后事件与当前状态、command/event 一一对应、active view 和可选投影内容。数据库审计失败时 `recover` 不猜测状态，只返回 `HOLD`；数据库一致而投影损坏时才允许重建投影。
+
+P3 将把 task、dispatch 与 Agent 结果摄取纳入相同边界。
