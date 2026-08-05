@@ -50,7 +50,7 @@
 
 ### 3.3 `events.jsonl`（append-only 哈希链，SHA-256）
 
-`events.jsonl` 是逻辑 append-only 的 JSONL 哈希链。manager 每次状态变化创建事件草稿；常规流程由 `commit-transition` 写入 `schema_version=1`、连续的 `seq` 和 `state_revision`、前一行的 `previous_event_hash`（首行是 64 个 `0`），并与其余快照一起原子提交。兼容命令 `append-event` 仍可只追加并 fsync 事件，但不能用于需要同步更新快照的新流程。既有事件内容永不改写。每条事件还含 `event_id`、`timestamp`、`workflow_id`、`task_id`、`run_id`、`actor`、`event_type`、状态/阶段前后值、候选 commit、`payload` 与 `event_hash`。
+`events.jsonl` 是逻辑 append-only 的 JSONL 哈希链。manager 每次状态变化创建事件草稿；常规流程由 `commit-transition` 写入 `schema_version=1`、连续的 `seq` 和 `state_revision`、前一行的 `previous_event_hash`（首行是 64 个 `0`），并与其余快照一起原子提交。兼容命令 `append-event` 仅保留给受控历史迁移测试，任何新流程和恢复流程都禁止调用。既有事件内容永不改写。每条事件还含 `event_id`、`timestamp`、`workflow_id`、`task_id`、`run_id`、`actor`、`event_type`、状态/阶段前后值、候选 commit、`payload` 与 `event_hash`。
 
 哈希规则：移除 `event_hash` 后，递归按 Unicode 码点排序 JSON 对象键（数组顺序不变），直接序列化排序后的键值对，将 canonical JSON 用 UTF-8 编码并计算 SHA-256。数字形态的键仍按字符串排序，例如 `"10"` 必须位于 `"2"` 之前，且嵌套对象遵守同一规则；不得先构造普通 JavaScript 对象再依赖 `JSON.stringify` 的整数键重排。`previous_event_hash → event_hash` 形成连续链；第 *n* 条的 `seq` 和 `state_revision` 均为 *n*。最新事件的 `to_status`、`to_phase`、`candidate_commit` 与 `state_revision` 必须分别等于 `workflow.json` 的 `status`、`current_phase`、`current_candidate_commit` 与 `state_revision`；非终态的 `active-workflows.json` 同名快照字段再与 workflow 一致。
 

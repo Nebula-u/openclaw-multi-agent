@@ -13,7 +13,7 @@
   ],
   "properties": {
     "schema_version": { "type": "integer", "minimum": 1, "description": "任务控制契约版本。" },
-    "output_contract_version": { "type": "integer", "minimum": 1, "description": "本任务声明的 structured_outputs 契约版本。" },
+    "output_contract_version": { "type": "integer", "minimum": 1, "description": "本任务声明的 structured_outputs 契约版本；新任务在派发前必须与 task-output-contracts.json 的 schema_version 一致。" },
     "workflow_id": { "type": "string", "pattern": "^WF-[A-Za-z0-9][A-Za-z0-9-]*$", "description": "任务所属 workflow 的不可变标识。" },
     "task_id": { "type": "string", "pattern": "^TASK-[A-Za-z0-9][A-Za-z0-9-]*$", "description": "任务唯一标识。" },
     "run_id": { "type": "string", "pattern": "^RUN-[A-Za-z0-9][A-Za-z0-9-]*$", "description": "本任务当前执行实例的唯一标识。" },

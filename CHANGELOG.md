@@ -2,7 +2,36 @@
 
 本项目遵循语义化的变更记录风格。日期格式 `YYYY-MM-DD`。
 
-## [Unreleased] - 2026-08-04
+## [Unreleased] - 2026-08-05
+
+### P0：运行协议止血与安装漂移防护
+
+#### 改动了什么
+
+- 新建 `dev` 开发分支承载 P0-P5 控制面重构。
+- 清除 manager 规则中“先 `append-event`、再分别覆盖 workflow/active/task”与“必须 `commit-transition`”并存的冲突；新建、推进和恢复 workflow 均只允许事务提交。
+- 新增 `scripts/runtime-bundle.mjs`，对 package workspace、共享规则、模板和托管 skill 生成确定性摘要，并在安装后记录、在 manager 恢复前验证源码与运行时副本是否一致。
+- 将 8 个会直接覆盖 runtime 控制文件的早期一次性 CJS 脚本迁移到 `tools/legacy-migrations/unsafe-direct-writes/` 并改为 `.disabled`，仅保留取证参考。
+- 将本轮开始前已有的 result JSON 契约强化、任务输出契约声明、DevelopmentGate `DEV-0` 阻断项及对应测试一并纳入 P0 基线。
+
+#### 为什么要改
+
+- 2026-08-04 的 Demo 实际加载了 2026-07-27 安装的旧 manager workspace，未使用仓库中已经实现的事务和 dispatch ledger；源码规则本身又同时包含两套互斥写法。
+- 仅依靠 Guard 事后检查不能阻止旧 prompt 或临时脚本先写出分裂状态。
+- 新任务若没有固定声明并校验默认结构化输出，仍可能在缺失或错误的 `result.json` 下被错误推进。
+
+#### 改后的效果
+
+- manager 在安装 bundle 漂移时会失败关闭，不能继续用旧 prompt 恢复或推进 workflow。
+- 新流程不再把 `append-event` 当作正常状态推进入口；直接写 runtime 的历史脚本默认不可执行。
+- result JSON 和 DevelopmentGate 的契约错误保持阻断，不能再降级为非阻塞元数据。
+
+#### 验证
+
+- `npm test` 通过：Runtime Guard 105 通过、2 项因当前 Windows 会话无符号链接权限跳过；离线 Agent JSON 12 通过；runtime bundle 2 通过；Bash/PowerShell 安装回归 2 通过。
+- `git diff --check` 通过。
+
+## [0.3.0-dev.0] - 2026-08-04
 
 ### 改动了什么
 

@@ -64,16 +64,16 @@
 
 1. 重新读取 `install-manifest.json`、当前 `workflow.json`、`active-workflows.json`、`events.jsonl` 最后一条事件和当前 `tasks/<task-id>.json`，不得依赖聊天记忆中的旧值。
 2. 创建或更新控制层 `tasks/<task-id>.json`；artifact `input/task.json` 只是不可变任务输入，不能代替控制层任务记录。`workflow.json` 只维护 `task_ids[]`，不得另建嵌入式 `tasks[]` 作为第二套任务状态。
-3. 按 `contracts/workflow-event.schema.json` 写事件草稿，但不自行填写 `seq`、`state_revision`、`previous_event_hash` 或 `event_hash`；调用 `node <project_root_abs>/scripts/runtime-guard.mjs append-event --project-root <project_root_abs> --events <events_abs> --event <draft_abs>` 追加事件。禁止手写、猜测或重写哈希链。
-4. 以最新事件为依据更新 `workflow.json` 的 `status`、`current_phase`、`updated_at`、`state_revision`、`current_candidate_commit`、`task_ids[]`、`pending_decision_ids[]`，并重算 `rules-snapshot.md` / `context-summary.md` 的 SHA-256 写入 `rules_snapshot_sha256` / `context_summary_sha256`。代码阶段的 candidate 必须等于 integration 分支 HEAD；除非用户明确批准，不把进行中的 workflow 合并到目标仓库默认分支。
-5. 同步 `active-workflows.json`：非终态条目的 `status`、`updated_at`、`state_revision`、`current_phase`、`current_candidate_commit` 必须与 `workflow.json` 完全一致，并记录 `workflow_json_abs`；进入终态且写完 `final-report.md` 后，从活动索引移除该条目。
+3. 按 `contracts/workflow-event.schema.json` 准备事件草稿，但不自行填写 `seq`、`state_revision`、`previous_event_hash` 或 `event_hash`。同时准备完整的下一版 workflow、active index 与可选 task 草稿；禁止直接覆盖任一权威控制文件。
+4. 调用 `commit-transition --expected-revision <current>`，由 Runtime Guard 在同一事务中计算事件序号和哈希并提交 event/workflow/active/task。代码阶段的 candidate 必须等于 integration 分支 HEAD；除非用户明确批准，不把进行中的 workflow 合并到目标仓库默认分支。
+5. 事务返回成功后重新读取控制快照；非终态 active 条目必须与 workflow 一致，终态必须在写完 `final-report.md` 后由同一事务移除。任何草稿都不能代替已提交状态。
 6. 阶段结束时先写对应 Gate 和 `context-summary.md`，再推进下一阶段；最终交付前必须写 `final-report.md`。
 7. 写完后必须运行 `node <project_root_abs>/scripts/runtime-guard.mjs check-workflow --project-root <project_root_abs> --runtime-root <runtime_root_abs> --workflow-id <workflow-id> --log-file <workflow_dir_abs>/validation-errors.jsonl --stage workflow_check`。只有退出码为 0 且 `ok=true` 才算屏障通过。
 8. Guard 任一失败 → 不 spawn、不 merge、不推进、不宣布完成；其 `effective_status=HOLD` 是权威失败关闭结果。保留 Guard 输出与原始文件，工作流使用合法 `HOLD` / `RELEASE_HOLD` / `FAILED` 状态报告差异，不覆盖历史 Agent 产物。
 
 ### 3.2 原子变更与派发事实（硬性）
 
-- 对 task、workflow、active index 与对应 event 的同一次状态改变，先生成完整的下一版草稿，再以 `commit-transition --expected-revision <current>` 一次性提交；不得把 `append-event` 与分别覆盖快照混用。`append-event` 仅兼容旧事件追加，不能用于新流程的状态推进。
+- 对 task、workflow、active index 与对应 event 的同一次状态改变，先生成完整的下一版草稿，再以 `commit-transition --expected-revision <current>` 一次性提交；不得调用 `append-event` 推进任何新流程，也不得分别覆盖快照。`append-event` 只供受控历史迁移测试使用，不是 manager 的日常工具。
 - 每个 `sessions_spawn` 必须有一个先于 spawn 的 `dispatch/ DSP-* /intent.json`。先执行 `check-task-package`，再在 task 为 `READY` 时执行 `prepare-dispatch`；同一 task/run 未终结 intent 存在时禁止再次 spawn。
 - spawn 返回的 session key/ID 是回执事实：立即写 `SENT`，收到 Agent 已读取上下文的确认后写 `ACKNOWLEDGED`，实际开始工作后写 `RUNNING`。聊天消息只是触发写回执的信号，不能代替 receipt。
 - timeout、Gateway 中断或新会话恢复时，必须先 `recover-transactions`，再 `reconcile-dispatch`，并按 intent 的 session key/ID 查询 `sessions_list` / `sessions_history`；租约过期只表示必须查询，绝不等同于 LOST，绝不直接重复 spawn。
@@ -94,8 +94,8 @@
    - 目标不是 Git 仓库 → **不** `git init`，生成 approval-request（trigger 7）。
    - 存在未提交修改 → **不**自动处理，生成 approval-request（trigger 8）。
 4. 读取 policy（`config/default-policy.yaml` + 项目覆盖）与实际隔离模式（本阶段固定 `UNSANDBOXED_LOCAL`）。
-5. 写 `workflow.json`（status=`CREATED`、`current_phase=INTAKE`、`state_revision=1`）、用 Runtime Guard 追加首条事件、写 `rules-snapshot.md`（固化当前规则版本与哈希）。
-6. 在 `active-workflows.json` 登记该 workflow。
+5. 准备首版 workflow、首条事件草稿、active index 草稿和 `rules-snapshot.md`，以 `commit-transition --expected-revision 0` 原子创建 revision 1；不得先写 workflow 再追加事件。
+6. 重新读取事务结果，确认 active index 已登记该 workflow。
 7. 创建 integration 分支 `sdlc/<workflow-id>/integration`（基于 base commit）。
 8. 生成第一个任务（requirement task）与其上下文包。
 
@@ -122,8 +122,9 @@
 
 Agent 返回后，我**必须实际检查**（任一失败即不继续）：
 
-1. 用 Runtime Guard `validate-file` 确认 `output/result.json` 可解析且符合 `contracts/result.schema.json`，带 `--log-file <workflow_dir_abs>/validation-errors.jsonl --stage manager_receive`。
+1. 用 Runtime Guard `validate-file` 确认 `output/result.json` 可解析且符合 `contracts/result.schema.json`，带 `--log-file <workflow_dir_abs>/validation-errors.jsonl --stage manager_receive --agent-id <assigned_agent> --workflow-id <workflow_id> --task-id <task_id> --run-id <run_id> --attempt <attempt>`。
    - 随后运行完整 `check-workflow`，使 Guard 按 `structured_outputs[]` 对所有声明的 JSON/JSONL 再次 Ajv 校验；不得仅因 Agent 的聊天文本或 Markdown 总结而更新 task 状态。
+   - 任何 `SCHEMA_*`、JSON parse、enum 或 type 错误都是**阻断错误**。`self_validation`、`claims`、`unresolved_issues` 和 `isolation_mode` 均是 result 契约字段，绝不得标记为“非阻塞”。
 2. `workflow_id`/`task_id`/`run_id` 与当前任务一致。
 3. `result.json.agent_id` == `assigned_agent`。
 4. 声明的 output / report 文件真实存在。
@@ -138,13 +139,13 @@ Agent 返回后，我**必须实际检查**（任一失败即不继续）：
 
 若模型完成后返回空字符串，先确认该轮没有有效工具调用且所需 artifact 尚未验证通过；满足条件时，在同一会话直接要求当前 Agent 重试，最多额外 3 次。不得因纯工具调用无文本、或已验证 artifact 后的空聊天文本而重复副作用。三次仍为空 → 记录 `EMPTY_LLM_OUTPUT`，任务不得继续。
 
-若任一非空 JSON / JSONL 输出首次 schema 校验失败，我只允许对该失败文件发起一次 JSON-only retry：明确要求工作 Agent 只重新生成失败的 JSON / JSONL，不重新完整分析，不改变已有事实、证据、报告、代码、命令结果或审批判断。重试提示保存为 `<artifact_root_abs>/raw-logs/json-regeneration-retry-prompt-<n>.md`；两次校验都必须写入 `json-validation-errors.jsonl` 或 workflow `validation-errors.jsonl`。
+若任一非空 JSON / JSONL 输出 schema 校验失败，我只允许对该失败文件发起最多两次 JSON-only retry：明确要求工作 Agent 只重新生成失败的 JSON / JSONL，不重新完整分析，不改变已有事实、证据、报告、代码、命令结果或审批判断。每次重试必须递增 `--retry-count`、保存重试提示，并将 `--retry-prompt`、scope 字段写入 `json-validation-errors.jsonl` 或 workflow `validation-errors.jsonl`。
 
 验证失败或重试后仍失败 → **不**继续；工作 Agent 的历史 result 保持不变，将控制层 task 置为 `NEEDS_REWORK` / `FAILED` / `LOST`，工作流按情况置 `HOLD`，追加事件并按第 10 节决策。
 
 ## 8. Gate 与阶段推进
 
-- 每阶段结束按 `docs/gate-checklists.md` 的**版本化检查清单**执行，逐项写 `gates/<phase>-<n>.json`（见 contracts/gate-result.schema.json），每项同时写 `blocking` 与 `status ∈ PASS/FAIL/HOLD/UNKNOWN/NOT_APPLICABLE`。Gate 写完必须由 Runtime Guard 重算 overall。
+- 每阶段结束按 `docs/gate-checklists.md` 的**版本化检查清单**执行，逐项写 `gates/<phase>-<n>.json`（见 contracts/gate-result.schema.json），每项同时写 `blocking` 与 `status ∈ PASS/FAIL/HOLD/UNKNOWN/NOT_APPLICABLE`。DevelopmentGate 的 `DEV-0`（result JSON 契约）必须 `blocking=true` 且为 `PASS`；否则 Gate 不得通过。Gate 写完必须由 Runtime Guard 重算 overall。
 - Review/Security/Release Gate 只允许 current candidate 的合法 review finding 参与阻断；同 `finding_id` 由 Guard 按 review task 最后 event `seq` 处理 closure。不得用 `updated_at` 猜测，也不得让旧 candidate finding 阻断当前候选。
 - 每个 ReleaseReadinessGate（`PASS` / `FAIL` / `HOLD`）必须将 `task_id` 指向当前 `RELEASE_VERIFICATION` / `release-agent` task，并绑定该 task snapshot 的当前 `run_id` 下唯一 release decision。旧 run decision 不删除但不参与当前 Gate；decision/check evidence 必须属于该 run，checks、verdict、Gate overall 与已终态 workflow 状态必须一致。
 - 只有 Gate 通过（无阻断项）且 Guard `check-workflow` 成功才进入下一阶段；推进前检查当前状态，写入阶段变更事件和快照后再次执行 Guard，任一次失败即不推进。
@@ -155,7 +156,7 @@ Agent 返回后，我**必须实际检查**（任一失败即不继续）：
 
 ## 9. 恢复算法（新 manager 会话启动时）
 
-1. 新会话启动，以及收到“继续”“恢复”“新增/调整需求”等会影响活动 workflow 的用户消息时，先运行 `recover-transactions --project-root <project_root_abs> --runtime-root <runtime_root_abs> --workflow-id <workflow-id>`，再运行 `reconcile-dispatch` 和 Runtime Guard `recovery-check --project-root <project_root_abs> --runtime-root <runtime_root_abs>`；多个活动 workflow 时必须让用户选择并显式传 `--workflow-id`。未成功前不得恢复 spawn、merge 或阶段推进。
+1. 新会话启动，以及收到“继续”“恢复”“新增/调整需求”等会影响活动 workflow 的用户消息时，先运行 `node <project_root_abs>/scripts/runtime-bundle.mjs verify --project-root <project_root_abs> --runtime-root <runtime_root_abs>`；bundle 不一致时立即 HOLD，不得继续。随后运行 `recover-transactions --project-root <project_root_abs> --runtime-root <runtime_root_abs> --workflow-id <workflow-id>`、`reconcile-dispatch` 和 Runtime Guard `recovery-check --project-root <project_root_abs> --runtime-root <runtime_root_abs>`；多个活动 workflow 时必须让用户选择并显式传 `--workflow-id`。未成功前不得恢复 spawn、merge 或阶段推进。
 2. 恰好一个活动 workflow → 读其 `workflow.json`、`events.jsonl`、`context-summary.md`、未决 decisions、Git 状态后恢复。
 3. 多个活动 workflow → **让用户选择**，不擅自挑选。
 4. 校验一致性：`events.jsonl` 哈希链完整；`workflow.json` 快照与最新事件、与 Git（当前候选 commit、分支、worktree）一致。

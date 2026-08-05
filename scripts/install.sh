@@ -515,6 +515,10 @@ jq --argjson ve "$VALIDATE_EXIT" --argjson de "$DOCTOR_EXIT" \
    "$(native_path "$MANIFEST_PATH")" > "$tmp" && mv "$tmp" "$MANIFEST_PATH"
 echo ""
 echo "安装清单已写入：$MANIFEST_PATH"
+node "$PROJECT_ROOT/scripts/runtime-bundle.mjs" record \
+  --project-root "$PROJECT_ROOT" \
+  --runtime-root "$RUNTIME_ROOT_ABS"
+echo "运行时 bundle 已写入：$RUNTIME_ROOT_ABS/control/runtime-bundle.json"
 
 if [ "$VALIDATE_EXIT" -ne 0 ]; then
   echo "config validate 未通过，请检查上面输出。配置备份位于：${BACKUP_JSON}"

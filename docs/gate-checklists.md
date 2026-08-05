@@ -20,6 +20,7 @@
   - `UNSANDBOXED_LOCAL` **无沙箱风险尚未被人工接受**；
   - 存在**待人工审批**（`WAITING_HUMAN`）的相关决策。
 - 出现**明确失败**（如构建失败、测试用例失败且退出码非 0、阻断级评审问题、明确的安全漏洞）→ 该 item 记 `FAIL`，Gate `overall = FAIL`。Gate `overall = FAIL` 对应发布阶段的 `NO_GO`。
+- 任一已声明的结构化产物未通过对应 JSON Schema / JSONL 校验 → 该产物对应 item 必须 `FAIL` 且 `blocking=true`；不得以“附加元数据”“业务结果正确”或类似理由降级为非阻断项。
 - `NOT_APPLICABLE` 仅用于该 item 在当前项目/任务确实不适用的情形，并需在 `notes` 说明原因。
 
 ### 0.3 overall 汇总规则
@@ -70,6 +71,7 @@ Finding 的阻断权威只来自 `reviewed_commit == workflow.current_candidate_
 
 | item_id | 检查项 | 评估要点 |
 |---------|--------|----------|
+| DEV-0 | result JSON 契约有效 | `output/result.json` 及所有 `structured_outputs[]` 经 Runtime Guard + Ajv 校验为零错误；必须 `blocking=true`，任一 Schema/JSON 错误即 `FAIL` |
 | DEV-1 | 存在真实本地 commit | `output_commit` 经 `git cat-file -t` 验证真实存在（policy `development.require_real_commit`） |
 | DEV-2 | commit 基于允许 input commit | `git merge-base --is-ancestor <input_commit> <output_commit>` 通过 |
 | DEV-3 | 修改范围合规 | diff 路径均在 `allowed_write_paths_abs` 内，未触碰 `forbidden_paths_abs` |

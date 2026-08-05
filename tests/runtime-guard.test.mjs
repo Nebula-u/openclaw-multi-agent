@@ -400,10 +400,36 @@ test('check-workflow detects a tampered context input hash', () => {
 test('check-task-package validates a complete package before its dispatch event', () => {
   const fixture = makeRuntime({ taskIds: [TASK_ID], withCurrentCandidate: true });
   try {
-    const task = scopedTask(fixture);
+    const task = scopedTask(fixture, { status: 'READY' });
     const result = checkTaskPackage(fixture, task);
     assert.equal(result.status, 0, result.stdout);
     assert.match(result.stdout, /"command": "check-task-package"/);
+  } finally { fixture.cleanup(); }
+});
+
+test('check-task-package rejects a new task that omits output contract version', () => {
+  const fixture = makeRuntime({ taskIds: [TASK_ID], withCurrentCandidate: true });
+  try {
+    const task = scopedTask(fixture, { status: 'READY' });
+    delete task.output_contract_version;
+    writeJson(join(fixture.workflowDir, 'tasks', `${task.task_id}.json`), task);
+    writeTaskContext(task);
+    const result = checkTaskPackage(fixture, task);
+    assert.equal(result.status, 1);
+    assert.match(result.stdout, /TASK_OUTPUT_CONTRACT_VERSION_REQUIRED/);
+  } finally { fixture.cleanup(); }
+});
+
+test('check-task-package rejects a new task missing a default structured output declaration', () => {
+  const fixture = makeRuntime({ taskIds: [TASK_ID], withCurrentCandidate: true });
+  try {
+    const task = scopedTask(fixture, { status: 'READY' });
+    task.structured_outputs = task.structured_outputs.filter((entry) => !entry.path_abs.endsWith('command-records.jsonl'));
+    writeJson(join(fixture.workflowDir, 'tasks', `${task.task_id}.json`), task);
+    writeTaskContext(task);
+    const result = checkTaskPackage(fixture, task);
+    assert.equal(result.status, 1);
+    assert.match(result.stdout, /TASK_OUTPUT_CONTRACT_MISSING/);
   } finally { fixture.cleanup(); }
 });
 
@@ -451,6 +477,85 @@ test('check-workflow requires every declared structured output for a completed t
     const result = checkWorkflow(fixture);
     assert.equal(result.status, 1);
     assert.match(result.stdout, /STRUCTURED_OUTPUT_REQUIRED/);
+  } finally { fixture.cleanup(); }
+});
+
+test('check-workflow rejects legacy developer result fields even when a DevelopmentGate tries to downgrade them', () => {
+  const fixture = makeRuntime({ taskIds: [TASK_ID], withCurrentCandidate: true });
+  try {
+    const task = scopedTask(fixture);
+    appendTaskLifecycle(fixture, task);
+    writeTaskResult(task);
+    const resultPath = join(task.artifact_root_abs, 'output', 'result.json');
+    const resultJson = JSON.parse(readFileSync(resultPath, 'utf8'));
+    resultJson.claims = [{ id: 'CL-001', level: 'OBSERVED', statement: 'legacy claim fields' }];
+    resultJson.self_validation = { preflight_1_manifest: 'PASS' };
+    resultJson.unresolved_issues = [{ id: 'UI-001', description: 'legacy issue object' }];
+    resultJson.isolation_mode = 'worktree';
+    writeJson(resultPath, resultJson);
+    writeTaskEvidence(task, ['EVD-development-result']);
+    writeJson(join(fixture.workflowDir, 'gates', 'development.json'), {
+      schema_version: 1,
+      gate_id: 'GATE-DEVELOPMENT-001',
+      gate_name: 'DevelopmentGate',
+      workflow_id: WORKFLOW_ID,
+      task_id: task.task_id,
+      checklist_version: 'gate-checklists v1',
+      evaluated_at: '2026-07-29T00:00:30Z',
+      items: [{
+        item_id: 'DEV-0',
+        description: 'result JSON contract incorrectly downgraded',
+        status: 'UNKNOWN',
+        blocking: false,
+        evidence_refs: ['EVD-development-result'],
+        notes: 'must not be accepted',
+      }],
+      evidence_refs: ['EVD-development-result'],
+      approved_decision_ids: [],
+      overall: 'PASS',
+      overall_reason: 'incorrectly treats schema errors as non-blocking',
+    });
+    const result = checkWorkflow(fixture);
+    assert.equal(result.status, 1);
+    assert.match(result.stdout, /SCHEMA_REQUIRED/);
+    assert.match(result.stdout, /SCHEMA_TYPE/);
+    assert.match(result.stdout, /SCHEMA_ENUM/);
+    assert.match(result.stdout, /DEVELOPMENT_RESULT_CONTRACT_ITEM_NOT_BLOCKING/);
+    assert.match(result.stdout, /DEVELOPMENT_RESULT_CONTRACT_NOT_VALID/);
+  } finally { fixture.cleanup(); }
+});
+
+test('check-workflow requires DEV-0 on every task-bound DevelopmentGate', () => {
+  const fixture = makeRuntime({ taskIds: [TASK_ID], withCurrentCandidate: true });
+  try {
+    const task = scopedTask(fixture);
+    appendTaskLifecycle(fixture, task);
+    writeTaskResult(task);
+    writeTaskEvidence(task, ['EVD-development-gate']);
+    writeJson(join(fixture.workflowDir, 'gates', 'development.json'), {
+      schema_version: 1,
+      gate_id: 'GATE-DEVELOPMENT-002',
+      gate_name: 'DevelopmentGate',
+      workflow_id: WORKFLOW_ID,
+      task_id: task.task_id,
+      checklist_version: 'gate-checklists v1',
+      evaluated_at: '2026-07-29T00:00:30Z',
+      items: [{
+        item_id: 'DEV-1',
+        description: 'an unrelated development check',
+        status: 'PASS',
+        blocking: true,
+        evidence_refs: ['EVD-development-gate'],
+        notes: 'verified',
+      }],
+      evidence_refs: ['EVD-development-gate'],
+      approved_decision_ids: [],
+      overall: 'PASS',
+      overall_reason: 'incorrectly omits result contract validation',
+    });
+    const result = checkWorkflow(fixture);
+    assert.equal(result.status, 1);
+    assert.match(result.stdout, /DEVELOPMENT_RESULT_CONTRACT_ITEM_REQUIRED/);
   } finally { fixture.cleanup(); }
 });
 
@@ -589,9 +694,23 @@ function scopedTask(fixture, overrides = {}) {
     context_manifest_path_abs: join(artifactRoot, 'input', 'context-manifest.json'),
     ...overrides,
   });
+  if (task.status === 'READY') declareDefaultOutputContract(task);
   writeTaskContext(task);
+  // The task package command reads the control-plane snapshot, while the
+  // context manifest carries an immutable copy.  Keep both fixtures aligned.
+  writeJson(join(fixture.workflowDir, 'tasks', `${task.task_id}.json`), task);
   writeApprovalAssessment(fixture, { scope: 'TASK', task });
   return task;
+}
+
+function declareDefaultOutputContract(task) {
+  const outputRoot = join(task.artifact_root_abs, 'output');
+  task.output_contract_version = 1;
+  task.structured_outputs = [
+    { path_abs: join(outputRoot, 'result.json'), schema_path_abs: join(ROOT, 'contracts', 'result.schema.json'), format: 'json' },
+    { path_abs: join(outputRoot, 'evidence.jsonl'), schema_path_abs: join(ROOT, 'contracts', 'evidence.schema.json'), format: 'jsonl' },
+    { path_abs: join(outputRoot, 'command-records.jsonl'), schema_path_abs: join(ROOT, 'contracts', 'command-record.schema.json'), format: 'jsonl' },
+  ].map((entry) => ({ ...entry, required: true, producer: task.assigned_agent }));
 }
 
 function writeTaskContext(task) {
@@ -1191,6 +1310,23 @@ test('dispatch ledger persists intent, session receipts, completion, and validat
     task.updated_at = '2026-07-29T00:00:04Z';
     writeJson(join(fixture.workflowDir, 'tasks', `${task.task_id}.json`), task);
     writeTaskResult(task);
+    writeTaskEvidence(task, ['EVD-dispatch-completion']);
+    writeFileSync(join(task.artifact_root_abs, 'output', 'command-records.jsonl'), `${JSON.stringify({
+      command_record_id: 'CMD-dispatch-completion',
+      executable: 'node',
+      cwd_abs: task.worktree_path_abs,
+      started_at: '2026-07-29T00:00:00Z',
+      finished_at: '2026-07-29T00:00:01Z',
+      exit_code: 0,
+      timed_out: false,
+      stdout_path_abs: join(task.artifact_root_abs, 'raw-logs', 'stdout.log'),
+      stderr_path_abs: join(task.artifact_root_abs, 'raw-logs', 'stderr.log'),
+      attempt: task.attempt,
+      invoked_by_agent: task.assigned_agent,
+      task_id: task.task_id,
+      run_id: task.run_id,
+      isolation_mode: 'UNSANDBOXED_LOCAL',
+    })}\n`, 'utf8');
     const completion = runGuard([
       'record-completion-receipt', ...receiptBase, '--status', 'SUCCEEDED',
       '--result-file', join(task.artifact_root_abs, 'output', 'result.json'),

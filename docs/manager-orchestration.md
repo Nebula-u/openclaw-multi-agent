@@ -49,7 +49,7 @@ artifacts        = <runtime_root_abs>\artifacts
 6. 派发提示只含：任务摘要、绝对 `context-manifest.json` 路径、绝对 `task.json` 路径、绝对输出目录、绝对 worktree 路径。
 7. `task.status` → `DISPATCHED` → `RUNNING`；append event；保存子会话 session/run 标识与完成公告引用。
 8. 用 OpenClaw 原生 **yield / wait / 完成通知**机制等待；**不用 `sleep`、不高频轮询**。
-9. 在 spawn 前以 `validate-file` 校验任务、上下文和将要使用的结构化文件，校验使用 Runtime Guard 内置 Ajv validator；校验失败即停止派发，并写入 `<workflow>/validation-errors.jsonl`。每次任务状态变化由 manager 通过 `append-event` 追加事件，或在阶段/合并边界以 `check-workflow` 复核。
+9. 在 spawn 前以 `check-task-package` 校验任务、上下文和结构化输出声明；校验失败即停止派发，并写入 `<workflow>/validation-errors.jsonl`。每次任务或工作流状态变化都必须由 `commit-transition` 同时提交 event、workflow、active index 与可选 task；`append-event` 不得用于新流程推进。阶段/合并边界再以 `check-workflow` 复核。
 
 ## 5. 验证工作 Agent 返回（任何改动类任务，编号即必检项）
 
@@ -68,7 +68,7 @@ Agent 返回后，`manager-agent` **必须实际检查**以下各项，**任一�
 11. 文件哈希与 `checksums.sha256` 一致。
 12. 无明显凭证泄露（扫描 result/report/日志的敏感模式）。
 
-JSON / JSONL 校验失败 → 首次调用外最多两次 JSON-only retry：manager 按空输出、截断、enum/type 或 schema drift 的固定模板明确要求工作 Agent 只重新生成失败 JSON / JSONL 文件，不重新完整分析，不改变既有事实、证据、报告、代码、命令结果或审批判断；每次重写提示、原始/清洗哈希和错误均保存到该 run 的 `raw-logs/` 或 `<workflow>/validation-errors.jsonl`。
+JSON / JSONL 校验失败 → 这是阻断错误，不得将 `claims`、`self_validation`、`unresolved_issues` 或 `isolation_mode` 视作“附加元数据”而放行。首次调用外最多两次 JSON-only retry：manager 按空输出、截断、enum/type 或 schema drift 的固定模板明确要求工作 Agent 只重新生成失败 JSON / JSONL 文件，不重新完整分析，不改变既有事实、证据、报告、代码、命令结果或审批判断；每次重写提示、原始/清洗哈希、scope、retry_count 和错误均保存到该 run 的 `raw-logs/` 或 `<workflow>/validation-errors.jsonl`。
 
 验证失败或重试仍失败 → **不继续**；任务按合法任务状态进入 `NEEDS_REWORK`、`FAILED`、`BLOCKED` 或 `WAITING_HUMAN`，workflow 视情形进入 `HOLD`，再 append event，按第 7 节决策。**不得**把 `HOLD` 写入 `result_status`，也不得因 Agent 回复"已完成"就跳过上述校验。
 

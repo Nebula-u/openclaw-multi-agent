@@ -45,14 +45,14 @@
       "path_abs": "C:\\path\\to\\openclaw-runtime\\artifacts\\TASK-00000000-0000-0000-0000-000000000000\\RUN-00000000-0000-0000-0000-000000000000\\output\\evidence.jsonl",
       "schema_path_abs": "C:\\path\\to\\openclaw-multi-agent\\contracts\\evidence.schema.json",
       "format": "jsonl",
-      "required": false,
+      "required": true,
       "producer": "developer-agent"
     },
     {
       "path_abs": "C:\\path\\to\\openclaw-runtime\\artifacts\\TASK-00000000-0000-0000-0000-000000000000\\RUN-00000000-0000-0000-0000-000000000000\\output\\command-records.jsonl",
       "schema_path_abs": "C:\\path\\to\\openclaw-multi-agent\\contracts\\command-record.schema.json",
       "format": "jsonl",
-      "required": false,
+      "required": true,
       "producer": "developer-agent"
     }
   ],

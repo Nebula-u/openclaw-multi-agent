@@ -1,0 +1,69 @@
+import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
+import test from 'node:test';
+
+const ROOT = resolve(import.meta.dirname, '..');
+const SCRIPT = join(ROOT, 'scripts', 'runtime-bundle.mjs');
+
+function fixture() {
+  const root = mkdtempSync(join(tmpdir(), 'runtime-bundle-'));
+  const project = join(root, 'project');
+  const runtime = join(root, 'runtime');
+  mkdirSync(join(project, 'agents', 'packages', 'builtin'), { recursive: true });
+  mkdirSync(join(project, 'agents', 'demo', 'workspace'), { recursive: true });
+  mkdirSync(join(project, 'agents', 'common'), { recursive: true });
+  mkdirSync(join(project, 'templates'), { recursive: true });
+  writeFileSync(join(project, 'agents', 'packages', 'builtin', 'demo.json'), JSON.stringify({
+    schema_version: 1,
+    kind: 'openclaw-agent-package',
+    id: 'demo',
+    workspace_source_rel: 'agents/demo/workspace',
+    runtime_subdir: 'agents/demo',
+    assembly: { include_common_rules: true, include_templates: true },
+    skills: [],
+    lifecycle: { register: true },
+  }));
+  writeFileSync(join(project, 'agents', 'demo', 'workspace', 'AGENTS.md'), 'v1\n');
+  writeFileSync(join(project, 'agents', 'common', 'COMMON.md'), 'rule\n');
+  writeFileSync(join(project, 'templates', 'result.json'), '{}\n');
+  cpSync(join(project, 'agents', 'demo', 'workspace'), join(runtime, 'agents', 'demo', 'workspace'), { recursive: true });
+  cpSync(join(project, 'agents', 'common'), join(runtime, 'agents', 'demo', 'workspace', 'rules'), { recursive: true });
+  cpSync(join(project, 'templates'), join(runtime, 'agents', 'demo', 'workspace', 'templates'), { recursive: true });
+  return { root, project, runtime, cleanup: () => rmSync(root, { recursive: true, force: true }) };
+}
+
+function run(command, value) {
+  return spawnSync(process.execPath, [SCRIPT, command, '--project-root', value.project, '--runtime-root', value.runtime], { encoding: 'utf8' });
+}
+
+test('runtime bundle records and verifies managed workspace content', () => {
+  const value = fixture();
+  try {
+    const recorded = run('record', value);
+    assert.equal(recorded.status, 0, recorded.stdout + recorded.stderr);
+    const manifest = JSON.parse(readFileSync(join(value.runtime, 'control', 'runtime-bundle.json'), 'utf8'));
+    assert.equal(manifest.entries.length, 3);
+    const verified = run('verify', value);
+    assert.equal(verified.status, 0, verified.stdout + verified.stderr);
+  } finally { value.cleanup(); }
+});
+
+test('runtime bundle rejects source or installed workspace drift', () => {
+  const value = fixture();
+  try {
+    assert.equal(run('record', value).status, 0);
+    writeFileSync(join(value.project, 'agents', 'demo', 'workspace', 'AGENTS.md'), 'v2\n');
+    const sourceDrift = run('verify', value);
+    assert.equal(sourceDrift.status, 1);
+    assert.match(sourceDrift.stdout, /RUNTIME_BUNDLE_SOURCE_DRIFT/);
+    writeFileSync(join(value.project, 'agents', 'demo', 'workspace', 'AGENTS.md'), 'v1\n');
+    writeFileSync(join(value.runtime, 'agents', 'demo', 'workspace', 'AGENTS.md'), 'tampered\n');
+    const targetDrift = run('verify', value);
+    assert.equal(targetDrift.status, 1);
+    assert.match(targetDrift.stdout, /RUNTIME_BUNDLE_TARGET_DRIFT/);
+  } finally { value.cleanup(); }
+});
+

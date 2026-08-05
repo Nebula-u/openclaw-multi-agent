@@ -139,7 +139,7 @@ D:\MicroConnect\project\openclaw-multi-agent\runtime\
 `node scripts/runtime-guard.mjs` 依赖 Node.js、Ajv 与 ajv-formats；安装后需先执行 `npm install` 以获得官方 JSON Schema validator。manager 在派发、合并、阶段推进、恢复和宣布完成等边界调用它；校验失败时 Guard 返回非零退出码与 `effective_status=HOLD`，manager 必须停止推进并按状态机记录处理结果。可用命令为：
 
 - `validate-file`：用 Ajv 按本地 JSON Schema 校验一个 JSON 或 JSONL 文件，并拒绝未解析的运行时占位符；失败时可通过 `--log-file` 写入 `contracts/json-validation-error.schema.json` 约束的 JSONL 错误日志。
-- `append-event`：为事件草稿补入连续的序号、修订号和哈希后，追加到 JSONL 链。
+- `append-event`：仅供受控历史迁移测试兼容；manager 不得用它推进新 workflow。
 - `commit-transition`：校验期望 revision 与全部下一版快照，在 workflow 锁内以事务日志和原子 rename 提交关键状态。
 - `recover-transactions`：按 SHA-256 幂等滚动完成崩溃时遗留的 `PREPARED` / `APPLYING` 事务。
 - `prepare-dispatch` / `record-dispatch-receipt` / `record-completion-receipt`：在 spawn 前后持久化幂等 intent、真实 session 与完成事实。

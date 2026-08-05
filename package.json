@@ -4,13 +4,14 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "npm run test:runtime-guard && npm run test:agent-json && node --test tests/validate-install.test.mjs",
+    "test": "npm run test:runtime-guard && npm run test:agent-json && npm run test:runtime-bundle && node --test tests/validate-install.test.mjs",
     "test:runtime-guard": "node --test tests/runtime-guard.test.mjs",
     "test:agent-json:offline": "node --test tests/agent-llm-json-harness.test.mjs",
     "test:agent-json": "npm run test:agent-json:offline",
     "agent-json:real": "node scripts/agent-json-harness/collect-llm-failures.mjs",
     "agent-json:collect": "npm run agent-json:real",
-    "agent-contract:test": "node scripts/agent-llm-contract-tests/run-contract.mjs"
+    "agent-contract:test": "node scripts/agent-llm-contract-tests/run-contract.mjs",
+    "test:runtime-bundle": "node --test tests/runtime-bundle.test.mjs"
   },
   "dependencies": {
     "ajv": "^8.17.1",

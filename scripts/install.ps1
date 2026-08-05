@@ -293,5 +293,9 @@ try {
 $Manifest.config_changes = @($changes)
 $manifestPath = Join-Path $RuntimeRootAbs 'control\install-manifest.json'
 Write-JsonAtomic -Value $Manifest -Path $manifestPath -Depth 12
+$bundleScript = Join-Path $ProjectRoot 'scripts\runtime-bundle.mjs'
+$bundleResult = & node $bundleScript record --project-root $ProjectRoot --runtime-root $RuntimeRootAbs
+if ($LASTEXITCODE -ne 0) { throw "运行时 bundle 记录失败：$bundleResult" }
 Write-Host "`n同步完成；配置校验通过。" -ForegroundColor Green
 Write-Host "安装清单：$manifestPath"
+Write-Host "运行时 bundle：$(Join-Path $RuntimeRootAbs 'control\runtime-bundle.json')"

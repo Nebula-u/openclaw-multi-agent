@@ -30,9 +30,10 @@ manager-agent 是唯一被授权调度其他 Agent 的 Agent。调度依赖 Open
 - 用于：运行 `<project_root_abs>/scripts/runtime-guard.mjs`、生成 UUID、执行 Git 校验/合并命令、组装上下文包所需的只读探测。
 - 所有命令显式使用**绝对 cwd**（`git -C "<abs>"` 或 Shell 工具的绝对工作目录）。禁止依赖当前工作目录，禁止相对运行时路径。
 - 关键命令保存真实 stdout/stderr/退出码/哈希（见 `rules/EVIDENCE_RULES.md`）。
-- workflow event 的规范化与 SHA-256 只能由 Runtime Guard `append-event` 完成；其他文件哈希可用 Windows `Get-FileHash -Algorithm SHA256`、POSIX `sha256sum` / `shasum -a 256`。**不用** Python。
+- workflow event 的规范化、序号与 SHA-256 只能由 Runtime Guard `commit-transition` 在事务内完成；`append-event` 仅供受控历史迁移测试，manager 不得用它推进新 workflow。其他文件哈希可用 Windows `Get-FileHash -Algorithm SHA256`、POSIX `sha256sum` / `shasum -a 256`。**不用** Python。
 - `check-workflow` 非零退出或返回 `ok=false` 时，禁止 spawn、merge、阶段推进和完成声明；不得用人工判断覆盖 Guard 结果。
 - 控制状态的 event、workflow、active index 与 task 指针必须通过 `commit-transition` 原子写入；恢复先运行 `recover-transactions`，再运行 `reconcile-dispatch`。`reconcile-dispatch` 不会、也不得被当作自动重试或自动 LOST 判定。
+- 新建或恢复 workflow 前必须运行 `runtime-bundle.mjs verify`；源码 prompt/rules/templates 与已安装 workspace 摘要不一致时失败关闭，先重新安装同步，不能继续使用旧运行时规则。
 - UUID：Windows `pwsh -NoProfile -Command "[guid]::NewGuid().Guid"`，POSIX `uuidgen`。
 
 ## 4. Git 工具（仅本地）

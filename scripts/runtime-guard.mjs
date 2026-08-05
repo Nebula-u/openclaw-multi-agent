@@ -539,12 +539,21 @@ function redactSensitiveExcerpt(content) {
     .slice(0, LOG_EXCERPT_LIMIT);
 }
 
-function validateStructuredOutputs(task, taskFile, projectRoot, errors) {
+function validateStructuredOutputs(task, taskFile, projectRoot, errors, { requireOutputContractVersion = false } = {}) {
   const outputRoot = join(task.artifact_root_abs, 'output');
   const contractsRoot = join(projectRoot, 'contracts');
   const seenPaths = new Set();
   const policy = readJsonForCheck(join(projectRoot, 'config', 'task-output-contracts.json'), errors);
-  if (task.output_contract_version === policy?.schema_version) {
+  const hasOutputContractVersion = Number.isInteger(task.output_contract_version);
+  if (!hasOutputContractVersion) {
+    if (requireOutputContractVersion) {
+      errors.push(issue('TASK_OUTPUT_CONTRACT_VERSION_REQUIRED', taskFile,
+        'new tasks must declare output_contract_version before dispatch'));
+    }
+  } else if (task.output_contract_version !== policy?.schema_version) {
+    errors.push(issue('TASK_OUTPUT_CONTRACT_VERSION_UNSUPPORTED', taskFile,
+      `task output_contract_version ${task.output_contract_version} does not match supported version ${policy?.schema_version ?? 'unknown'}`));
+  } else {
     const taskPolicy = policy.task_types?.[task.task_type];
     if (taskPolicy && taskPolicy.agent !== task.assigned_agent) {
       errors.push(issue('TASK_OUTPUT_CONTRACT_AGENT_MISMATCH', taskFile, 'task type must be assigned to its configured agent'));
@@ -1187,6 +1196,7 @@ function prepareDispatchCommand(options) {
     if (task.status !== 'READY') errors.push(issue('DISPATCH_TASK_NOT_READY', taskFile, `task must be READY before dispatch, found ${task.status}`));
     validateTaskPaths(task, taskFile, workflow, errors);
     validateTaskContext(task, taskFile, contextSchema, errors);
+    validateStructuredOutputs(task, taskFile, projectRoot, errors, { requireOutputContractVersion: true });
     const inputManifestPath = resolve(options['input-manifest'] ?? task.context_manifest_path_abs);
     if (!isSameRealPath(inputManifestPath, task.context_manifest_path_abs)) {
       errors.push(issue('DISPATCH_INPUT_MANIFEST_MISMATCH', inputManifestPath, 'dispatch input manifest must equal task context_manifest_path_abs'));
@@ -2174,6 +2184,24 @@ function expectedGateOverall(items) {
   return 'PASS';
 }
 
+function validateDevelopmentGateResultContract(gate, gateFile, errors) {
+  if (gate.gate_name !== 'DevelopmentGate' || gate.task_id === null) return;
+  const resultContractItem = (gate.items ?? []).find((item) => item.item_id === 'DEV-0');
+  if (!resultContractItem) {
+    errors.push(issue('DEVELOPMENT_RESULT_CONTRACT_ITEM_REQUIRED', gateFile,
+      'DevelopmentGate bound to a task must include blocking DEV-0 result JSON contract validation'));
+    return;
+  }
+  if (resultContractItem.blocking !== true) {
+    errors.push(issue('DEVELOPMENT_RESULT_CONTRACT_ITEM_NOT_BLOCKING', gateFile,
+      'DevelopmentGate DEV-0 must be blocking'));
+  }
+  if (resultContractItem.status !== 'PASS') {
+    errors.push(issue('DEVELOPMENT_RESULT_CONTRACT_NOT_VALID', gateFile,
+      `DevelopmentGate DEV-0 must PASS before the gate can advance, found ${resultContractItem.status}`));
+  }
+}
+
 function validateGates({ workflow, workflowDir, projectRoot, machine, approvals, assessments, taskState, errors }) {
   const gateSchema = readJson(join(projectRoot, 'contracts', 'gate-result.schema.json'));
   const gateFiles = jsonFiles(join(workflowDir, 'gates'), '.json', errors);
@@ -2190,6 +2218,7 @@ function validateGates({ workflow, workflowDir, projectRoot, machine, approvals,
     if (gate.overall !== expected) {
       errors.push(issue('GATE_OVERALL_MISMATCH', gateFile, `items require ${expected}, found ${gate.overall}`));
     }
+    validateDevelopmentGateResultContract(gate, gateFile, errors);
     if (approvals.pendingIds.length > 0 && gate.overall === 'PASS') {
       errors.push(issue('PENDING_APPROVAL_BLOCKS_GATE', gateFile, 'gate cannot PASS while an approval is pending'));
     }
@@ -2561,7 +2590,10 @@ function checkTaskPackageCommand(options) {
     if (taskSchemaValid && workflow) validateTaskPaths(task, taskFile, workflow, errors);
     // A dispatch preflight always requires the complete immutable input package,
     // even while the control task is still in CREATED or READY state.
-    if (taskSchemaValid) validateTaskContext(task, taskFile, contextSchema, errors);
+    if (taskSchemaValid) {
+      validateTaskContext(task, taskFile, contextSchema, errors);
+      validateStructuredOutputs(task, taskFile, projectRoot, errors, { requireOutputContractVersion: true });
+    }
   }
   if (errors.length > 0) {
     appendGuardFailureLog(options, taskFile, errors);

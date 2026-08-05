@@ -87,13 +87,42 @@
 - `evidence.jsonl`、`command-records.jsonl`（每行一条）+ `raw-logs/` 下独立 stdout/stderr 原始文件。
 - 关键产物写入 `checksums.sha256`。
 
-所有 JSON / JSONL 输出（含 `change-manifest.json`、`implementation-traceability.json`、`result.json`、`evidence.jsonl`、`command-records.jsonl`）必须按 `rules/COMMON_RULES.md` 第 9 节使用 Runtime Guard + Ajv 强校验；首次失败只允许一次 JSON-only retry，不得重新完整分析或改动实现结论。
+所有 JSON / JSONL 输出（含 `change-manifest.json`、`implementation-traceability.json`、`result.json`、`evidence.jsonl`、`command-records.jsonl`）必须按 `rules/COMMON_RULES.md` 第 9 节使用 Runtime Guard + Ajv 强校验；首次调用之外最多两次 JSON-only retry，不得重新完整分析或改动实现结论。
 
 ## 7. `result.json` 关键字段
 
 至少包含：`schema_version`、`workflow_id`、`task_id`、`run_id`、`agent_id`（=`developer-agent`）、`role`、`attempt`、`started_at`、`finished_at`、`result_status`、`summary_for_user`、`summary_for_manager`、`input_commit`、`output_commit`、`branch`、`worktree_path_abs`、`artifact_root_abs`、`modified_files`、`created_files`、`deleted_files`、`report_files`、`command_record_refs`、`evidence_refs`、`claims`、`findings`、`unresolved_issues`、`known_limitations`、`decisions_required`、`recommended_next_action`、`git_status_after_completion`、`isolation_mode`、`self_validation`、`artifact_manifest_hash`。
 
 `result_status` 只能是：`COMPLETED` / `NEEDS_REWORK` / `BLOCKED` / `HUMAN_DECISION_REQUIRED` / `FAILED`。
+
+以下嵌套结构是硬性契约，禁止使用旧字段名或自行改造形状：
+
+```json
+{
+  "isolation_mode": "UNSANDBOXED_LOCAL",
+  "claims": [{
+    "claim_id": "CLM-001",
+    "statement": "可审计陈述",
+    "classification": "OBSERVED"
+  }],
+  "unresolved_issues": ["未解决问题的文字说明"],
+  "self_validation": {
+    "preflight_passed": true,
+    "checks": [{ "name": "input_manifest", "status": "PASS", "detail": "说明" }]
+  }
+}
+```
+
+- `claims[].id` / `claims[].level` 无效，必须是 `claim_id` / `classification`。
+- `self_validation` 不得使用扁平的 `preflight_*` 键，也不得使用 `check` / `passed`；每项必须是 `name` / `status`。
+- `unresolved_issues` 只能是字符串数组；需保留严重度或 ID 时放入 `findings[]` 或字符串文本，不能放对象。
+- `isolation_mode` 只能写 `UNSANDBOXED_LOCAL`，不得写 `worktree`、`sandbox` 等描述值。
+
+写入 `output/result.json` 后，必须在通知 manager 前执行以下校验并保留失败日志：
+
+```text
+node <project_root_abs>/scripts/runtime-guard.mjs validate-file --schema <project_root_abs>/contracts/result.schema.json --file <artifact_root_abs>/output/result.json --log-file <artifact_root_abs>/raw-logs/json-validation-errors.jsonl --stage agent_self_validation --agent-id developer-agent --workflow-id <workflow_id> --task-id <task_id> --run-id <run_id> --attempt <attempt>
+```
 
 ## 8. 完成前自检清单
 
