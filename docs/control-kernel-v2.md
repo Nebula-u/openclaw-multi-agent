@@ -57,6 +57,9 @@ v2 task 也以 SQLite 为当前状态权威源。`task-register` 固定 workflow
 Task 当前快照、run 固定信息、不可变哈希事件、dispatch、outbox 与幂等 operation result 均在数据库中。
 这没有改变各工作 Agent 的职责，只将 manager 原先分散的 task/dispatch/result 文件写入收束为一个确定性边界。
 
+`audit` 同时核对 task JSON/列、run 固定信息、task event sequence/hash/from-to status、dispatch intent/receipt/completion
+与 outbox。workflow 审计通过但 task/dispatch 漂移时，整体结果仍为 HOLD。
+
 ### Task CLI
 
 - `task-register --task-file <abs>`
@@ -66,3 +69,11 @@ Task 当前快照、run 固定信息、不可变哈希事件、dispatch、outbox
 - `dispatch-receipt --receipt-file <abs>`
 - `dispatch-list --task-id <id>` / `dispatch-outbox`
 - `result-ingest --completion-file <abs>`
+
+## 并发与故障语义
+
+- 同 workflow 的并发命令使用 `expected_revision` CAS，只有一个事务成功；不同 workflow 共享数据库事务但不会覆盖 active view。
+- 投影 outbox 以本轮读取的 revision 为高水位，导出期间的新 revision 保持 PENDING。
+- 提交前故障回滚整个事务；提交后响应丢失由相同 command/operation ID 幂等重放。
+- 投影失败将 outbox 标为 FAILED，权威数据库审计通过后可再次 `project/recover`。
+- dispatch 提交后、spawn 前中断会留下单一 PENDING intent；恢复必须查询原 session，不能直接创建第二个 intent。

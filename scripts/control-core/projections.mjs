@@ -23,7 +23,7 @@ export function expectedProjection(database, runtimeRoot) {
   return { root, workflows, active };
 }
 
-export function exportControlProjections(database, runtimeRoot) {
+export function exportControlProjections(database, runtimeRoot, { beforeOutboxCommit = null } = {}) {
   const root = projectionRoot(runtimeRoot);
   ensureDirectory(root);
   const lock = acquireWorkflowLock(join(root, '.projection.lock'), { purpose: 'control-v2-projection' });
@@ -51,6 +51,7 @@ export function exportControlProjections(database, runtimeRoot) {
       generated_at: generatedAt,
       workflows: expected.active,
     });
+    beforeOutboxCommit?.({ expected, generatedAt });
     database.exec('BEGIN IMMEDIATE');
     try {
       const markApplied = database.prepare(`

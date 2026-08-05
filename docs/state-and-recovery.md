@@ -1,5 +1,7 @@
 # state-and-recovery.md — 文件化状态模型与恢复
 
+> **v2 提示（2026-08-05）：** 本文主体描述遗留 v1 文件协议。新 workflow 的唯一当前状态源是 SQLite Control Kernel；恢复流程以 [control-kernel-v2.md](control-kernel-v2.md) 和 [architecture.md](architecture.md) 为准。v2 JSON/JSONL 投影只读，不得按本文旧步骤写回。
+
 > 权威来源：`agents/manager-agent/workspace/AGENTS.md`（第 2、9 节）、`agents/common/EVIDENCE_RULES.md`（第 6 节）、`contracts/workflow.schema.json`、重构 Prompt 第十一节。
 > 文档日期：2026-07-29
 

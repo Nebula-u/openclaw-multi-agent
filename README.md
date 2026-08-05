@@ -2,7 +2,7 @@
 
 在**已部署的 OpenClaw**（本机验证版本 `2026.7.1-2`）之上，使用 OpenClaw **原生多 Agent、独立 workspace、原生跨 Agent 会话调度、文件工具、Shell 工具和本地 Git 工具**，实现从需求到"运维前交付"的软件开发生命周期（SDLC）流程。
 
-> **本项目没有 Python 控制平面。** 日常工作流不启动任何后台服务、不执行本项目自建的编排脚本、不依赖 Python 运行时。全部编排由 `manager-agent` 依据固定文件协议 + OpenClaw 原生工具完成。安装脚本（PowerShell / Bash）**仅**在安装与配置阶段使用。
+> **本项目没有 Python 控制平面，也没有常驻编排服务。** `manager-agent` 仍通过 OpenClaw 原生工具编排；按需运行的 Node.js Control Kernel 使用内置 SQLite 原子保存状态，但不调用模型、不调度 Agent。安装脚本（PowerShell / Bash）仅在安装与配置阶段使用。
 
 ## 这是什么
 
@@ -20,7 +20,8 @@
 
 ## 关键边界（务必先读）
 
-- **无 Python 控制平面。** 见 [docs/architecture.md](docs/architecture.md)。日常运行只依赖 OpenClaw 原生 Agent、原生工具、文件与本地 Git。
+- **单一状态权威。** v2 workflow/task/dispatch 当前状态只存在于 `<runtime>/control/control.db`；`runtime/control/v2/**` 是只读派生投影。见 [docs/architecture.md](docs/architecture.md)。
+- **外部副作用可对账。** `sessions_spawn` 仍由 manager 调用；SQLite 先保存 intent/outbox，真实 session 返回后再写 receipt，不伪装跨系统原子事务。
 - **测试阶段无 sandbox。** 本阶段 `test-agent` 在其被分配的本地 Git worktree 中**直接**执行测试，记录 `isolation_mode=UNSANDBOXED_LOCAL`。这是**当前阶段已知的安全限制**，不是"完全隔离"。见 [docs/unsandboxed-test-policy.md](docs/unsandboxed-test-policy.md) 与 [docs/threat-model.md](docs/threat-model.md)。
 - **仅到"运维前交付"。** 不做真实部署、远程发布、CI/CD 接入、服务启停、生产迁移执行、生产凭证配置、监控告警。`release-agent` 的 `GO` 仅表示"具备移交后续运维/部署阶段的条件"。
 - **仅本地 Git。** 不连接任何远程仓库；不 push/pull/fetch。
@@ -31,22 +32,39 @@
 ## 前置条件
 
 - 已安装并可运行 OpenClaw（`openclaw --version` 正常）。本机验证：`2026.7.1-2 (0790d9f)`。
-- Node.js 20+ 与 npm（Runtime Guard 使用 Ajv / ajv-formats 进行 JSON Schema 校验）。
+- Node.js 22.5+ 与 npm（推荐 Node.js 24；Control Kernel 使用内置 `node:sqlite`，Schema 校验使用 Ajv / ajv-formats）。
 - Git（本机验证：`2.51.2.windows.1`）。
 - PowerShell 7（Windows 主目标，本机验证：`7.6.4`）**或** Bash（本机验证：GNU bash 5.2.37）。
 - Bash 实现需要现成的 `jq` 读取 package JSON；脚本不会自动安装它。
 
 安装脚本**不会**自动安装任何依赖、不联网、不修改系统服务、不删除你已有的 OpenClaw Agent 或配置。
 
-## Runtime Guard
+## Control Kernel v2 与 Runtime Guard
 
-仓库提供按需调用的 Node.js Runtime Guard，用于在工作流边界验证文件、事件链与快照一致性。它不派发任务、不作为 daemon 运行；`manager-agent` 仍是唯一编排者，并通过 Guard 的事务命令提交关键控制文件，避免事件、workflow、active index 与任务指针分步写入后失同步。
+新 workflow 默认使用 `scripts/control-kernel.mjs`。SQLite 是唯一当前状态源；workflow state、不可变哈希事件、幂等 command result 与 projection outbox 同事务提交。`phase + condition + outcome` 分离流程阶段、暂停和终态，`active_workflows` SQL view 自动排除终态。
 
-首次使用前安装 Runtime Guard 依赖：
+```bash
+# 初始化数据库；提交一个版本化动作命令
+node scripts/control-kernel.mjs init --project-root /abs/project --db /abs/runtime/control/control.db
+node scripts/control-kernel.mjs apply --project-root /abs/project --db /abs/runtime/control/control.db --command-file /abs/command.json
+
+# 生成只读投影、审计、确定性恢复
+node scripts/control-kernel.mjs project --project-root /abs/project --db /abs/runtime/control/control.db --runtime-root /abs/runtime
+node scripts/control-kernel.mjs audit --project-root /abs/project --db /abs/runtime/control/control.db --runtime-root /abs/runtime --projections true
+node scripts/control-kernel.mjs recover --project-root /abs/project --db /abs/runtime/control/control.db --runtime-root /abs/runtime
+```
+
+Task/dispatch/result 依次使用 `task-register`、`task-validate`、`dispatch-prepare`、OpenClaw `sessions_spawn`、`dispatch-receipt` 和 `result-ingest`。`dispatch-outbox` 的 PENDING 项必须先按 session key 查询原 session；不得直接重复 spawn。只有 result 与 task 固定的全部必需 JSON/JSONL 验证通过，task 才能进入 `COMPLETED`。完整命令见 [Control Kernel v2](docs/control-kernel-v2.md)。
+
+Control Kernel 不取代 Runtime Guard：Guard 继续校验 artifact、Gate、审批、Git candidate 与遗留 v1。旧 `commit-transition` / 可写 `active-workflows.json` 流程只保留给遗留 v1，不得用于新 workflow。
+
+首次使用前安装依赖：
 
 ```bash
 npm install
 ```
+
+### Runtime Guard（artifact/Gate 与遗留 v1）
 
 ```bash
 # 校验 Guard 的 contracts、状态机与受映射模板
@@ -102,9 +120,11 @@ node scripts/runtime-guard.mjs recovery-check \
   [--workflow-id WF-<uuid>]
 ```
 
-Guard 使用 Ajv / ajv-formats 作为本地 JSON Schema validator。Guard 失败会以非零退出码和 `effective_status=HOLD` 阻止推进。关键状态提交使用 workflow 级所有者锁、`state_revision` CAS、`PREPARED → APPLYING → COMMITTED` 事务日志、fsync 与同目录原子 rename；进程崩溃后按内容哈希幂等滚动完成，死亡进程遗留锁可安全回收。`tasks/<task-id>.json` 是当前 run 指针，旧 run 固化到 `task-runs/<task-id>/<run-id>.json`，因此历史 artifact 不再被误判为 orphan。每次 spawn 还必须先写 `dispatch/<dispatch-id>/intent.json`，随后按实际会话追加 session receipt，并最终写 completion receipt 或 dead letter；幂等键绑定 workflow/task/run/agent/attempt，同一 task/run 只允许一个未决 dispatch，不同任务可并行。租约过期只产生“先查询原 session”的对账要求，不自动重复派发。Guard 还校验任务依赖与最大尝试次数、完成任务的 `user-summary.md` / `manager-summary.md`、上下文 manifest 绑定与逐文件 SHA-256、`rules.md` 哈希，以及 workflow 的规则/上下文快照哈希。事件链使用 JSONL、按 Unicode 码点（含数字形态键）递归排序的 canonical JSON 与 SHA-256；非终态快照与活动索引一致，终态则要求 0 条活动记录和非空 `final-report.md`。每个 intake 与已派发任务还必须完成 15 项审批 trigger 评估；ArchitectureGate PASS 必须引用该阶段所有命中的已批准 decision。Review/Security Gate 的 PASS 需要能绑定 current candidate 的 `review-agent` 证据；旧 candidate 的 finding 只保留为历史。ReleaseReadinessGate 仍按 task/run 绑定 decision，但历史 release gate 只做自身内部一致性校验；release 终态必须恰好有一个 current candidate 的最新 release task/run gate，并只由它参与终态映射。
+Guard 使用 Ajv / ajv-formats 作为本地 JSON Schema validator。Guard 失败会以非零退出码和 `effective_status=HOLD` 阻止推进。上方 `commit-transition`、文件型事务日志和 v1 dispatch ledger 说明只适用于遗留协议；v2 的 workflow/task/dispatch/result 状态必须通过 Control Kernel。Guard 仍校验任务 artifact、上下文 SHA-256、审批、Gate、review/release authority、Git candidate 和遗留事件链。
 
 `check-task-package` 是派发前必经检查：它要求完整 input package、canonical artifact/worktree 路径与 manifest SHA-256 均正确，才允许写入派发事件。每份任务还必须在 `structured_outputs[]` 声明跨 Agent JSON/JSONL 的路径、受信任 Schema、格式和产出者；完成任务时 Guard 再次校验这些文件。`QUARANTINED` 是不可恢复的审计终态，必须保留 `quarantine-report.md` 和 `final-report.md`，且不得重写历史 input、event 或 artifact。
+
+4 个已发现的不一致 v1 workflow 已通过 `MIG-legacy-quarantine-20260805` 做取证归档并导入 v2 隔离 tombstone；没有补造缺失事件，也没有信任旧 candidate。流程与报告格式见 [legacy v1 forensic quarantine](docs/legacy-v1-migration.md)。
 
 所有 JSON / JSONL 输出错误必须记录到 `raw-logs/json-validation-errors.jsonl` 或 workflow 级 `validation-errors.jsonl`，记录格式见 `contracts/json-validation-error.schema.json`。首次 JSON 校验失败只允许一次 JSON-only retry：只重新生成失败的 JSON / JSONL，不重新完整分析任务。
 
@@ -151,7 +171,7 @@ npm run agent-contract:test -- --schema result.schema.json
 
 运行结果会写入被 Git 忽略的 `artifacts/agent-llm-contract-tests/<run-id>/<schema>/`。`summary.json` 记录 10 次调用的通过/失败数；`errors.json` 是完整失败包，包含原始 Agent 回复、内容哈希、清洗记录、错误分类和 Ajv 诊断；`failures/call-<n>.json` 则便于逐条检查。错误分类覆盖截断、schema drift、enum/type 违规、JSON 格式错误、空输出、无文本回复和 Agent 通信错误。完整入口清单见 `scripts/agent-llm-contract-tests/README.md`。
 
-全量真实测试通过现有 OpenClaw Gateway 的一个持久客户端连接调用已注册角色：20 个 JSON/JSONL 契约场景各 5 条不同需求，默认独立重复 2 轮（200 次首轮调用）。测试仅评估 Agent 的最终 LLM 回复，不调用 Agent 工具、不要求 Agent 写文件，也不会为每个用例启动 OpenClaw CLI。回复会先保守清洗、再由 Guard 校验；首次调用之外最多进行两次分类重写。每次失败都保留原始回复、清洗元数据、Guard 报告和提示，并由中文 `report.md` 汇总在被 Git 忽略的 `artifacts/agent-llm-json/<run-id>/`。
+全量真实测试通过现有 OpenClaw Gateway 的一个持久客户端连接调用已注册角色；每个 Agent 通信契约使用 5 条不同需求，默认独立重复 2 轮。Control Kernel 内部契约只由 Runtime Guard 编译，不委托 LLM 生成。测试仅评估 Agent 的最终 LLM 回复，不调用 Agent 工具、不要求 Agent 写文件，也不会为每个用例启动 OpenClaw CLI。回复会先保守清洗、再由 Guard 校验；首次调用之外最多进行两次分类重写。每次失败都保留原始回复、清洗元数据、Guard 报告和提示，并由中文 `report.md` 汇总在被 Git 忽略的 `artifacts/agent-llm-json/<run-id>/`。
 
 ```bash
 npm run agent-json:real
@@ -483,17 +503,19 @@ Manager 只有在用户批准后才能调用 `NewAgent`；构建完成后还需�
 
 ## manager-agent 如何恢复已中断的工作流
 
-新的 manager 会话不依赖聊天历史。它必须先运行 `recovery-check`：恰好一个活动工作流时才继续完整 Guard 校验；多个活动工作流必须由用户显式选择 `--workflow-id`。通过后再读取对应 `workflow.json`、`events.jsonl`、`context-summary.md`、未决审批与 Git 状态；快照、事件、输入哈希或 Git 不一致时进入 `HOLD`，不得恢复派发。当前仓库保留的历史 Demo 使用旧版 `active_workflows` 索引格式，`recovery-check` 会给出 schema 诊断并保持 `HOLD`，不会自动改写历史产物。详见 [docs/state-and-recovery.md](docs/state-and-recovery.md)。
+新的 manager 会话不依赖聊天历史。v2 先验证 runtime bundle，再运行 Control Kernel `audit`；数据库一致而投影缺失/漂移时运行 `recover`。随后查询 `active` 与 `dispatch-outbox`：多个活动 workflow 仍由用户选择，PENDING dispatch 必须按 session key 查询 OpenClaw 原 session 后对账。数据库事件/snapshot 不一致时进入 HOLD，不得从聊天或投影反向修复。遗留 v1 只允许 Runtime Guard 读取审计或使用取证迁移器隔离。
 
 ## 文档索引
 
-- [docs/architecture.md](docs/architecture.md) — 新旧架构对比（删除 Python 控制平面）
+- [docs/architecture.md](docs/architecture.md) — Control Kernel v2、outbox 与权威边界
+- [docs/control-kernel-v2.md](docs/control-kernel-v2.md) — v2 命令、状态与恢复
+- [docs/legacy-v1-migration.md](docs/legacy-v1-migration.md) — 遗留 v1 取证隔离
 - [docs/native-openclaw-integration.md](docs/native-openclaw-integration.md) — 使用了哪些原生 CLI 与工具
 - [docs/manager-orchestration.md](docs/manager-orchestration.md) — 原生调度算法
 - [docs/context-and-rule-passing.md](docs/context-and-rule-passing.md) — 上下文包与规则快照
 - [docs/workflow.md](docs/workflow.md) — SDLC 阶段
 - [docs/agent-contracts.md](docs/agent-contracts.md) — 输入输出契约
-- [docs/state-and-recovery.md](docs/state-and-recovery.md) — 文件化状态与恢复
+- [docs/state-and-recovery.md](docs/state-and-recovery.md) — 状态与恢复背景（v2 以 Control Kernel 文档为准）
 - [docs/git-worktree-strategy.md](docs/git-worktree-strategy.md) — 分支与 worktree
 - [docs/evidence-and-claims.md](docs/evidence-and-claims.md) — 事实分级与命令日志
 - [docs/human-approval.md](docs/human-approval.md) — 人工审批节点

@@ -1,11 +1,80 @@
 import { canonicalJson } from '../runtime-core/atomic-store.mjs';
 import { auditProjectionFiles } from './projections.mjs';
 import { listEvents, listWorkflows, storedEventHash } from './repository.mjs';
+import { storedTaskEventHash } from './task-repository.mjs';
 
 const ZERO_HASH = '0'.repeat(64);
 
 function same(left, right) {
   return canonicalJson(left) === canonicalJson(right);
+}
+
+function tableExists(database, name) {
+  return Boolean(database.prepare("SELECT 1 AS present FROM sqlite_master WHERE type='table' AND name=?").get(name));
+}
+
+function auditTasks(database, errors) {
+  if (!tableExists(database, 'tasks')) return { tasks: 0, task_events: 0, dispatches: 0, dispatch_outbox: [] };
+  const rows = database.prepare('SELECT * FROM tasks ORDER BY task_id').all();
+  for (const row of rows) {
+    let task;
+    try { task = JSON.parse(row.task_json); }
+    catch (error) { errors.push({ code: 'TASK_STATE_JSON_INVALID', task_id: row.task_id, message: error.message }); continue; }
+    for (const key of ['task_id', 'workflow_id', 'run_id', 'attempt', 'assigned_agent', 'task_type', 'status', 'output_contract_version']) {
+      if (task[key] !== row[key]) errors.push({ code: 'TASK_STATE_COLUMN_MISMATCH', task_id: row.task_id, field: key });
+    }
+    const run = database.prepare('SELECT * FROM task_runs WHERE run_id=?').get(row.run_id);
+    if (!run || run.task_id !== row.task_id || run.attempt !== row.attempt || run.status !== row.status
+      || run.contract_set_id !== row.contract_set_id || run.output_contract_version !== row.output_contract_version) {
+      errors.push({ code: 'TASK_RUN_MISMATCH', task_id: row.task_id, run_id: row.run_id });
+    }
+    const events = database.prepare('SELECT * FROM task_events WHERE task_id=? ORDER BY seq').all(row.task_id);
+    let priorHash = ZERO_HASH;
+    let priorStatus = null;
+    for (let index = 0; index < events.length; index += 1) {
+      const stored = events[index];
+      let payload;
+      try { payload = JSON.parse(stored.payload_json); }
+      catch (error) { errors.push({ code: 'TASK_EVENT_JSON_INVALID', task_id: row.task_id, seq: stored.seq, message: error.message }); continue; }
+      const event = {
+        task_id: stored.task_id, seq: stored.seq, event_id: stored.event_id, event_type: stored.event_type,
+        occurred_at: stored.occurred_at, from_status: stored.from_status, to_status: stored.to_status,
+        payload, previous_event_hash: stored.previous_event_hash, event_hash: stored.event_hash,
+      };
+      if (event.seq !== index + 1) errors.push({ code: 'TASK_EVENT_SEQUENCE', task_id: row.task_id, seq: event.seq, expected: index + 1 });
+      if (event.previous_event_hash !== priorHash) errors.push({ code: 'TASK_EVENT_PREVIOUS_HASH', task_id: row.task_id, seq: event.seq });
+      if (event.event_hash !== storedTaskEventHash(event)) errors.push({ code: 'TASK_EVENT_HASH', task_id: row.task_id, seq: event.seq });
+      if (event.from_status !== priorStatus) errors.push({ code: 'TASK_EVENT_FROM_STATUS', task_id: row.task_id, seq: event.seq });
+      priorHash = event.event_hash;
+      priorStatus = event.to_status;
+    }
+    if (events.length === 0 || priorStatus !== row.status) errors.push({ code: 'TASK_CURRENT_STATUS_MISMATCH', task_id: row.task_id, status: row.status, event_status: priorStatus });
+  }
+  const dispatchRows = database.prepare('SELECT * FROM dispatches ORDER BY dispatch_id').all();
+  for (const row of dispatchRows) {
+    let intent; let receipt; let completion;
+    try {
+      intent = JSON.parse(row.intent_json);
+      receipt = row.latest_receipt_json ? JSON.parse(row.latest_receipt_json) : null;
+      completion = row.completion_json ? JSON.parse(row.completion_json) : null;
+    } catch (error) { errors.push({ code: 'DISPATCH_JSON_INVALID', dispatch_id: row.dispatch_id, message: error.message }); continue; }
+    for (const key of ['dispatch_id', 'idempotency_key', 'workflow_id', 'task_id', 'run_id', 'agent_id', 'attempt', 'session_key', 'input_manifest_sha256']) {
+      if (intent[key] !== row[key]) errors.push({ code: 'DISPATCH_INTENT_COLUMN_MISMATCH', dispatch_id: row.dispatch_id, field: key });
+    }
+    if ((receipt?.session_id ?? null) !== row.session_id) errors.push({ code: 'DISPATCH_SESSION_MISMATCH', dispatch_id: row.dispatch_id });
+    const expectedStatus = completion?.status ?? receipt?.status ?? 'PREPARED';
+    if (row.status !== expectedStatus) errors.push({ code: 'DISPATCH_STATUS_MISMATCH', dispatch_id: row.dispatch_id, status: row.status, expected: expectedStatus });
+    const outbox = database.prepare('SELECT status FROM dispatch_outbox WHERE dispatch_id=?').get(row.dispatch_id);
+    if (!outbox || (receipt && outbox.status !== 'DELIVERED') || (!receipt && outbox.status === 'DELIVERED')) {
+      errors.push({ code: 'DISPATCH_OUTBOX_MISMATCH', dispatch_id: row.dispatch_id, outbox_status: outbox?.status ?? null });
+    }
+  }
+  return {
+    tasks: rows.length,
+    task_events: database.prepare('SELECT COUNT(*) AS count FROM task_events').get().count,
+    dispatches: dispatchRows.length,
+    dispatch_outbox: database.prepare('SELECT status, COUNT(*) AS count FROM dispatch_outbox GROUP BY status').all(),
+  };
 }
 
 export function auditControlDatabase(database, { runtimeRoot = null, projections = false } = {}) {
@@ -76,5 +145,6 @@ export function auditControlDatabase(database, { runtimeRoot = null, projections
     else errors.push(...auditProjectionFiles(database, runtimeRoot));
   }
   const outbox = database.prepare(`SELECT status, COUNT(*) AS count FROM projection_outbox GROUP BY status`).all();
-  return { ok: errors.length === 0, errors, workflows: workflows.length, events: eventCount, commands: commandCount, outbox };
+  const taskAudit = auditTasks(database, errors);
+  return { ok: errors.length === 0, errors, workflows: workflows.length, events: eventCount, commands: commandCount, outbox, ...taskAudit };
 }

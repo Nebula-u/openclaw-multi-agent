@@ -6,6 +6,7 @@ import { join, resolve } from 'node:path';
 import test from 'node:test';
 import { createControlRepository, openControlDatabase } from '../scripts/control-core/repository.mjs';
 import { createTaskRepository } from '../scripts/control-core/task-repository.mjs';
+import { auditControlDatabase } from '../scripts/control-core/audit.mjs';
 
 const ROOT = resolve(import.meta.dirname, '..');
 const NOW = '2026-08-05T08:00:00.000Z';
@@ -138,6 +139,7 @@ test('task control closes registration, package validation, dispatch and result 
     assert.equal(ingested.task.status, 'COMPLETED');
     assert.equal(value.tasks.get(value.task.task_id).status, 'COMPLETED');
     assert.equal(value.tasks.dispatches(value.task.task_id)[0].status, 'SUCCEEDED');
+    assert.equal(auditControlDatabase(value.database).ok, true);
     rmSync(value.paths.result);
     assert.equal(value.tasks.ingestCompletion(completion).idempotent_replay, true);
   } finally { value.close(); }
@@ -168,5 +170,37 @@ test('dispatch preparation is idempotent and does not create a second spawn inte
     assert.equal(replay.idempotent_replay, true);
     assert.equal(value.tasks.dispatches(value.task.task_id).length, 1);
     assert.equal(value.tasks.outbox().length, 1);
+  } finally { value.close(); }
+});
+
+test('restart after dispatch commit but before spawn preserves a single pending intent', () => {
+  const value = setup();
+  try {
+    value.tasks.register(value.task);
+    value.tasks.validatePackage(value.task.task_id);
+    value.tasks.prepareDispatch(intent(value));
+    const path = join(value.directory, 'control.db');
+    value.database.close();
+    const reopened = openControlDatabase(path);
+    try {
+      const tasks = createTaskRepository(ROOT, reopened);
+      assert.equal(tasks.get(value.task.task_id).status, 'DISPATCHED');
+      assert.equal(tasks.outbox().length, 1);
+      assert.equal(tasks.dispatches(value.task.task_id).length, 1);
+      assert.equal(auditControlDatabase(reopened).ok, true);
+    } finally { reopened.close(); }
+    value.close = () => rmSync(value.directory, { recursive: true, force: true });
+  } finally { value.close(); }
+});
+
+test('database audit detects task snapshot and event status divergence', () => {
+  const value = setup();
+  try {
+    value.tasks.register(value.task);
+    value.database.prepare("UPDATE tasks SET status='COMPLETED' WHERE task_id=?").run(value.task.task_id);
+    const audit = auditControlDatabase(value.database);
+    assert.equal(audit.ok, false);
+    assert.ok(audit.errors.some((error) => error.code === 'TASK_STATE_COLUMN_MISMATCH'));
+    assert.ok(audit.errors.some((error) => error.code === 'TASK_CURRENT_STATUS_MISMATCH'));
   } finally { value.close(); }
 });

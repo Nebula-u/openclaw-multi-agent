@@ -123,6 +123,15 @@ function initialize(database) {
 function taskFromRow(row) { return row ? parseJson(row.task_json) : null; }
 function loadTask(database, taskId) { return taskFromRow(database.prepare('SELECT task_json FROM tasks WHERE task_id = ?').get(taskId)); }
 
+export function storedTaskEventHash(event) {
+  const unsigned = {
+    task_id: event.task_id, seq: event.seq, event_id: event.event_id, event_type: event.event_type,
+    occurred_at: event.occurred_at, from_status: event.from_status, to_status: event.to_status,
+    payload: event.payload, previous_event_hash: event.previous_event_hash,
+  };
+  return sha256(canonicalJson(unsigned));
+}
+
 function appendTaskEvent(database, task, eventId, eventType, fromStatus, toStatus, occurredAt, payload = {}) {
   const prior = database.prepare('SELECT seq, event_hash FROM task_events WHERE task_id = ? ORDER BY seq DESC LIMIT 1').get(task.task_id);
   const event = {
@@ -130,7 +139,7 @@ function appendTaskEvent(database, task, eventId, eventType, fromStatus, toStatu
     occurred_at: occurredAt, from_status: fromStatus, to_status: toStatus, payload,
     previous_event_hash: prior?.event_hash ?? ZERO_HASH,
   };
-  event.event_hash = sha256(canonicalJson(event));
+  event.event_hash = storedTaskEventHash(event);
   database.prepare(`INSERT INTO task_events(task_id, seq, event_id, event_type, occurred_at, from_status, to_status,
     payload_json, previous_event_hash, event_hash) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
     .run(event.task_id, event.seq, event.event_id, event.event_type, event.occurred_at, event.from_status,

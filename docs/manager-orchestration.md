@@ -1,5 +1,7 @@
 # manager-orchestration.md — manager-agent 原生调度算法
 
+> **v2 提示（2026-08-05）：** Agent 职责和 OpenClaw 原生调度算法保持有效；本文涉及可写 workflow/task/active JSON、`commit-transition` 和文件型 dispatch 的步骤仅适用于遗留 v1。新 workflow 必须使用 [control-kernel-v2.md](control-kernel-v2.md) 的命令与 outbox 顺序。
+
 > `manager-agent` 是**唯一工作流总控**，默认唯一与用户交流者。
 > 权威来源：`agents/manager-agent/workspace/AGENTS.md`、`TOOLS.md` 与重构 Prompt 第十节。
 > 文档日期：2026-07-23

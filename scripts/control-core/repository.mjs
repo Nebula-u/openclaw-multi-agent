@@ -155,7 +155,7 @@ export function storedEventHash(event) {
   return sha256(canonicalJson(hashInput));
 }
 
-export function createControlRepository(projectRootInput, database) {
+export function createControlRepository(projectRootInput, database, { failpoint = null } = {}) {
   const projectRoot = resolve(projectRootInput);
   const commandSchema = JSON.parse(readFileSync(join(projectRoot, 'contracts', 'transition-command.schema.json'), 'utf8'));
   const stateSchema = JSON.parse(readFileSync(join(projectRoot, 'contracts', 'control-state-v2.schema.json'), 'utf8'));
@@ -226,7 +226,9 @@ export function createControlRepository(projectRootInput, database) {
           INSERT INTO projection_outbox(workflow_id, revision, status, attempts, created_at)
           VALUES (?, ?, 'PENDING', 0, ?)
         `).run(command.workflow_id, next.revision, command.occurred_at);
+        failpoint?.('before-workflow-commit', { command, next, event });
         database.exec('COMMIT');
+        failpoint?.('after-workflow-commit', { command, next, event });
         return { ...result, idempotent_replay: false };
       } catch (error) {
         try { database.exec('ROLLBACK'); } catch { /* transaction may already be closed */ }

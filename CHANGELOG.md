@@ -144,6 +144,36 @@
 - Runtime Guard `self-check` 成功编译 31 份 contract 和 11 份 template。
 - `git diff --check` 通过。
 
+### P5：并发、崩溃恢复、E2E 与最终文档
+
+#### 改动了什么
+
+- 新增同 workflow 并发 CAS、不同 workflow 并发 active、projection 高水位并发测试。
+- 为 workflow repository 和投影器加入可注入测试 failpoint，覆盖提交前回滚、提交后响应丢失和投影 outbox 恢复。
+- 新增 spawn 前重启、completion exactly-once、完整 v2 阶段路径、数据库重启和投影删除重建测试。
+- 审计扩展到 task snapshot/列、run、task event 哈希链、dispatch intent/receipt/completion 和 dispatch outbox。
+- 最终更新 README、总体架构、Control Kernel、状态恢复、Manager 编排与完成度文档；明确 v2 默认、遗留 v1 边界及暂不引入 LangGraph 的理由。
+
+#### 为什么要改
+
+- 单线程功能测试不能证明并发写入、响应丢失或外部 spawn 间隙不会重新产生状态不一致。
+- 只审计 workflow 而不审计 task/dispatch，会留下“workflow 一致但任务完成事实已漂移”的盲区。
+
+#### 改后的效果
+
+- CAS、outbox 高水位、幂等重放和确定性恢复均有可复现自动化证据。
+- 完整 v2 workflow 在重启并删除全部投影后仍可只凭数据库恢复到相同终态。
+- 用户入口文档不再把遗留可写 JSON 协议描述为新 workflow 的默认路径。
+
+#### 验证
+
+- Control Kernel 20 项测试通过：6 项 P5 resilience/E2E、10 项 workflow/projection、4 项 task/dispatch/result/audit。
+- 完整回归通过：Runtime Guard 105 项通过、2 项 Windows 符号链接场景跳过；Agent JSON 12 项、runtime bundle 2 项、legacy migration 2 项、安装测试 2 项全部通过。
+- 本机迁移数据库最终审计为 `CONSISTENT`：4 workflows、8 events、8 commands、8 applied projection records、0 active workflows。
+- Runtime Guard `self-check` 成功编译 31 份 contract 和 11 份 template。
+- `git diff --check` 通过。
+- 既有本机 runtime 尚无 `runtime-bundle.json`（安装早于 P0）；为避免未经请求改写用户 OpenClaw 配置，本轮未执行 apply 安装。新建真实 workflow 前必须先重新安装同步并记录 bundle。
+
 ## [0.3.0-dev.0] - 2026-08-04
 
 ### 改动了什么
