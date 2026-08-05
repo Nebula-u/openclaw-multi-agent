@@ -1,0 +1,53 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://openclaw-sdlc-multi-agent/contracts/control-state-v2.schema.json",
+  "title": "Control Kernel Workflow State v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "protocol_version",
+    "workflow_id",
+    "revision",
+    "phase",
+    "condition",
+    "outcome",
+    "resume_phase",
+    "resume_condition",
+    "current_candidate_commit",
+    "contract_set_id",
+    "state_machine_version",
+    "agent_bundle_id",
+    "created_at",
+    "updated_at",
+    "status_reason"
+  ],
+  "properties": {
+    "schema_version": { "type": "integer", "const": 2 },
+    "protocol_version": { "type": "integer", "const": 2 },
+    "workflow_id": { "type": "string", "pattern": "^WF-[A-Za-z0-9][A-Za-z0-9-]*$" },
+    "revision": { "type": "integer", "minimum": 1 },
+    "phase": {
+      "type": "string",
+      "enum": [
+        "INTAKE", "REQUIREMENTS", "REQUIREMENT_GATE", "ARCHITECTURE",
+        "ARCHITECTURE_GATE", "DEVELOPMENT", "CODE_REVIEW", "DEVELOPER_REWORK",
+        "TESTING", "TEST_CODE_REVIEW", "FAILURE_TRIAGE", "RELEASE_VERIFICATION", "FINAL_REPORT"
+      ]
+    },
+    "condition": { "type": "string", "enum": ["ACTIVE", "WAITING_HUMAN", "HOLD", "TERMINAL"] },
+    "outcome": {
+      "type": ["string", "null"],
+      "enum": [null, "READY_FOR_OPERATIONS_HANDOFF", "RELEASE_NO_GO", "FAILED", "CANCELLED", "QUARANTINED"]
+    },
+    "resume_phase": { "type": ["string", "null"] },
+    "resume_condition": { "type": ["string", "null"], "enum": [null, "ACTIVE", "WAITING_HUMAN"] },
+    "current_candidate_commit": { "type": ["string", "null"] },
+    "contract_set_id": { "type": "string", "minLength": 1 },
+    "state_machine_version": { "type": "integer", "const": 2 },
+    "agent_bundle_id": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "created_at": { "type": "string", "format": "date-time" },
+    "updated_at": { "type": "string", "format": "date-time" },
+    "status_reason": { "type": "string", "minLength": 1 }
+  }
+}

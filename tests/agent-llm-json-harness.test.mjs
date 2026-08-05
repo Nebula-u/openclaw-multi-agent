@@ -10,7 +10,7 @@ import { runLlmCase } from '../scripts/agent-json-harness/llm-runner.mjs';
 import { collectLlmRun } from '../scripts/agent-json-harness/collect-llm-failures.mjs';
 import { ingestJsonText } from '../scripts/runtime-core/json-ingestion.mjs';
 import { MAX_REPAIR_RETRIES, buildJsonRepairPrompt, classifyLlmFailure } from '../scripts/agent-json-harness/json-repair-prompts.mjs';
-import { CONTRACT_SCENARIOS, getContractScenario } from '../scripts/agent-llm-contract-tests/contract-scenarios.mjs';
+import { CONTRACT_SCENARIOS, INTERNAL_CONTRACTS, getContractScenario } from '../scripts/agent-llm-contract-tests/contract-scenarios.mjs';
 
 const EXPECTED_SCHEMAS = [
   'acceptance-criteria.schema.json', 'active-workflows.schema.json', 'agent-package.schema.json',
@@ -33,12 +33,14 @@ test('LLM 场景矩阵覆盖每份契约的 5 个不同需求', () => {
 
 test('轻量 Agent 契约测试为每个 JSON Schema 定义对应 Agent 与格式', () => {
   const contractFiles = readdirSync(join(process.cwd(), 'contracts')).filter((name) => name.endsWith('.schema.json')).sort();
-  assert.deepEqual(Object.keys(CONTRACT_SCENARIOS).sort(), contractFiles);
-  for (const schemaFile of contractFiles) {
+  const agentContracts = contractFiles.filter((name) => !INTERNAL_CONTRACTS.has(name));
+  assert.deepEqual(Object.keys(CONTRACT_SCENARIOS).sort(), agentContracts);
+  for (const schemaFile of agentContracts) {
     const scenario = getContractScenario(schemaFile);
     assert.match(scenario.agentId, /-agent$/u);
     assert.equal(typeof scenario.jsonl, 'boolean');
   }
+  assert.deepEqual([...INTERNAL_CONTRACTS].sort(), contractFiles.filter((name) => INTERNAL_CONTRACTS.has(name)));
 });
 
 test('提示只要求最终 LLM 回复，且不嵌入模板', () => {

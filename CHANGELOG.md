@@ -31,6 +31,34 @@
 - `npm test` 通过：Runtime Guard 105 通过、2 项因当前 Windows 会话无符号链接权限跳过；离线 Agent JSON 12 通过；runtime bundle 2 通过；Bash/PowerShell 安装回归 2 通过。
 - `git diff --check` 通过。
 
+### P1：SQLite Control Kernel 与命令式状态迁移
+
+#### 改动了什么
+
+- 新增 Control Kernel v2、SQLite repository 和纯 reducer；workflow 当前状态、幂等命令与不可变哈希事件在同一事务内提交。
+- 新增正交的 `phase + condition + outcome` 状态模型及 `resume_phase/resume_condition`，避免 HOLD/WAITING 恢复目标依赖聊天记忆。
+- 新增 `transition-command` 与 `control-state-v2` Schema，以及版本化的 `control-state-machine-v2.json`。
+- 新增 `BOOTSTRAP`、阶段推进、等待、HOLD、恢复、候选提交、完成、失败、取消和隔离命令；manager 不再负责计算 revision 或下一版状态。
+- workflow 创建时固定 `contract_set_id`、状态机版本与安装 bundle SHA-256。
+
+#### 为什么要改
+
+- 多个 JSON 文件同时充当当前状态源，即使具备补偿事务，也会留下部分写入、恢复顺序和跨 workflow 全局索引竞争问题。
+- 把阶段状态与 WAITING/HOLD 混在同一枚举中，恢复时无法确定原阶段和原等待条件。
+
+#### 改后的效果
+
+- 每个成功命令恰好生成一个 revision 和一个事件；失败命令不留下中间状态。
+- 同一 command 重试为幂等重放，复用 command ID 提交不同内容会被拒绝。
+- 事件表由 SQLite trigger 禁止 UPDATE/DELETE，当前状态可由事件链审计。
+
+#### 验证
+
+- Control Kernel 6 个新增测试通过，覆盖原子推进、非法边与 revision 冲突、暂停恢复、幂等重放、事件不可变、持久化重启和终态约束。
+- `npm test` 全量通过：Runtime Guard 105 通过、2 跳过；Agent JSON 12、runtime bundle 2、Control Kernel 6、安装回归 2 全部通过。
+- Runtime Guard `self-check` 成功编译 28 份 contract；两份 Kernel 内部 contract 明确不进入 LLM 通信场景。
+- `git diff --check` 通过。
+
 ## [0.3.0-dev.0] - 2026-08-04
 
 ### 改动了什么

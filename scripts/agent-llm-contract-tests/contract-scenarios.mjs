@@ -27,6 +27,14 @@ export const CONTRACT_SCENARIOS = {
   'workflow.schema.json': ['manager-agent', false],
 };
 
+// These contracts are produced only by the deterministic Control Kernel. They
+// must be compiled by Runtime Guard self-check, but must never be delegated to
+// an LLM as an Agent communication exercise.
+export const INTERNAL_CONTRACTS = new Set([
+  'control-state-v2.schema.json',
+  'transition-command.schema.json',
+]);
+
 export function getContractScenario(schemaFile) {
   const scenario = CONTRACT_SCENARIOS[schemaFile];
   if (!scenario) throw new Error(`No Agent scenario is defined for ${schemaFile}.`);
