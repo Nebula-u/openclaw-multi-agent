@@ -12,7 +12,7 @@
     "agent-json:collect": "npm run agent-json:real",
     "agent-contract:test": "node scripts/agent-llm-contract-tests/run-contract.mjs",
     "test:runtime-bundle": "node --test tests/runtime-bundle.test.mjs",
-    "test:control-kernel": "node --test tests/control-kernel.test.mjs"
+    "test:control-kernel": "node --test tests/control-kernel.test.mjs tests/task-repository.test.mjs"
   },
   "dependencies": {
     "ajv": "^8.17.1",

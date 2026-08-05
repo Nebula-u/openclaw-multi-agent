@@ -5,6 +5,7 @@ import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { ControlTransitionError } from './control-core/reducer.mjs';
 import { createControlRepository, openControlDatabase } from './control-core/repository.mjs';
+import { createTaskRepository } from './control-core/task-repository.mjs';
 import { auditControlDatabase } from './control-core/audit.mjs';
 import { exportControlProjections } from './control-core/projections.mjs';
 
@@ -36,6 +37,7 @@ function main() {
   const database = openControlDatabase(databasePath);
   try {
     const repository = createControlRepository(projectRoot, database);
+    const tasks = createTaskRepository(projectRoot, database);
     if (command === 'init') {
       emit({ ok: true, command: 'init', database: databasePath, schema_version: 2 });
     } else if (command === 'apply') {
@@ -68,8 +70,25 @@ function main() {
         const after = auditControlDatabase(database, { runtimeRoot, projections: true });
         emit({ ...after, command: 'recover', effective_status: after.ok ? 'CONSISTENT' : 'HOLD', recovered: after.ok, projection }, after.ok ? 0 : 1);
       }
+    } else if (command === 'task-register') {
+      emit(tasks.register(JSON.parse(readFileSync(resolve(required(options, 'task-file')), 'utf8'))));
+    } else if (command === 'task-validate') {
+      emit(tasks.validatePackage(required(options, 'task-id'), options['occurred-at']));
+    } else if (command === 'task-get') {
+      const task = tasks.get(required(options, 'task-id'));
+      emit(task ? { ok: true, command: 'task-get', task } : { ok: false, command: 'task-get', errors: [{ code: 'TASK_NOT_FOUND' }] }, task ? 0 : 1);
+    } else if (command === 'dispatch-prepare') {
+      emit(tasks.prepareDispatch(JSON.parse(readFileSync(resolve(required(options, 'intent-file')), 'utf8'))));
+    } else if (command === 'dispatch-receipt') {
+      emit(tasks.recordReceipt(JSON.parse(readFileSync(resolve(required(options, 'receipt-file')), 'utf8'))));
+    } else if (command === 'dispatch-list') {
+      emit({ ok: true, command: 'dispatch-list', dispatches: tasks.dispatches(required(options, 'task-id')) });
+    } else if (command === 'dispatch-outbox') {
+      emit({ ok: true, command: 'dispatch-outbox', pending: tasks.outbox() });
+    } else if (command === 'result-ingest') {
+      emit(tasks.ingestCompletion(JSON.parse(readFileSync(resolve(required(options, 'completion-file')), 'utf8'))));
     } else {
-      throw new Error('usage: control-kernel.mjs <init|apply|get|events|active|project|audit|recover> [options]');
+      throw new Error('usage: control-kernel.mjs <init|apply|get|events|active|project|audit|recover|task-register|task-validate|task-get|dispatch-prepare|dispatch-receipt|dispatch-list|dispatch-outbox|result-ingest> [options]');
     }
   } catch (error) {
     const code = error instanceof ControlTransitionError ? error.code : 'CONTROL_KERNEL_ERROR';

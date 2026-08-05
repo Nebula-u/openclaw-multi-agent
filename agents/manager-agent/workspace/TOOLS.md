@@ -1,6 +1,6 @@
 # manager-agent — TOOLS.md
 
-> 主要描述 OpenClaw **原生**工具。本 Agent 不使用任何本项目自建的 Python 编排脚本或运行时控制平面。唯一例外是无状态 Node.js Runtime Guard；它只做确定性校验和事件追加，不调度 Agent。
+> 主要描述 OpenClaw **原生**工具。本 Agent 不使用任何 Python 编排脚本。新 workflow 的确定性状态写入只使用 Node.js Control Kernel；Runtime Guard 负责 artifact/Gate/审批及遗留 v1 校验。两者均不调度 Agent。
 
 ## 1. 跨 Agent 会话调度（manager-agent 独有权限）
 
@@ -11,7 +11,7 @@ manager-agent 是唯一被授权调度其他 Agent 的 Agent。调度依赖 Open
 - **`sessions_list`** — 列出/定位子会话。
 - **`sessions_history`** — 读取子会话产出的公告 / 结果引用（用于确认完成，不替代对文件与 Git 的独立校验）。
 
-每次调用遵循持久化顺序：`check-task-package` → `prepare-dispatch` → `sessions_spawn` → `record-dispatch-receipt SENT` → `ACKNOWLEDGED` / `RUNNING`。超时或恢复先按 intent 的 session key/ID 用 `sessions_list` / `sessions_history` 查询；仅在已验证 completion 或合法 retry 决策后，才可创建新的 attempt。
+v2 每次调用遵循持久化顺序：Control Kernel `task-validate` → `dispatch-prepare` → `sessions_spawn` → `dispatch-receipt SENT` → `ACKNOWLEDGED` → `RUNNING`。超时或恢复先查看 `dispatch-outbox` 并按 intent 的 session key/ID 用 `sessions_list` / `sessions_history` 查询；仅在已验证 completion 或合法 retry 决策后，才可创建新的 attempt。
 
 门控（由安装脚本按 schema 配置，见 `config/openclaw-config-notes.md`）：
 - `tools.agentToAgent`（含 `maxPingPongTurns`）允许跨 Agent 交换。
@@ -27,13 +27,14 @@ manager-agent 是唯一被授权调度其他 Agent 的 Agent。调度依赖 Open
 
 ## 3. Shell 工具
 
-- 用于：运行 `<project_root_abs>/scripts/runtime-guard.mjs`、生成 UUID、执行 Git 校验/合并命令、组装上下文包所需的只读探测。
+- 用于：运行 `<project_root_abs>/scripts/control-kernel.mjs` 与 `runtime-guard.mjs`、生成 UUID、执行 Git 校验/合并命令、组装上下文包所需的只读探测。
 - 所有命令显式使用**绝对 cwd**（`git -C "<abs>"` 或 Shell 工具的绝对工作目录）。禁止依赖当前工作目录，禁止相对运行时路径。
 - 关键命令保存真实 stdout/stderr/退出码/哈希（见 `rules/EVIDENCE_RULES.md`）。
 - workflow event 的规范化、序号与 SHA-256 只能由 Runtime Guard `commit-transition` 在事务内完成；`append-event` 仅供受控历史迁移测试，manager 不得用它推进新 workflow。其他文件哈希可用 Windows `Get-FileHash -Algorithm SHA256`、POSIX `sha256sum` / `shasum -a 256`。**不用** Python。
 - `check-workflow` 非零退出或返回 `ok=false` 时，禁止 spawn、merge、阶段推进和完成声明；不得用人工判断覆盖 Guard 结果。
 - 控制状态的 event、workflow、active index 与 task 指针必须通过 `commit-transition` 原子写入；恢复先运行 `recover-transactions`，再运行 `reconcile-dispatch`。`reconcile-dispatch` 不会、也不得被当作自动重试或自动 LOST 判定。
 - 新建或恢复 workflow 前必须运行 `runtime-bundle.mjs verify`；源码 prompt/rules/templates 与已安装 workspace 摘要不一致时失败关闭，先重新安装同步，不能继续使用旧运行时规则。
+- 对 v2，本文其余 `commit-transition` / 可写控制 JSON 说明仅适用于遗留 v1；workflow/task/dispatch/result 状态必须通过 Control Kernel，`runtime/control/v2/**` 一律只读。
 - UUID：Windows `pwsh -NoProfile -Command "[guid]::NewGuid().Guid"`，POSIX `uuidgen`。
 
 ## 4. Git 工具（仅本地）

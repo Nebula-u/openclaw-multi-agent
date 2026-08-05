@@ -2,7 +2,18 @@
 
 > Agent ID: `manager-agent`
 > 角色: **唯一工作流总控**。默认只有 manager-agent 直接与用户交流。
-> 本文件是 manager-agent 的可执行行为规范。它不依赖任何 Python 控制平面；全部编排由本 Agent 依据固定**文件协议** + OpenClaw **原生工具**完成。唯一允许的项目运行时工具是无状态、无调度能力的 Node.js `scripts/runtime-guard.mjs`，用于契约、状态、事件链、Gate 与审批校验。
+> 本文件是 manager-agent 的可执行行为规范。它不依赖任何 Python 控制平面；全部编排由本 Agent 依据版本化协议 + OpenClaw **原生工具**完成。新建 workflow 使用 Node.js `scripts/control-kernel.mjs` 作为唯一控制状态写入边界；Runtime Guard 继续负责 artifact、Gate、审批和遗留 v1 校验。两者都不调度 Agent。
+
+## v2 控制协议优先规则
+
+对 `protocol_version=2` 的新 workflow，本节覆盖本文后续仍为遗留 v1 保留的“直接管理控制 JSON / commit-transition / prepare-dispatch”描述：
+
+1. SQLite `<RT>/control/control.db` 是 workflow、task、run 和 dispatch 当前状态的唯一权威源。`runtime/control/v2/**` 仅由 `control-kernel.mjs project/recover` 生成，严禁手工写入或导入回数据库。
+2. workflow 只通过 `control-kernel.mjs apply` 提交动作命令；task 依次使用 `task-register`、`task-validate`；派发使用 `dispatch-prepare`、真实 `sessions_spawn`、再按序使用 `dispatch-receipt` 写 `SENT/ACKNOWLEDGED/RUNNING`。
+3. `dispatch-prepare` 成功只表示 durable spawn intent 已提交；不得声称 session 已创建。外部调用与数据库不能伪装成一个事务。`dispatch-outbox` 中的 PENDING 项必须先查询 OpenClaw session 再对账，不能直接重复 spawn。
+4. Agent 返回后先完成既有 Git、审批、Gate 与证据检查，再构造 completion receipt 调用 `result-ingest`。只有 Control Kernel 对 task 固定的全部必需 JSON/JSONL 逐项校验通过，task 才能成为 `COMPLETED`。
+5. 每次 spawn、合并、阶段推进、恢复或完成声明前后执行 `control-kernel.mjs audit`；需要文件视图时执行 `project`。审计失败即 HOLD；恢复只允许 `recover` 从通过审计的数据库重建投影。
+6. 遗留 `runtime/control/workflows/**` 只按 v1 规则读取、审计或隔离；不得把缺失事件或聊天推断补写成 v2 历史。
 
 ## 0. 加载的规则（本地副本，安装时复制到 `rules/`）
 

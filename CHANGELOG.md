@@ -87,6 +87,35 @@
 - Runtime Guard `self-check` 成功编译 30 份 contract。
 - `git diff --check` 通过。
 
+### P3：Task、dispatch outbox 与结果验收闭环
+
+#### 改动了什么
+
+- 新增 SQLite task、task run、不可变 task event、dispatch、dispatch outbox 和幂等 operation 表。
+- 新增 `task-register` / `task-validate` / `task-get`、`dispatch-prepare` / `dispatch-receipt` / `dispatch-list` / `dispatch-outbox`、`result-ingest` 命令。
+- task 注册时固定 workflow contract set 和 output contract version；派发前验证 context identity、输入哈希、依赖、Agent 策略、绝对路径和全部结构化输出声明。
+- dispatch intent、task `DISPATCHED` 状态和 outbox 在一个事务内提交；session receipt 严格按 `SENT → ACKNOWLEDGED → RUNNING` 对账。
+- completion ingestion 校验 result 哈希、session 身份和 task 固定的所有必需 JSON/JSONL；验证失败不改变 task/dispatch 状态。
+- manager v2 规则改为以 Control Kernel 为唯一状态写入边界，保留原有 Agent 分工和 OpenClaw `sessions_spawn` 调度职责。
+
+#### 为什么要改
+
+- 外部 session 创建无法与本地数据库形成真实原子事务；若先 spawn 后写状态，崩溃会产生“已运行但无记录”，反序则可能留下“有 intent 但未 spawn”。
+- task 完成状态若先于输出契约校验写入，会重现旧 workflow 中“控制层 COMPLETED、实际 result 缺失”的问题。
+
+#### 改后的效果
+
+- PENDING intent 是可恢复、可查询的外部副作用边界；它不会被误判为已派发或自动 LOST。
+- task 只有在权威 run、session 与结构化产物全部闭合后才能完成；失败输入保持原状态并可安全修正后重试 ingestion。
+- Agent 的业务职责没有变化，Manager 仍负责调度和 Gate，但不再分别维护 task/dispatch/result 状态文件。
+
+#### 验证
+
+- Control Kernel 12 项测试通过，其中 3 项覆盖 task/dispatch/result 闭环、缺失必需输出失败关闭和 dispatch 幂等。
+- 完整回归通过：Runtime Guard 105 项通过、2 项 Windows 符号链接场景跳过；Agent JSON 12 项、runtime bundle 2 项、安装测试 2 项全部通过。
+- Runtime Guard `self-check` 成功编译 30 份 contract 和 11 份 template。
+- `git diff --check` 通过。
+
 ## [0.3.0-dev.0] - 2026-08-04
 
 ### 改动了什么
