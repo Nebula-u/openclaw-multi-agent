@@ -1,0 +1,18 @@
+[
+  {
+    "ordinal": 5,
+    "classification": "EMPTY_RESPONSE",
+    "response_sha256": null,
+    "cleaned_sha256": null,
+    "transformations": [],
+    "ingestion_error": null,
+    "validator_errors": [
+      {
+        "code": "JSON_PARSE_ERROR",
+        "path": "C:\\Users\\liuxu\\AppData\\Local\\Temp\\openclaw-llm-json-ZDcGB1\\response.json",
+        "message": "Unexpected end of JSON input"
+      }
+    ],
+    "response": ""
+  }
+]

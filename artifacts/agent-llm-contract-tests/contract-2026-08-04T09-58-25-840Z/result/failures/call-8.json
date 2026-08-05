@@ -1,0 +1,21 @@
+{
+  "ordinal": 8,
+  "classification": "TYPE_VIOLATION",
+  "response_sha256": "8f2e679d9305f551e5eba51a979f192fa4811c2565f804d5b57a1b494b27b282",
+  "cleaned_sha256": "8f2e679d9305f551e5eba51a979f192fa4811c2565f804d5b57a1b494b27b282",
+  "transformations": [],
+  "ingestion_error": null,
+  "validator_errors": [
+    {
+      "code": "SCHEMA_TYPE",
+      "path": "$.claims[0].observed_at",
+      "message": "must be string",
+      "schema_keyword": "type",
+      "schema_path": "#/definitions/claim/properties/observed_at/type",
+      "params": {
+        "type": "string"
+      }
+    }
+  ],
+  "response": "{\"schema_version\":1,\"workflow_id\":\"WF-CONTRACT-008\",\"task_id\":\"TASK-CONTRACT-008\",\"run_id\":\"RUN-CONTRACT-008-1785837627078\",\"agent_id\":\"developer-agent\",\"role\":\"WORKER\",\"attempt\":8,\"started_at\":\"2026-08-04T10:00:00Z\",\"finished_at\":\"2026-08-04T10:00:01Z\",\"result_status\":\"BLOCKED\",\"summary_for_user\":\"第8次契约通信测试：返回 BLOCKED 状态以验证 Manager 对 result_status 枚举的解析能力。\",\"summary_for_manager\":\"第8次契约通信测试（BLOCKED 分支）。Manager 应据此 Runtime Guard 推进至对应状态机分支。\",\"input_commit\":null,\"output_commit\":null,\"branch\":null,\"worktree_path_abs\":\"d:\\\\MicroConnect\\\\project\\\\openclaw-multi-agent\\\\runtime\\\\worktrees\\\\wf-contract-008\",\"artifact_root_abs\":\"d:\\\\MicroConnect\\\\project\\\\openclaw-multi-agent\\\\runtime\\\\agents\\\\developer-agent\\\\workspace\\\\output\\\\RUN-CONTRACT-008-1785837627078\",\"modified_files\":[],\"created_files\":[],\"deleted_files\":[],\"report_files\":[\"development-report.md\",\"change-manifest.json\",\"implementation-traceability.json\",\"result.json\"],\"command_record_refs\":[],\"evidence_refs\":[],\"claims\":[{\"claim_id\":\"CLM-008-001\",\"statement\":\"本次为第8/10次轻量JSON契约通信测试，模拟BLOCKED状态返回。\",\"classification\":\"PROPOSED\",\"evidence_refs\":[],\"limitations\":\"无工具调用，无文件写入，仅生成Schema兼容的测试数据。\",\"observed_at\":null}],\"findings\":[],\"unresolved_issues\":[\"模拟阻塞：Preflight 环境中 target_project_root_abs 不存在，无法继续。此为测试数据，非真实环境阻塞。\"],\"known_limitations\":[\"本次为契约通信测试，不涉及任何文件读写、命令执行或代码生成。\"],\"decisions_required\":[],\"recommended_next_action\":\"Manager 应验证 result_status=BLOCKED 后进入状态机对应分支，将本 RUN 标记为阻塞并处理 unresolved_issues。\",\"git_status_after_completion\":null,\"isolation_mode\":\"UNSANDBOXED_LOCAL\",\"self_validation\":{\"preflight_passed\":false,\"checks\":[{\"name\":\"context-manifest\",\"status\":\"FAIL\",\"detail\":\"模拟：target_project_root_abs 在环境中不存在，阻塞 Preflight。此为第8次契约测试的预期行为。\"},{\"name\":\"worktree-path-validation\",\"status\":\"UNKNOWN\",\"detail\":\"因上游阻塞未执行路径校验。\"},{\"name\":\"input-commit-verification\",\"status\":\"UNKNOWN\",\"detail\":\"因上游阻塞未执行 commit 校验。\"},{\"name\":\"input-file-integrity\",\"status\":\"UNKNOWN\",\"detail\":\"因上游阻塞未执行哈希校验。\"},{\"name\":\"input-content-load\",\"status\":\"UNKNOWN\",\"detail\":\"因上游阻塞未加载输入文件。\"},{\"name\":\"write-boundary-confirmation\",\"status\":\"UNKNOWN\",\"detail\":\"因上游阻塞未确认写入边界。\"}]},\"artifact_manifest_hash\":null}"
+}
