@@ -116,6 +116,34 @@
 - Runtime Guard `self-check` 成功编译 30 份 contract 和 11 份 template。
 - `git diff --check` 通过。
 
+### P4：遗留 v1 取证归档与隔离迁移
+
+#### 改动了什么
+
+- 新增 `migrate-legacy-v1.mjs plan/apply` 和版本化 forensic quarantine report Schema。
+- 迁移器递归清点并哈希旧 control/artifact tree，复制后重算摘要，保存旧 active index，并将 archive 证据设为只读。
+- v2 仅创建新的 `legacy-quarantine-tombstone-v1` tombstone；旧 snapshot/event 不导入为 v2 历史，旧 candidate 只记录为不受信观察值。
+- 新增不可变 `legacy_quarantines` 报告表；相同 migration 可重放，源、archive 或报告冲突时失败关闭。
+- 已对本机 4 个旧 workflow 执行 `MIG-legacy-quarantine-20260805`，原始目录未修改；归档位于 `runtime/control/legacy-archive/v1/MIG-legacy-quarantine-20260805`。
+
+#### 为什么要改
+
+- `WF-a899188b...` 的现存事件只到 revision 13，snapshot 声称 revision 18，active index 仍停在 revision 7；任何自动补链都会把推测伪装成历史事实。
+- 其他遗留 workflow 分别存在旧 Schema、非终态未登记和已隔离记录，不能与新 v2 状态混用。
+
+#### 改后的效果
+
+- 遗留证据、当前观察值和可信事件前缀被分别保存；可审计但不可恢复执行。
+- 4 个 v2 tombstone 均为 revision 2、`QUARANTINED`、candidate `null`，不会进入 active view。
+- 实际迁移后数据库审计为 `CONSISTENT`：4 workflows、8 events、8 commands、8 applied projection outbox records，active workflows 为 0。
+
+#### 验证
+
+- 2 项迁移测试通过：dry-run 零写入与可信前缀识别；精确归档、源树不变、幂等隔离导入。
+- 完整回归通过：Runtime Guard 105 项通过、2 项 Windows 符号链接场景跳过；Agent JSON 12 项、runtime bundle 2 项、Control Kernel 12 项、安装测试 2 项全部通过。
+- Runtime Guard `self-check` 成功编译 31 份 contract 和 11 份 template。
+- `git diff --check` 通过。
+
 ## [0.3.0-dev.0] - 2026-08-04
 
 ### 改动了什么

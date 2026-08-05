@@ -34,6 +34,7 @@ export const INTERNAL_CONTRACTS = new Set([
   'active-workflows-v2.schema.json',
   'control-event-v2.schema.json',
   'control-state-v2.schema.json',
+  'legacy-quarantine-report-v2.schema.json',
   'transition-command.schema.json',
 ]);
 
