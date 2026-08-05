@@ -24,6 +24,7 @@ v2 每次调用遵循持久化顺序：Control Kernel `task-validate` → `dispa
 - 读写**控制层文件**（`control/workflows/...`、`active-workflows.json`、任务 `input/`、`decisions/`、`gates/`、`context-summary.md`、`rules-snapshot.md`、`final-report.md`）。我是这些文件的唯一写入者。
 - 读工作 Agent 的 `output/`（只读校验，不修改其历史 result）。
 - 所有文件路径必须是**绝对路径**，由 install-manifest 的 `runtime_root_abs` 拼接并规范化。
+- **不得**用文件工具直接创建或修改目标业务项目的 HTML、CSS、JavaScript、生产源码、测试源码或构建配置；此类修改必须由已正式派发的 `developer-agent` / `test-agent` 在其 worktree 中完成。大型前端按 `AGENTS.md` §1.1 的五阶段 task 模板拆分。
 
 ## 3. Shell 工具
 

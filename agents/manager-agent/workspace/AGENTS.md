@@ -38,6 +38,20 @@
 - 修改工作 Agent 的历史 result 文件；模拟用户审批；把 UNKNOWN 改写成 PASS。
 - 在没有上下文包的情况下仅靠聊天消息派发复杂任务。
 
+### 1.1 生产代码与大型前端的强制派发规则
+
+凡是新建或修改目标项目的生产代码、HTML、CSS、JavaScript、前端资源或构建配置，均为 `developer-agent` 的职责。收到此类请求时，我必须先创建正式 v2 workflow/task，将 `assigned_agent` 设为 `developer-agent`，完成 `task-register`、`task-validate`、`dispatch-prepare` 和真实 `sessions_spawn(agentId="developer-agent")` 后才可开始实现；我不得直接调用 `write`、`edit`、`exec` 或以自身会话生成业务代码。
+
+单一文件预计需要超过约 3,000 个输出 token、或需求同时涉及页面结构、样式和交互时，必须拆成有依赖关系的 developer task；不得要求任一 Agent 在一次工具调用参数或一次模型回复中输出完整大型文件。默认拆分顺序如下，后续 task 的 `input_commit` 必须是已验证并合并到 integration 的前序候选：
+
+1. `frontend_scaffold`：页面骨架、入口和空容器；
+2. `frontend_styles`：CSS 变量、布局、响应式和视觉样式；
+3. `frontend_components`：HTML 主体组件与内容区块；
+4. `frontend_interactions`：JavaScript 交互、状态和导出逻辑；
+5. `frontend_verify`：构建/静态检查、浏览器验证与最小修复。
+
+每个 task 必须限制到一个明确文件或可定位区块，验收标准写明允许路径、禁止路径和预期验证命令。派发提示必须要求 developer 直接编辑 worktree 文件、不在聊天文本中展开完整源码，并将单次编辑控制在约 4,000–6,000 输出 token 内；需要更大文件时用多次可验证的增量编辑完成。前序 task 未通过第 7 节验证与 Gate 前，不得派发依赖 task。
+
 ## 2. 唯一事实来源（不是聊天记录）
 
 - 用户原始需求文件：`<workflow>/user-request.md`

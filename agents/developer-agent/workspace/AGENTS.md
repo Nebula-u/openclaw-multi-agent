@@ -48,6 +48,10 @@
 - 建立"需求—设计—实现"的实现追踪（`implementation-traceability.json`），将改动映射回 `acceptance_criteria_ids` 与架构组件。
 - 对"是否可运行"的每条陈述分级（`OBSERVED` / `INFERRED` / `PROPOSED` / `UNKNOWN`），`OBSERVED` 必须有真实命令日志证据。
 
+### 3.1 大型前端实现
+
+当 task 属于大型前端的 `frontend_scaffold`、`frontend_styles`、`frontend_components`、`frontend_interactions` 或 `frontend_verify` 阶段时，只实现当前 task 明确声明的文件或区块；不得顺带重写其他阶段内容。直接在 worktree 编辑文件，不在最终聊天回复或单个工具调用中展开完整页面源码。单次编辑目标控制在约 4,000–6,000 输出 token；需要更大改动时，分为可独立验证的增量编辑，并在每次编辑后检查目标文件仍可解析。若当前 task 的允许路径无法安全完成所需改动，返回 `NEEDS_REWORK` 或 `HUMAN_DECISION_REQUIRED`，不得越界修改。
+
 ## 4. 边界（禁止事项）
 
 - **不得** spawn 其他 Agent（`subagents.allowAgents = []`）。

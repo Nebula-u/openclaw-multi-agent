@@ -25,6 +25,7 @@
 - **测试阶段无 sandbox。** 本阶段 `test-agent` 在其被分配的本地 Git worktree 中**直接**执行测试，记录 `isolation_mode=UNSANDBOXED_LOCAL`。这是**当前阶段已知的安全限制**，不是"完全隔离"。见 [docs/unsandboxed-test-policy.md](docs/unsandboxed-test-policy.md) 与 [docs/threat-model.md](docs/threat-model.md)。
 - **仅到"运维前交付"。** 不做真实部署、远程发布、CI/CD 接入、服务启停、生产迁移执行、生产凭证配置、监控告警。`release-agent` 的 `GO` 仅表示"具备移交后续运维/部署阶段的条件"。
 - **仅本地 Git。** 不连接任何远程仓库；不 push/pull/fetch。
+- **代码由 developer 实现。** manager 只能编排和验证；HTML、CSS、JavaScript、生产代码与构建配置必须通过正式 `developer-agent` task 在独立 worktree 中修改。大型前端按骨架、样式、组件、交互、验证拆分为有依赖关系的任务，避免单次生成完整大文件而触发模型输出截断。
 - **绝对路径。** 所有 workspace、agentDir、worktree、artifact、任务输入输出路径均为规范化绝对路径，绝不依赖当前工作目录（即使从 `C:\Windows\System32` 启动）。
 - **内置 Agent 只读。** 生成、更新和删除能力只能操作 `agents/packages/generated/`；内置 7 个 Agent 的源 workspace 不能被组件工具修改或删除。
 - **生成组件必须审批。** 新 Agent/Skill 在构建、激活和删除前分别绑定用户审批；新 Agent 默认未注册、未激活、无 binding、不能派生子 Agent。
@@ -67,6 +68,8 @@ npm install
 ### 卸载并重新安装项目 Agent（Windows）
 
 当源码 workspace 规则更新、或现有 runtime 缺少 bundle manifest 时，使用受限重装脚本同步**当前已安装**的项目 Agent。它仅处理 workspace/agentDir 与本项目 manifest 完全匹配的 Agent；未安装的 package（例如 `dialogue-agent`）不会被顺带注册。脚本会先备份 OpenClaw 配置及这些 Agent 的 runtime workspace/state，保留已有的每 Agent 模型路由，随后删除、重建、更新 `agents.list` 并校验 runtime bundle。
+
+本仓库修改 `agents/*/workspace/` 下的规则后，也必须执行该同步流程；否则运行中的 Agent 仍使用旧 workspace 规则。
 
 ```powershell
 # 先只查看将处理哪些 Agent

@@ -36,6 +36,20 @@ artifacts        = <runtime_root_abs>\artifacts
 
 ## 4. 派发一个任务的算法（各阶段任务通用）
 
+### 4.1 生产代码与大型前端拆分
+
+生产代码、HTML、CSS、JavaScript、前端资源和构建配置只能由 `developer-agent` 在正式 task 的 worktree 中修改；manager 不得直接调用文件或 Shell 工具实现这些内容。任何预计超过约 3,000 输出 token 的单文件实现，或同时包含页面结构、样式和交互的前端需求，必须建立相互依赖的 developer task：
+
+| 顺序 | task 类型 | 允许的主要产物 | 依赖 |
+| --- | --- | --- | --- |
+| 1 | `frontend_scaffold` | 页面骨架、入口、空容器 | 无 |
+| 2 | `frontend_styles` | CSS 变量、布局、响应式、视觉样式 | 1 |
+| 3 | `frontend_components` | HTML 主体组件和内容区块 | 1、2 |
+| 4 | `frontend_interactions` | JavaScript 交互、状态、导出逻辑 | 1、3 |
+| 5 | `frontend_verify` | 真实构建/静态/浏览器检查及最小修复 | 1–4 |
+
+每个 task 的 acceptance criteria 必须限定文件或区块、`allowed_write_paths_abs`、`forbidden_paths_abs` 和实际验证命令。派发提示应要求 developer 直接编辑 worktree、不要在聊天回复中展开完整源码；单次编辑保持约 4,000–6,000 输出 token，需要时做多次增量编辑。依赖 task 必须先完成既有 artifact、commit、Gate 验证并合入 integration，后续 task 才能使用其 candidate commit。
+
 1. 生成 `TASK-<UUID>`、`RUN-<UUID>` 与 `attempt`；写 `tasks/<task-id>.json`（见 `contracts/task.schema.json`），`status` 由 `CREATED` → `READY`。
 2. 若为 `developer` / `test` 类任务：从**允许的 input commit** 创建任务分支与**绝对** worktree：
    ```text
@@ -117,6 +131,7 @@ JSON / JSONL 校验失败 → 这是阻断错误，不得将 `claims`、`self_va
 - **模拟用户审批**；把 `UNKNOWN` 改写成 `PASS`。
 - 在没有上下文包的情况下仅靠聊天消息派发复杂任务。
 - 替 `developer-agent` 写生产代码；替 `test-agent` 写完整测试或宣布测试成功；替 `review-agent` 伪造审查；替 `release-agent` 伪造发布前结论。
+- 对大型前端或长代码生成跳过 developer task 拆分，或在自身会话/工具调用中一次性生成完整源码。
 - 用 `sleep` 或高频轮询代替原生 yield/wait；调度白名单外的 Agent。
 - 远程 Git 操作（push/pull/fetch/remote）；破坏性命令（`reset --hard` / `clean -fdx`）；修改全局 Git 配置或用户既有 OpenClaw 配置；执行 `openclaw doctor --fix`。
 

@@ -1,5 +1,32 @@
 # Changelog
 
+### 大型前端任务强制由 developer-agent 分段实现
+
+#### 改动了什么
+
+- manager-agent 规则新增硬性派发门槛：业务代码、HTML、CSS、JavaScript、前端资源和构建配置必须创建正式 developer task；manager 禁止直接用文件或 Shell 工具实现业务代码。
+- 为大型前端固化 `frontend_scaffold` → `frontend_styles` → `frontend_components` → `frontend_interactions` → `frontend_verify` 的依赖任务模板，并要求每次增量编辑保持在约 4,000–6,000 输出 token。
+- README、manager 编排文档和 developer-agent 规则同步说明该流程及 runtime workspace 重新安装要求。
+
+#### 为什么要改
+
+- 避免 manager 在单次工具调用中生成完整大型 HTML，导致上游模型以 `stopReason=length` 截断、工具参数不完整且文件未落盘。
+
+### OpenClaw Agent 单次输出预算上调
+
+#### 改动了什么
+
+- 将 `deepseek` 与 `mydeep` 路由下的 `deepseek-v4-pro`、`deepseek-v4-flash` 的显式 `maxTokens` 统一设为 `49152`。
+- 该配置覆盖 OpenClaw 模型目录中 Pro 的 8192 和 Flash 的 16384 隐式输出上限，应用于当前注册的 `manager-agent`、`requirement-agent`、`architect-agent`、`developer-agent`、`review-agent`、`test-agent`、`release-agent`。
+
+#### 为什么要改
+
+- 长 HTML 生成任务在 8192 tokens 时以 `stopReason: length` 截断，导致未完成的工具调用无法交付。
+
+#### 验证
+
+- `openclaw config validate --json` 通过；四个模型配置均报告 `maxTokens: 49152`，上下文窗口保持 `1000000`。
+
 ### 重装已安装 Agent、配置与 runtime 同步
 
 #### 改动了什么

@@ -1,179 +1,442 @@
-# 多 Agent 实时可观测与交互平台改造计划
+# 多 Agent 实时看板与监督执行机制实施计划（Control Kernel v2）
 
-> 日期：2026-08-04  
-> 状态：待评审  
-> 目标：在当前 OpenClaw 文件化多 Agent 协作工具上，增加轻量级、可回放、可交互的实时监控平台。  
+> 版本：2.0
+> 更新日期：2026-08-05
+> 状态：待评审、待实施
+> 适用项目：`openclaw-multi-agent`
 > 参考项目：`D:\MicroConnect\project\edict-main`
+> 替换说明：本文完整替换 2026-08-04 的旧版可观测性计划。旧计划以可写
+> `workflow.json`、`task.json` 和 `active-workflows.json` 为主要事实源；当前项目已经升级为
+> SQLite Control Kernel v2，因此旧方案的数据源、写入边界、命令闭环和恢复策略均已失效。
 
-## 1. 结论摘要
+## 1. 文档目的
 
-建议采用“文件化事实源 + 只读监控投影 + 实时推送 + manager 命令闭环”的路线。
+本文解决两个相互关联、但必须分开设计的问题：
 
-第一期不新增独立调度器，也不改变当前 `manager-agent` 的唯一编排者职责，而是新增一个本地 Observability Monitor：
+1. **看板问题**：如何实时、准确、安全地看到 workflow、task、run、dispatch、session 和
+   Agent 的当前状态、进展、产物、阻塞与父子关系。
+2. **监督问题**：如何发现 Agent 未启动、长时间无进展、会话失联或超过租约，并在不重复
+   spawn、不绕过 Gate、不破坏审计链的前提下进行催办、核查、重试和人工升级。
+
+本计划的核心结论是：
+
+> 保留 `control.db` 作为唯一控制状态权威；新增只读 Monitor、独立可重建遥测库、SSE
+> Dashboard，以及“Watchdog 创建监督请求 → 唤醒 manager-agent → manager 核验并执行”
+> 的监督闭环。
+
+Monitor 不成为第二个编排器，Watchdog 不直接控制工作 Agent，网页也不直接修改 workflow
+或 task 状态。
+
+## 2. 为什么必须替换旧计划
+
+旧计划形成于项目迁移到 Control Kernel v2 之前，主要假设是：
+
+- `runtime/control/active-workflows.json` 是活动工作流索引。
+- `runtime/control/workflows/<workflow-id>/workflow.json` 是当前 workflow 快照。
+- `tasks/*.json` 和 `events.jsonl` 是看板的直接事实源。
+- Monitor 可以通过扫描这些文件构造状态。
+
+当前项目已经明确：
+
+- `<runtime>/control/control.db` 是 workflow、task、run 和 dispatch 当前状态的唯一权威源。
+- `runtime/control/v2/**` 只是只读派生投影，不能反向导入数据库。
+- workflow 状态、不可变事件、command 幂等结果和 projection outbox 在同一 SQLite 事务中提交。
+- dispatch 必须遵循 intent/outbox、真实 `sessions_spawn`、receipt 和 reconciliation 顺序。
+- Control Kernel 不调度 Agent，manager-agent 仍是唯一编排者。
+
+如果继续按旧计划实现，将产生以下问题：
+
+1. 重新引入第二份“当前状态”。
+2. 看板可能把延迟或损坏的投影误认为真实状态。
+3. 网页命令可能绕过 Control Kernel reducer 和审计。
+4. Watchdog 可能在原 session 仍存活时重复 spawn。
+5. 旧文件路径与当前 v2 runtime 布局不一致。
+
+因此，本计划从数据读取、事件协议、监督动作到恢复顺序全部按 Control Kernel v2 重写。
+
+## 3. edict-main 代码学习结论
+
+### 3.1 管理 Agent 如何推动下级 Agent
+
+`edict-main` 的管理链路不是单纯依赖一个总管 Agent 定时思考，而是由角色协议和后台调度器
+共同完成。
+
+角色链路如下：
 
 ```text
-OpenClaw Agent / manager-agent
-       │
-       ├─ workflow.json / task.json / events.jsonl
-       ├─ dispatch receipts / completion receipts
-       ├─ Agent run 的 live-status.json / activity.jsonl
-       └─ OpenClaw session JSONL（只读取、尾读、脱敏）
-                         │
-                         ▼
-               Monitor Event Adapter
-                         │
-                         ├─ 历史事件回放
-                         ├─ 当前状态投影
-                         ├─ 心跳和停滞判定
-                         └─ 父子 Agent 关系图
-                         │
-                         ▼
-             本地 HTTP API + SSE 实时推送
-                         │
-                         ▼
-               图形化 Dashboard / 时间线
-                         │
-                         ▼
-       用户命令请求 → manager-agent 校验并执行
+太子
+  └─ 中书省：整理需求、起草方案
+       └─ 门下省：审议、准奏或封驳
+            └─ 尚书省：确定执行部门并派发
+                 └─ 六部 Agent：实际执行
 ```
 
-实时输出的默认范围是安全摘要，不展示完整思考过程：
+关键机制：
 
-- 展示 Agent 的阶段性文本回复、当前动作、Todo/checkpoint 变化。
-- 展示工具调用名称、开始/完成状态、耗时和脱敏后的输出摘要。
-- 展示心跳、状态转换、子 Agent 创建和完成信息。
-- 默认丢弃 `thinking` / chain-of-thought 字段，不将其转发到前端。
-- 原始 session 文件、完整 prompt、认证信息和未脱敏命令输出不直接暴露给浏览器。
+1. 中书省被明确要求不能在门下省准奏后结束，必须调用尚书省。
+2. 尚书省调用一个或多个六部 subagent，等待结果并汇总。
+3. 六部作为 subagent 完成后自动返回父 Agent，不自行寻找上级会话。
+4. 每个角色在回复前执行防卡住检查，确认下游是否已调用、结果是否已回收。
+5. 门下审议最多三轮，防止中书省和门下省无限往返。
 
-## 2. 参考 edict-main 得出的改进点
+这种机制解决的是“管理 Agent 不得过早宣布完成”和“下级结果必须回到调用者”两个问题。
 
-### 2.1 值得直接借鉴的部分
+### 3.2 强制进展上报
 
-| edict-main 的做法 | 对当前项目的改进方式 |
+所有 Agent 都被要求通过统一 CLI 上报：
+
+```text
+create    创建任务
+state     更新状态
+flow      记录部门/Agent 流转
+progress  上报当前动作和计划清单
+todo      更新子任务及产出详情
+done      提交完成结果
+block     标记阻塞
+```
+
+其设计重点包括：
+
+- `progress` 与任务状态分离，避免一次普通进展上报误推进流程。
+- 每个关键阶段都必须有 `progress`。
+- Todo 同一时刻最多一个 `in-progress`。
+- Todo 未全部完成时拒绝 `done`。
+- 状态转换由 `_VALID_TRANSITIONS` 校验。
+- 高风险转换进入 `PendingConfirm`。
+- 所有动作写入 audit log。
+- 多 Agent 并发更新通过原子文件更新和文件锁保护。
+
+### 3.3 真正的主动催办机制
+
+主动监督主要由 `dashboard/server.py` 中的常驻调度线程完成，而不是由管理 Agent 自己定时运行。
+
+调度器执行：
+
+1. 定期扫描所有非终态任务。
+2. 根据 `lastProgressAt` 计算停滞时间。
+3. 首先重新派发当前阶段对应 Agent。
+4. 重试耗尽后升级给门下省、尚书省协调。
+5. 继续失败时尝试回滚到历史快照。
+6. 连续回滚失败后标记 `Blocked` 并要求人工介入。
+
+Agent 唤醒最终通过类似以下命令完成：
+
+```text
+openclaw agent --agent <agent-id> -m <message> --timeout <seconds>
+```
+
+因此，edict-main 的主动监督本质上是：
+
+```text
+定时扫描 → 停滞检测 → 再次发消息/派发 → 逐级升级 → 人工介入
+```
+
+### 3.4 看板如何实现
+
+当前轻量看板链路为：
+
+```text
+Agent
+  ↓ kanban_update.py
+tasks_source.json / audit_log.json
+  ↓ refresh_live_data.py
+live_status.json
+  ↓ dashboard/server.py HTTP API
+React Dashboard（5 秒轮询）
+```
+
+看板包含：
+
+- 流程阶段条。
+- 任务卡片。
+- 当前状态、当前部门、当前进展。
+- Todo/checkpoint。
+- `flow_log` 与 `progress_log` 时间线。
+- Agent 在线、休眠和最后活跃时间。
+- 心跳与停滞标记。
+- 手动叫停、取消、恢复、推进、重试、升级和回滚。
+- 任务详情、会话活动和工具输出摘要。
+
+`edict-main` 还包含一套 FastAPI、Postgres、Redis Streams、Outbox Relay、WebSocket 和 worker
+的重型事件驱动实现。该实现适合多进程和更大规模部署，但不适合直接作为当前项目第一期
+依赖。
+
+### 3.5 值得借鉴的部分
+
+| edict-main 做法 | 当前项目的采用方式 |
 |---|---|
-| `event_bus.py` 使用 topic、trace_id、producer、payload、meta 统一事件结构 | 增加统一的 Monitor Event Envelope，所有状态、活动、输出和心跳使用同一关联字段 |
-| Redis Streams + Pub/Sub 支持可靠消费和实时广播 | MVP 先使用 `events.jsonl`/`activity.jsonl` 回放 + 进程内 SSE；保留 EventBusAdapter 接口，后续可接 Redis/NATS |
-| Outbox Relay 避免业务数据与事件投递双写不一致 | 当前不改写控制事件；Agent 活动先落本地文件，再由 Monitor 投影，避免只推送未落盘 |
-| WebSocket 全局频道和单任务频道 | MVP 提供全局 workflow SSE 和单 task SSE；第二期加入 WebSocket 双向命令通道 |
-| `get_agent_activity` 读取 session JSONL，提取 assistant、tool_use、tool_result | 增加 OpenClaw Session Tailer，读取实时安全输出，作为显式 Agent 上报之外的兜底通道 |
-| Session 内容按 Agent、task_id、关键词过滤 | 优先使用 workflow/task/run/session 标识做精确关联，关键词只作为 `inferred=true` 的兼容回退 |
-| Agent 状态综合 session 更新时间、进程、workspace 和 Gateway 状态 | 当前使用 task、dispatch lease、activity、session mtime、output mtime 多证据判定，不以进程存在单独认定正在工作 |
-| MonitorPanel、TaskModal、SessionsPanel 分离展示 | 当前 Dashboard 分为总览、Agent 树、任务详情抽屉、实时输出面板、事件时间线和会话详情 |
-| 看板支持过滤、任务详情、叫停、取消、恢复、重试和升级 | 先做查看/筛选；第二期通过 command request 交给 manager 执行，保留审批和审计闭环 |
-| `flow_log`、`progress_log`、`todos`、scheduler state | 当前增加 progress/checkpoint/last_progress_at/health_evidence 的监控投影，不直接污染权威 task 快照 |
-| 性能基线和升级计划单独成文 | 增加 Monitor 专项性能基线、浏览器首屏、SSE 延迟、快照耗时和文件扫描规模验收 |
+| 管理 Agent 有明确的下游完成条件 | manager 增加监督请求处理和完成前检查 |
+| 统一 progress/todo/flow 协议 | 新增结构化 activity/checkpoint 协议 |
+| 状态和进展分开 | 控制状态留在 `control.db`，活动进入遥测层 |
+| 多证据判断 Agent 活跃度 | 综合 task、dispatch、lease、session、activity、artifact |
+| 任务卡片、流程条、时间线和详情抽屉 | 作为 Dashboard 的核心页面结构 |
+| 手动重试、升级和叫停 | 转换为 manager 执行的监督请求 |
+| 事件 topic/trace/producer/payload | 形成统一 Monitor Event Envelope |
+| Outbox 避免双写 | 监督请求和 manager 唤醒也使用 outbox |
 
-### 2.2 不直接照搬的部分
+### 3.6 不应照搬的部分
 
-edict-main 的生产方案使用 FastAPI、Redis、Postgres 和 React，而当前项目明确没有常驻 Python 控制平面，并且控制文件由 `manager-agent` 负责。因此第一期不直接引入：
+1. 不复制 JSON 文件作为当前状态源。
+2. 不让 Monitor 直接调用工作 Agent。
+3. 不让网页直接修改 task/workflow。
+4. 不自动恢复历史状态快照。
+5. 不按单一 `updatedAt` 判断 Agent 是否停滞。
+6. 不展示完整 thinking 或 chain-of-thought。
+7. 不在原 dispatch 未确认终结时重复 spawn。
+8. 不在第一期引入 Redis、Postgres 和多 worker 部署。
 
-- Redis/Postgres 作为运行前置依赖。
-- 另一个可以自行调度 Agent 的后端服务。
-- 直接让网页修改 `workflow.json` 或 `events.jsonl`。
-- 将完整思考过程写入数据库或推送给所有浏览器。
+特别需要避免 edict-main 中的以下问题：
 
-后续规模变大时，可以替换 Monitor 的事件适配层，而不改变前端事件协议和现有控制层事实源。
+- 提示词中的“24 小时审计”与代码中的分钟级阈值不一致。
+- `progress` 更新时间与 scheduler 的 `lastProgressAt` 可能不一致。
+- 每次扫描都可能继续提升 retry/escalation，缺少充分冷却窗口。
+- 自动回滚可能绕过状态机、Gate、审批或外部副作用事实。
+- 进程在线只能说明 Agent 可能存在，不能证明任务仍在推进。
 
-## 3. 当前项目的约束与必须保留的边界
+## 4. 当前项目能力与差距
 
-现有架构以以下文件作为主要事实源：
+### 4.1 已有能力
 
-- [docs/architecture.md](D:/MicroConnect/project/openclaw-multi-agent/docs/architecture.md)
-- [docs/state-and-recovery.md](D:/MicroConnect/project/openclaw-multi-agent/docs/state-and-recovery.md)
-- [docs/manager-orchestration.md](D:/MicroConnect/project/openclaw-multi-agent/docs/manager-orchestration.md)
-- [contracts/workflow-event.schema.json](D:/MicroConnect/project/openclaw-multi-agent/contracts/workflow-event.schema.json)
-- [contracts/task.schema.json](D:/MicroConnect/project/openclaw-multi-agent/contracts/task.schema.json)
+当前项目已经具备：
 
-改造必须遵守：
+- SQLite `control.db` 单一权威状态。
+- workflow phase、condition 和 outcome 分离。
+- workflow command 幂等和不可变哈希事件。
+- task、task run 和 task event。
+- dispatch intent、outbox、receipt、completion receipt。
+- `PREPARED → SENT → ACKNOWLEDGED → RUNNING` 派发链路。
+- session key、session ID、lease deadline、retry count 和 max retries。
+- result 与结构化产物的 Schema、身份、路径和哈希校验。
+- Control Kernel audit、recover 和只读 projection。
+- manager-agent 唯一调度者边界。
+- Runtime Guard 的 Gate、审批、证据和 Git 校验。
 
-1. `manager-agent` 仍是 workflow、task、gate、approval、dispatch 控制文件的唯一逻辑写入者。
-2. `events.jsonl` 仍然 append-only、哈希链完整，Monitor 只能读取和回放。
-3. Agent 只写当前 run 允许的 `output/`、`raw-logs/` 和 worktree。
-4. Monitor 不调用 `sessions_spawn`，不自行重试、不自行推进状态、不绕过 Gate。
-5. 用户的暂停、取消、重试、催办等动作先生成命令请求，由 manager 校验后执行。
-6. 子 Agent 必须具有可追踪的父 task、父 run 或父 session 关系；未登记的子会话必须标记为 `UNTRACKED_CHILD`。
-7. 监控不可用时，主 workflow 仍能依靠原有文件恢复运行。
+### 4.2 当前缺口
 
-## 4. 目标能力范围
+- 没有常驻 Monitor 服务。
+- 没有浏览器看板。
+- 没有显式 activity、heartbeat 和 checkpoint 契约。
+- 没有安全的 session JSONL 实时尾读器。
+- 没有 Agent 健康投影和停滞置信度。
+- 没有常驻 Watchdog 消费 lease 和活动信号。
+- 没有持久化的监督请求、监督事件和监督回执。
+- 没有可靠机制在 manager 会话休眠时将其唤醒。
+- 没有用户从看板发起催办、暂停、核查或升级的闭环。
+- 当前 Control Kernel 查询接口偏命令行，不足以支持持续 Dashboard 快照。
 
-### 4.1 第一阶段必须具备
+## 5. 设计原则与不可破坏边界
 
-- 实时看到多个 workflow 和当前 workflow 的 Agent 层级。
-- 看到 manager、worker 和新增 subagent。
-- 看到每个 Agent 当前任务、当前动作、最近输出摘要和最近活动时间。
-- 看到安全的工具调用和工具输出摘要。
-- 看到 Todo/checkpoint 变化。
-- 看到等待人工、阻塞、失败、完成、未启动、疑似停滞等状态。
-- 通过页面点击查看任务详情、活动时间线和子 Agent 输出。
-- 支持断线重连后按事件序号回放，不依赖浏览器一直在线。
-- 旧 workflow 没有新 activity 文件时仍能显示基础状态。
+### 5.1 单一事实源
 
-### 4.2 第二阶段增加
+- `control.db` 是 workflow、task、run、dispatch 和监督请求的唯一权威源。
+- `runtime/control/v2/**` 只是只读投影。
+- `monitor.db` 只保存可以从控制库、session 和 artifact 重建的遥测数据。
+- Dashboard 状态不能反向写回控制快照。
 
-- 催 Agent 汇报进度。
-- 向指定 Agent 发送补充说明。
-- 请求暂停、恢复、取消、重试和升级。
-- 子 Agent 输出摘要实时反馈给父 Agent 或 manager。
-- 时间线按 task、agent、session、topic 过滤。
+### 5.2 唯一编排者
 
-### 4.3 后续可选能力
+- manager-agent 仍是唯一可以 spawn 工作 Agent、向工作 Agent 下达控制消息、决定 retry 或推进
+  workflow 的角色。
+- Watchdog 只能创建监督请求。
+- Manager Wake Adapter 只能唤醒 manager-agent，不能直接唤醒工作 Agent。
+- Monitor 不能调用 `sessions_spawn`、不能写 completion receipt、不能改变 Gate。
 
-- Redis Streams/NATS EventBus 适配。
-- WebSocket 双向订阅。
-- OpenTelemetry trace/span。
-- token、耗时、成本统计。
-- 历史运行对比、回放和 Agent 性能趋势。
+### 5.3 外部副作用必须可对账
 
-### 4.4 明确不纳入第一期
+- 催办、发消息、暂停、重试都先有 durable request/outbox。
+- 执行后必须有 receipt。
+- manager 或服务重启时先查原 session，再决定是否重发。
+- lease 过期只表示“必须核查”，不等于 session 已丢失。
 
-- 展示完整 chain-of-thought。
-- 自动给 Agent 贴“偷懒”标签并自动处理。
-- Monitor 直接控制 Agent 生命周期。
-- 引入数据库迁移、Redis 安装或后台服务编排。
-- 允许任意工作 Agent 无记录地调用任意子 Agent。
+### 5.4 安全与隐私
 
-## 5. 数据与事件模型
+- 不采集完整 thinking。
+- 不向浏览器暴露 system prompt、完整上下文和未截断日志。
+- 所有文本先脱敏、再截断、再推送。
+- 浏览器只接收 `USER_SAFE` 或 `INTERNAL_SUMMARY` 内容。
+- Monitor 默认仅监听 `127.0.0.1`。
 
-### 5.1 现有权威数据继续保留
+### 5.5 故障隔离
 
-Monitor 读取：
+- Monitor 停止时，原 workflow 继续运行。
+- Watchdog 停止时，只丢失自动催办，不破坏控制状态。
+- 遥测损坏时重新构建，不从遥测库修复 `control.db`。
+- 控制库 audit 失败时，监督动作全部失败关闭。
 
-```text
-runtime/control/active-workflows.json
-runtime/control/workflows/<workflow-id>/workflow.json
-runtime/control/workflows/<workflow-id>/tasks/*.json
-runtime/control/workflows/<workflow-id>/events.jsonl
-runtime/control/workflows/<workflow-id>/dispatch/*
-runtime/artifacts/<workflow-id>/<task-id>/<run-id>/output/*
-runtime/artifacts/<workflow-id>/<task-id>/<run-id>/raw-logs/*
-```
-
-状态事件继续由现有 Runtime Guard 和 manager 产生。Monitor 不把监控派生状态写回 `workflow.json`，而是重新计算或写入自己的缓存。
-
-### 5.2 Agent 活动文件
-
-新增每个 run 的目录：
+## 6. 目标总体架构
 
 ```text
-artifacts/<workflow-id>/<task-id>/<run-id>/output/monitor/
-├── live-status.json
-├── activity.jsonl
-└── checkpoints.json
+┌──────────────────────────────────────────────────────────────┐
+│                     OpenClaw Runtime                         │
+│ manager-agent ── sessions_spawn/sessions_send ── worker      │
+│       │                                      │               │
+│       └──────── session/completion facts ────┘               │
+└──────────────────────────┬───────────────────────────────────┘
+                           │
+                 ┌─────────▼─────────┐
+                 │ Control Kernel v2 │
+                 │ control.db        │
+                 │ workflow/task/run │
+                 │ dispatch/outbox   │
+                 │ supervision       │
+                 └─────────┬─────────┘
+                           │ read-only snapshot/change cursor
+       ┌───────────────────┼──────────────────────────┐
+       │                   │                          │
+┌──────▼────────┐  ┌───────▼────────┐       ┌────────▼─────────┐
+│ Activity API  │  │ Session Tailer │       │ Artifact Watcher │
+│ explicit emit │  │ safe fallback  │       │ output/raw-logs  │
+└──────┬────────┘  └───────┬────────┘       └────────┬─────────┘
+       └───────────────────┼──────────────────────────┘
+                           ▼
+                 ┌───────────────────┐
+                 │ Monitor Service   │
+                 │ monitor.db        │
+                 │ snapshot/projector│
+                 │ health classifier │
+                 │ SSE event hub     │
+                 └──────┬───────┬────┘
+                        │       │
+                        │       ▼
+                        │  Supervisor Watchdog
+                        │       │ supervision request
+                        │       ▼
+                        │  Manager Wake Adapter
+                        │       │ only wakes manager
+                        │       ▼
+                        │  manager verifies and acts
+                        ▼
+                 Web Dashboard
 ```
+
+## 7. 权威数据模型扩展
+
+### 7.1 `supervision_requests`
+
+该表保存所有人工或自动监督请求，是控制事实，不放入 `monitor.db`。
+
+建议字段：
+
+```text
+request_id              SUP-<uuid>
+idempotency_key         workflow/task/run/type/window
+workflow_id
+task_id
+run_id
+dispatch_id
+target_agent_id
+request_type            NUDGE | RECONCILE | RETRY_REVIEW |
+                        PAUSE_REQUEST | RESUME_REQUEST |
+                        CANCEL_REQUEST | ESCALATE
+source                  WATCHDOG | LOCAL_USER | MANAGER
+reason
+evidence_json
+status                  REQUESTED | CLAIMED | EXECUTING |
+                        SUCCEEDED | FAILED | CANCELLED
+requested_at
+claimed_by
+claimed_at
+completed_at
+result_code
+result_summary
+attempt
+```
+
+约束：
+
+- `idempotency_key` 唯一。
+- workflow/task/run/dispatch 必须存在且互相一致。
+- 终态请求不可重新执行。
+- 自动请求必须记录触发阈值和完整证据摘要。
+- 监督请求不能直接改变 task 状态。
+
+### 7.2 `supervision_events`
+
+追加式记录：
+
+```text
+REQUEST_CREATED
+REQUEST_CLAIMED
+MANAGER_WAKE_QUEUED
+MANAGER_WAKE_SENT
+SESSION_CHECKED
+NUDGE_SENT
+NUDGE_ACKNOWLEDGED
+RETRY_APPROVED
+RETRY_REJECTED
+ESCALATED
+REQUEST_COMPLETED
+REQUEST_FAILED
+```
+
+事件需要 sequence、previous hash 和 event hash，审计方式与现有 task event 一致。
+
+### 7.3 `manager_wake_outbox`
+
+用于解决“数据库已生成监督请求，但唤醒 manager 的外部调用失败”问题。
+
+```text
+wake_id
+request_id
+status          PENDING | DELIVERED | FAILED
+attempts
+next_attempt_at
+last_error
+created_at
+delivered_at
+manager_session_key
+```
+
+Manager Wake Adapter 必须按 outbox 重试；响应不确定时，先按 session key 查询，不直接重复调用。
+
+### 7.4 Control Kernel 新命令
+
+建议新增：
+
+```text
+snapshot
+supervision-request
+supervision-list
+supervision-claim
+supervision-complete
+supervision-events
+wake-outbox
+```
+
+所有写命令继续遵循：
+
+- Schema 校验。
+- command/operation ID 幂等。
+- `BEGIN IMMEDIATE` 事务。
+- 不可变事件。
+- outbox 同事务提交。
+- audit 可重算。
+
+## 8. 遥测数据与活动协议
+
+### 8.1 独立遥测库
 
 新增：
 
 ```text
-contracts/agent-activity.schema.json
-contracts/agent-live-status.schema.json
-contracts/agent-checkpoint.schema.json
-templates/agent-activity.json
-templates/agent-live-status.json
+runtime/monitor/monitor.db
 ```
 
-`live-status.json` 是当前快照；`activity.jsonl` 是本 run 的活动历史；`checkpoints.json` 是可选的结构化 Todo/checkpoint 快照。它们都是 Agent 自己 run artifact 的一部分，不取代控制层状态。
+建议表：
 
-建议字段：
+```text
+monitor_events
+agent_activities
+agent_health_snapshots
+session_links
+session_cursors
+artifact_cursors
+redaction_audit
+```
+
+该库不参与 workflow/task 状态裁决，可以删除后重建。
+
+### 8.2 Agent Activity Envelope
 
 ```json
 {
@@ -182,39 +445,30 @@ templates/agent-live-status.json
   "workflow_id": "WF-...",
   "task_id": "TASK-...",
   "run_id": "RUN-...",
+  "dispatch_id": "DSP-...",
   "agent_id": "developer-agent",
   "session_id": "session-...",
-  "parent_agent_id": "manager-agent",
-  "parent_task_id": null,
-  "parent_run_id": null,
-  "parent_session_id": null,
   "kind": "PROGRESS",
   "status": "RUNNING",
-  "current_action": "正在实现 Agent 树投影",
-  "summary": "已完成事件读取，正在实现父子关系归并",
+  "current_action": "正在实现快照投影",
+  "summary": "已完成数据库查询，正在构建父子关系",
+  "checkpoint": {
+    "id": "SNAPSHOT_PROJECTOR",
+    "title": "实现快照投影",
+    "status": "IN_PROGRESS"
+  },
   "progress": {
     "completed": 2,
     "total": 5,
     "percent": 40
   },
-  "tool": {
-    "name": "shell",
-    "phase": "FINISHED",
-    "duration_ms": 1200,
-    "output_preview": "已读取 12 个任务文件"
-  },
+  "tool": null,
   "visibility": "USER_SAFE",
-  "redaction": {
-    "thinking_removed": true,
-    "secrets_removed": true,
-    "max_preview_chars": 500
-  },
-  "timestamp": "2026-08-04T08:00:00.000Z",
-  "last_heartbeat_at": "2026-08-04T08:00:00.000Z"
+  "timestamp": "2026-08-05T08:00:00.000Z"
 }
 ```
 
-活动类型建议：
+活动类型：
 
 ```text
 STARTED
@@ -223,88 +477,47 @@ PROGRESS
 CHECKPOINT_UPDATED
 TOOL_STARTED
 TOOL_FINISHED
-OUTPUT_CHUNK
 WAITING_CHILD
 WAITING_HUMAN
 BLOCKED
-SPAWNED_CHILD
-CHILD_COMPLETED
+OUTPUT_SUMMARY
 COMPLETED
 FAILED
 ```
 
-`OUTPUT_CHUNK` 只允许安全摘要或经过明确脱敏的文本片段，不能用于转发完整思考过程。
+### 8.3 上报时机
 
-### 5.3 Session JSONL 兜底读取
+Agent 必须在以下时机上报：
 
-借鉴 edict-main/dashboard/server.py 中对 Agent session JSONL 的解析方式，新增：
+1. 完成 preflight 并开始任务。
+2. 开始一个重要阶段。
+3. 完成一个可验证 checkpoint。
+4. 发起预计耗时较长的工具调用。
+5. 长工具调用结束。
+6. 等待人工、依赖或子 Agent。
+7. 遇到阻塞。
+8. 完成产物并准备返回。
+9. 失败并停止继续执行。
 
-```text
-scripts/monitor-core/session-tailer.mjs
-scripts/monitor-core/session-parser.mjs
-scripts/monitor-core/redactor.mjs
-```
+上报内容只包括当前动作、完成事实、下一步、阻塞和产物定位，不要求完整推理过程。
 
-读取优先级：
+### 8.4 Session Tailer 兜底
 
-1. 从当前 OpenClaw Agent 配置或 install manifest 得到 Agent 的 `agentDir`。
-2. 发现其 session JSONL 目录。
-3. 只尾读最近变化的文件，不全量扫描所有历史会话。
-4. 解析 assistant 文本、tool_use、tool_result、session 更新时间。
-5. 丢弃 `thinking` 内容。
-6. 对命令输出、路径、环境变量、token、密钥和疑似凭据执行脱敏与截断。
-7. 产生统一的 `agent.activity` Monitor Event。
+显式 activity 是高可信主信号；Session Tailer 是 Agent 未及时上报时的兜底。
 
-解析结果的 `source` 标记为：
+Tailer 应：
 
-```text
-EXPLICIT_ACTIVITY
-SESSION_TAIL
-TASK_EVENT
-DISPATCH_RECEIPT
-INFERRED_SESSION
-```
+- 从 OpenClaw 配置或 install manifest 定位 Agent session 目录。
+- 按 inode/path、offset 和最后 sequence 增量读取。
+- 只处理最近活动的已关联 session。
+- 解析非 thinking assistant 文本、tool use 和 tool result。
+- 不解析或立即丢弃 thinking。
+- 对输出执行凭据、路径、个人信息和长文本脱敏。
+- 把无法关联的 session 标记为 `UNTRACKED_SESSION`，不猜测归属。
 
-Session Tailer 只是可观测性读取器，不修改 session 文件，不把原始 session 内容写入控制层。
+### 8.5 Monitor Event Envelope
 
-### 5.4 父子 Agent 关系
-
-现有 `task.schema.json` 已有 `parent_task_id`，应继续使用，并补充 dispatch intent 的父子字段：
-
-```text
-parent_session_id
-parent_agent_id
-parent_task_id
-parent_run_id
-spawn_depth
-spawn_reason
-child_session_id
-child_task_id
-child_run_id
-```
-
-每次 `sessions_spawn` 前必须先生成 child task/run 或等价的 tracked session 记录，再创建 dispatch intent。Monitor 的节点 ID 使用：
-
-```text
-agent_id + task_id + run_id + session_id
-```
-
-关系推断优先级：
-
-1. `parent_session_id`
-2. `parent_run_id`
-3. `parent_task_id`
-4. dispatch intent 的父子字段
-5. session 内容中的明确 ID
-6. 关键词匹配，仅作为 `inferred=true`
-
-当前工作 Agent 默认禁止继续 spawn。后续开放子 Agent 时，必须同时开放“登记、追踪、状态上报、完成回执”协议，不能只修改 `allowAgents`。
-
-## 6. 事件封装与实时传输
-
-### 6.1 Monitor Event Envelope
-
-借鉴 edict-main 的 topic/trace/producer/meta 结构，Monitor 内部统一使用：
+Monitor 对所有来源统一封装：
 
 ```json
 {
@@ -314,16 +527,16 @@ agent_id + task_id + run_id + session_id
   "task_id": "TASK-...",
   "run_id": "RUN-...",
   "session_id": "session-...",
-  "parent_session_id": "session-parent",
   "topic": "agent.activity",
   "event_type": "progress.updated",
-  "producer": "session-tailer",
-  "source": "SESSION_TAIL",
-  "timestamp": "2026-08-04T08:00:00.000Z",
+  "producer": "activity-api",
+  "source": "EXPLICIT_ACTIVITY",
+  "timestamp": "2026-08-05T08:00:00.000Z",
   "payload": {},
   "meta": {
     "redacted": true,
-    "inferred": false
+    "inferred": false,
+    "confidence": "HIGH"
   }
 }
 ```
@@ -337,846 +550,849 @@ task.dispatch
 agent.activity
 agent.output
 agent.heartbeat
-agent.child.spawned
-agent.child.completed
-task.stalled
+task.health
+task.possibly_stalled
+supervision.request
+supervision.result
 monitor.health
 ```
 
-### 6.2 第一阶段传输方式：文件回放 + SSE
+## 9. Agent 健康与停滞判定
 
-第一期采用：
+### 9.1 证据来源
 
-- `events.jsonl` 和 `activity.jsonl` 作为可回放历史。
-- `fs.watch` 触发快速更新。
-- 1～2 秒轮询作为丢通知时的兜底。
-- Monitor 进程内 EventHub 扇出给 SSE 客户端。
-- 客户端断线后用 `after=sequence` 获取缺失事件，再重新订阅。
+健康投影必须综合：
 
-建议 API：
+1. workflow phase/condition/outcome。
+2. task 当前状态和 `updated_at`。
+3. task event。
+4. dispatch 状态。
+5. lease deadline。
+6. completion receipt。
+7. 显式 activity/checkpoint。
+8. session JSONL 最近活动。
+9. 最近工具开始/结束。
+10. artifact、raw-log 和 worktree 文件变化。
+11. Gateway/process 探测。
+
+进程存在只能作为低置信度证据，不能单独判定为 RUNNING。
+
+### 9.2 派生健康状态
+
+```text
+NOT_STARTED
+STARTING
+RUNNING
+WAITING_CHILD
+WAITING_HUMAN
+BLOCKED
+STALE
+POSSIBLY_STALLED
+COMPLETED
+FAILED
+LOST
+UNKNOWN
+UNTRACKED_SESSION
+```
+
+状态说明：
+
+| 状态 | 判定 |
+|---|---|
+| `NOT_STARTED` | dispatch 已准备但没有发送事实 |
+| `STARTING` | 已 SENT/ACKNOWLEDGED，尚未 RUNNING |
+| `RUNNING` | task/dispatch 为 RUNNING 且近期有可靠活动 |
+| `WAITING_CHILD` | activity 明确等待已登记子任务 |
+| `WAITING_HUMAN` | 权威 task/workflow 或 activity 明确等待人工 |
+| `BLOCKED` | Agent 或权威状态明确阻塞 |
+| `STALE` | 超过 heartbeat 阈值，尚未达到监督阈值 |
+| `POSSIBLY_STALLED` | 多项证据持续无变化并超过任务阈值 |
+| `COMPLETED` | completion/task event 已落盘 |
+| `FAILED` | completion/task event 明确失败 |
+| `LOST` | manager 核查后确认 session 丢失 |
+| `UNKNOWN` | 数据缺失或冲突 |
+
+### 9.3 置信度
+
+```text
+HIGH    权威 task/dispatch/completion 或显式结构化 activity
+MEDIUM  task、session、tool 和 artifact 多项证据一致
+LOW     只有 mtime、关键词或 process probe
+UNKNOWN 证据缺失或相互冲突
+```
+
+### 9.4 默认阈值
+
+阈值必须可按 task type 覆盖，初始建议：
+
+```yaml
+scan_interval_seconds: 30
+heartbeat_stale_seconds: 180
+possibly_stalled_seconds: 300
+starting_timeout_seconds: 120
+nudge_response_timeout_seconds: 300
+supervision_cooldown_seconds: 300
+manager_wake_retry_seconds: [10, 30, 60, 180]
+max_nudges_per_run: 2
+max_reconcile_per_run: 2
+```
+
+`lease_deadline` 是强制核查边界，不是自动判定 LOST 的边界。
+
+## 10. 监督执行状态机
+
+### 10.1 总体流程
+
+```text
+Watchdog 发现疑似停滞
+        │
+        ▼
+保存 health evidence
+        │
+        ▼
+生成幂等 supervision request + wake outbox
+        │
+        ▼
+Wake Adapter 唤醒 manager-agent
+        │
+        ▼
+manager 运行 Control Kernel audit
+        │
+        ├─ audit 失败 → HOLD/请求失败，不执行外部动作
+        │
+        ▼
+查询原 session、dispatch、artifact 和 activity
+        │
+        ├─ 仍在运行 → 向原 session 发送 NUDGE
+        ├─ 已完成但未回执 → 对账并 ingest completion
+        ├─ 明确失败/丢失 → 结束原 dispatch，评估 retry
+        └─ 证据冲突 → 升级人工
+        │
+        ▼
+写 supervision receipt/event
+```
+
+### 10.2 分级策略
+
+| 级别 | 触发 | 动作 |
+|---|---|---|
+| L0 | heartbeat 超时 | 只标记 STALE，不执行外部动作 |
+| L1 | 达到停滞阈值 | manager 向原 session 催办进度和阻塞原因 |
+| L2 | 催办无响应 | manager 查询 session history、artifact、Gateway 并对账 |
+| L3 | 确认 FAILED/LOST | 在 `max_attempts` 内创建新 attempt/run |
+| L4 | 超预算或证据冲突 | workflow HOLD/WAITING_HUMAN，通知用户 |
+
+### 10.3 NUDGE 语义
+
+NUDGE 消息只要求：
+
+```text
+请汇报当前 checkpoint、已经完成的事实、正在执行的动作、阻塞原因和下一步。
+不要重新开始任务，不要重复已完成的外部副作用。
+```
+
+NUDGE 不改变 task 状态，不延长 retry budget；收到有效 activity 后关闭该请求并重置健康计时。
+
+### 10.4 Retry 规则
+
+- 原 session 未确认 FAILED/LOST 前禁止 retry。
+- retry 必须创建新 attempt 或合法新 run。
+- 不复用已终结 dispatch 的幂等键。
+- 重新验证 context manifest 和 input commit。
+- 不覆盖旧 artifact、result、event 和日志。
+- 超过 `max_attempts` 必须人工处理。
+- 外部副作用不确定时先对账，不能通过重跑“试试看”。
+
+### 10.5 明确禁止自动回滚
+
+Watchdog 不得把 task 或 workflow 恢复到历史快照。
+
+原因：
+
+- 历史阶段可能已经产生 Git、文件、网络或 session 副作用。
+- 回滚快照不能回滚外部世界。
+- 直接回滚可能绕过 reducer、Gate 和审批。
+- 当前状态机已经提供 HOLD、FAILED、LOST、NEEDS_REWORK 和新 attempt 语义。
+
+## 11. Manager 与工作 Agent 规则修改
+
+### 11.1 manager-agent
+
+新增硬性规则：
+
+1. 新会话启动、恢复或被 Watchdog 唤醒时，查询未处理 supervision request。
+2. claim 请求前重新读取 workflow/task/dispatch，并运行 audit。
+3. NUDGE 必须发送到 request 绑定的原 session。
+4. 不因 lease 过期直接写 LOST。
+5. 不因 Agent 聊天回复“完成”直接关闭请求，仍需验证 artifact/receipt。
+6. retry 必须使用新 attempt/run。
+7. 所有动作写 supervision event 和 receipt。
+8. 请求处理失败不能静默丢弃，必须保留错误码与下一建议。
+9. 完成 workflow 前确认没有未决 supervision request。
+
+### 11.2 工作 Agent
+
+新增规则：
+
+1. preflight 后上报 STARTED。
+2. 每个重要 checkpoint 上报 PROGRESS/CHECKPOINT_UPDATED。
+3. 长工具调用前后上报 TOOL_STARTED/TOOL_FINISHED。
+4. 等待必须明确区分 WAITING_CHILD、WAITING_HUMAN 和 BLOCKED。
+5. NUDGE 只汇报现状，不重新执行任务。
+6. completion 前确保全部必需产物已经落盘并自检。
+7. 不上报完整思考过程。
+
+## 12. Monitor 服务设计
+
+### 12.1 技术选型
+
+- Node.js ESM，与当前项目一致。
+- Node 内置 SQLite，避免新增数据库依赖。
+- React + Vite 构建 Dashboard。
+- SSE 作为第一期实时推送。
+- `fs.watch` 快速发现 session/artifact 变化，定时 reconciliation 兜底。
+- Ajv 校验所有新增 JSON/JSONL 协议。
+
+第一期不引入 Redis、Postgres、NATS 或独立 Python 服务。
+
+### 12.2 API
 
 ```text
 GET  /api/health
 GET  /api/workflows
 GET  /api/workflows/:workflowId/snapshot
-GET  /api/workflows/:workflowId/events?after=<sequence>&limit=500
-GET  /api/workflows/:workflowId/stream
-GET  /api/workflows/:workflowId/tasks/:taskId/activity
-GET  /api/workflows/:workflowId/agents/:agentId/activity
+GET  /api/workflows/:workflowId/events?after=<sequence>&limit=<n>
+GET  /api/workflows/:workflowId/stream?after=<sequence>
+GET  /api/tasks/:taskId
+GET  /api/tasks/:taskId/activity
+GET  /api/tasks/:taskId/health
+GET  /api/agents/:agentId/activity
+GET  /api/supervision?status=<status>
+POST /api/supervision/request
 ```
 
-建议 SSE 事件：
+POST 只调用受限 Control Kernel 命令生成监督请求，不直接写数据库。
+
+### 12.3 SSE
 
 ```text
 event: snapshot
-data: {...}
-
+event: workflow-status
+event: task-status
 event: activity
-data: {...}
-
-event: output
-data: {...}
-
-event: workflow-event
-data: {...}
-
+event: health
+event: supervision
 event: monitor-health
-data: {...}
 ```
 
-### 6.3 第二阶段传输方式：WebSocket 双向通道
+客户端断线后携带最后 sequence，服务先补发缺失事件，再恢复实时订阅。
 
-当需要暂停、催办、重试和发送消息时，再增加 WebSocket：
+### 12.4 一致性策略
+
+- 初次连接发送完整 snapshot。
+- 后续只发送增量事件。
+- 每 2 秒执行轻量 reconcile，修复丢失的文件通知。
+- 每 30 秒重新计算健康状态。
+- Monitor 重启后从 control.db、session cursor 和 artifact 重建。
+- 发现控制投影与数据库冲突时以数据库为准并显示 Monitor DEGRADED。
+
+## 13. Dashboard 页面设计
+
+### 13.1 顶部总览
+
+显示：
+
+- 活动 workflow 数。
+- RUNNING Agent 数。
+- WAITING/BLOCKED 数。
+- STALE/POSSIBLY_STALLED 数。
+- 待处理 supervision request 数。
+- 最近五分钟活动数。
+- Gateway、Control Kernel、Monitor 健康状态。
+- SSE 延迟和最后同步时间。
+
+### 13.2 Workflow 阶段看板
+
+按当前 SDLC 阶段展示：
 
 ```text
-GET /ws
-GET /ws/workflow/:workflowId
-GET /ws/task/:taskId
-GET /ws/agent/:agentId
+INTAKE
+REQUIREMENTS
+REQUIREMENT_GATE
+ARCHITECTURE
+ARCHITECTURE_GATE
+DEVELOPMENT
+CODE_REVIEW
+DEVELOPER_REWORK
+TESTING
+TEST_CODE_REVIEW
+FAILURE_TRIAGE
+RELEASE_VERIFICATION
+FINAL_REPORT
 ```
 
-客户端可以发送：
+Task 卡片显示：
 
-```json
-{
-  "type": "subscribe",
-  "workflow_ids": ["WF-..."],
-  "task_ids": ["TASK-..."],
-  "agent_ids": ["developer-agent"]
-}
-```
+- task type、title、assigned agent。
+- status、run、attempt/max attempts。
+- dispatch/session 状态。
+- 当前 checkpoint。
+- 运行时长和最后活动。
+- lease 剩余时间。
+- 健康状态、置信度和证据数量。
+- 阻塞或待人工原因。
 
-但控制消息不直接改变状态，而是转换成 Monitor Command Request，交给 manager 处理。
-
-### 6.4 后续 EventBus 适配
-
-保留以下接口：
+### 13.3 Agent 协作树
 
 ```text
-EventSource.read_history(cursor)
-EventSource.watch()
-EventSource.get_snapshot(workflow_id)
-EventSource.get_activity(task_id, run_id)
-EventHub.publish(event)
-EventHub.subscribe(filter)
+manager-agent
+├── requirement-agent   COMPLETED
+├── architect-agent     RUNNING
+├── developer-agent     POSSIBLY_STALLED
+├── review-agent        NOT_STARTED
+└── test-agent          WAITING_CHILD
 ```
 
-未来接 Redis Streams/NATS 时，只替换 `EventSource` 和 `EventHub`，前端 API 和事件格式不变。当前不把 Redis/Postgres 作为 MVP 安装条件。
+节点显示：
 
-## 7. Monitor 服务与目录规划
+- Agent ID/角色。
+- task/run/session。
+- 当前动作。
+- 最近安全摘要。
+- checkpoint 与百分比。
+- 最近 heartbeat。
+- 健康状态和置信度。
+- 父子 session 关系。
 
-新增：
+### 13.4 任务详情抽屉
+
+包括：
+
+1. workflow/task/run/dispatch/session 标识。
+2. task 描述、依赖和验收标准。
+3. 当前状态与状态事件。
+4. activity/checkpoint 时间线。
+5. 工具调用名称、阶段和短输出。
+6. artifact、result 和 evidence 定位。
+7. lease、retry 和 attempt。
+8. 健康判定证据。
+9. supervision 请求与执行历史。
+10. 可用人工命令。
+
+### 13.5 人工操作
+
+第一批：
+
+```text
+催办进度
+发送补充说明
+请求核查 session
+请求暂停
+请求恢复
+升级人工处理
+```
+
+后续再开放取消和 retry。所有按钮先显示目标 workflow/task/run/session 和影响预览，再创建请求。
+
+## 14. 目录和文件规划
+
+### 14.1 新增
 
 ```text
 monitor/
 ├── server.mjs
 ├── config.mjs
+├── control-read-model.mjs
 ├── snapshot-projector.mjs
 ├── event-source.mjs
 ├── event-hub.mjs
-├── file-watcher.mjs
+├── activity-api.mjs
 ├── activity-classifier.mjs
+├── health-classifier.mjs
+├── watchdog.mjs
+├── wake-adapter.mjs
 ├── session-tailer.mjs
 ├── session-parser.mjs
+├── artifact-watcher.mjs
 ├── redactor.mjs
+├── telemetry-repository.mjs
 └── ui/
     ├── index.html
-    ├── app.js
-    ├── styles.css
-    └── components/
-        ├── agent-tree.js
-        ├── activity-feed.js
-        ├── task-drawer.js
-        └── timeline.js
-```
+    ├── src/
+    │   ├── App.tsx
+    │   ├── api.ts
+    │   ├── store.ts
+    │   └── components/
+    │       ├── Overview.tsx
+    │       ├── WorkflowBoard.tsx
+    │       ├── AgentTree.tsx
+    │       ├── TaskDrawer.tsx
+    │       ├── ActivityFeed.tsx
+    │       ├── HealthEvidence.tsx
+    │       └── SupervisionPanel.tsx
+    └── package.json
 
-新增命令：
-
-```json
-{
-  "scripts": {
-    "monitor": "node monitor/server.mjs",
-    "monitor:test": "node --test tests/monitor-*.test.mjs"
-  }
-}
-```
-
-建议启动方式：
-
-```powershell
-npm run monitor -- --runtime-root "D:\MicroConnect\project\openclaw-multi-agent\runtime" --host 127.0.0.1 --port 8787
-```
-
-默认只监听本机。生产化时再加入 token、反向代理和用户认证。
-
-## 8. 页面设计
-
-页面结构借鉴 edict-main 的 MonitorPanel、TaskModal、SessionsPanel，而不是只做一张静态关系图。
-
-### 8.1 顶部总览
-
-展示：
-
-```text
-活动 workflow
-运行中 Agent
-等待中 Agent
-阻塞 Agent
-疑似停滞 Agent
-未追踪子 Agent
-最近 5 分钟活动数
-事件流延迟
-```
-
-### 8.2 中央 Agent 协作树
-
-使用 SVG 或 Canvas 展示：
-
-```text
-manager-agent
-├── requirement-agent       COMPLETED
-├── architect-agent         RUNNING
-│   ├── developer-agent     RUNNING
-│   └── test-agent          WAITING_CHILD
-└── review-agent            POSSIBLY_STALLED
-```
-
-每个节点显示：
-
-- Agent ID 和角色。
-- 当前 task/run/session。
-- 当前动作。
-- 最近安全输出摘要。
-- 运行时长。
-- 最近 heartbeat。
-- 进度和 checkpoint。
-- 子 Agent 数量。
-- 状态可信度。
-
-节点颜色：
-
-```text
-蓝色：RUNNING
-灰色：COMPLETED
-黄色：WAITING / POSSIBLY_STALLED
-红色：BLOCKED / FAILED
-紫色：SPAWNING_CHILD
-黑色：UNTRACKED_CHILD
-```
-
-支持：
-
-- 点击节点展开/折叠子树。
-- 鼠标悬停显示当前动作。
-- 点击节点打开详情抽屉。
-- 只看运行中、只看异常、只看某个 Agent、只看某个 task。
-- 高亮从某个 Agent 到其子 Agent 的输出链路。
-
-### 8.3 右侧详情抽屉
-
-借鉴 edict-main 的 TaskModal，详情抽屉包含：
-
-1. Agent 身份、角色、父节点。
-2. 当前 task/run/session/dispatch。
-3. 当前任务描述和 checkpoint。
-4. 最近安全输出流。
-5. 最近工具调用摘要。
-6. 最近 30 条活动。
-7. 最近状态事件。
-8. 子 Agent 列表和子 Agent 输出。
-9. dispatch lease 和重试次数。
-10. 停滞判断依据。
-11. 可用的人工作业命令。
-
-实时输出区域按以下形式显示：
-
-```text
-08:00:12  developer-agent  PROGRESS
-已完成事件读取，开始构建节点关系
-
-08:00:15  developer-agent  TOOL_FINISHED
-shell · 1.2s · 已读取 12 个任务文件
-
-08:00:18  test-agent  WAITING_CHILD
-等待 developer-agent 输出可测试构建
-```
-
-### 8.4 任务活动时间线
-
-按时间展示：
-
-```text
-任务创建
-任务派发
-Agent 启动
-Agent 输出摘要
-工具调用
-子 Agent 创建
-子 Agent 完成
-人工审批
-状态转换
-Gate 结果
-任务完成
-```
-
-支持时间范围、Agent、事件类型和来源筛选。
-
-### 8.5 “偷懒”改为证据化健康状态
-
-页面显示“疑似停滞”而不是直接显示“偷懒”。每个异常显示证据：
-
-```text
-疑似停滞
-原因：task=RUNNING，最近 PROGRESS 为 7 分钟前，session 最近更新时间为 6 分钟前，输出目录没有变化。
-可信度：MEDIUM
-```
-
-## 9. 状态、心跳和停滞判定
-
-### 9.1 证据来源
-
-状态投影器综合：
-
-1. task 当前状态。
-2. workflow 当前 phase/status。
-3. dispatch receipt。
-4. lease deadline。
-5. explicit activity。
-6. session JSONL 文件 mtime/updatedAt。
-7. output/raw-logs 目录变化。
-8. 可选的 Gateway/process probe。
-
-进程存在只能说明“可能在线”，不能单独说明“正在推进任务”。
-
-### 9.2 状态分类
-
-| 状态 | 条件 |
-|---|---|
-| `RUNNING` | task 为 RUNNING，且最近活动不超过 45 秒 |
-| `WAITING_HUMAN` | task/event/activity 明确等待人工 |
-| `WAITING_CHILD` | Agent 明确等待子 Agent，且子任务仍未完成 |
-| `BLOCKED` | task/event/activity 明确阻塞 |
-| `NOT_STARTED` | dispatch 已创建，但没有 ACKNOWLEDGED/RUNNING |
-| `STALE` | task 为 RUNNING，但 60 秒以上没有可靠活动 |
-| `POSSIBLY_STALLED` | 超过任务类型阈值且连续没有 PROGRESS/checkpoint/output 变化 |
-| `UNTRACKED_CHILD` | 发现 session 活动但没有合法 parent/child 记录 |
-| `COMPLETED` | completion receipt 或完成事件已落盘 |
-| `FAILED` | 失败回执或失败事件已落盘 |
-| `UNKNOWN` | 数据缺失、冲突或无法判定 |
-
-### 9.3 置信度
-
-```text
-HIGH：有明确结构化 activity 或 authoritative task/event
-MEDIUM：task、dispatch 和 session/output 证据一致
-LOW：只有 mtime、关键词或进程探测
-UNKNOWN：证据冲突或数据缺失
-```
-
-建议阈值配置：
-
-```text
-config/monitoring.example.yaml
-```
-
-```yaml
-heartbeat_timeout_seconds: 60
-stalled_after_minutes: 5
-not_started_after_seconds: 30
-session_tail_interval_ms: 1000
-snapshot_reconcile_interval_ms: 2000
-max_activity_preview_chars: 500
-max_tool_output_preview_chars: 300
-```
-
-Monitor 只报告疑似停滞，不自动重试或回滚。自动处理属于第二期 manager scheduler 能力，并必须复用已有状态机和 dispatch ledger。
-
-## 10. Agent 输出与安全摘要协议
-
-### 10.1 显式上报工具
-
-新增：
-
-```text
-scripts/monitor-core/emit-activity.mjs
-scripts/monitor-core/emit-checkpoint.mjs
-```
-
-Agent 在以下时机调用：
-
-- 启动任务。
-- 完成一个重要子步骤。
-- 发起或完成工具调用。
-- 创建子 Agent。
-- 等待子 Agent/人工审批。
-- 遇到阻塞。
-- 完成或失败。
-
-所有写入路径必须由当前 run 的 context manifest 传入，并由工具校验路径位于当前 artifact run 的 `output/monitor/` 内。
-
-### 10.2 Session Tailer 兜底
-
-如果 Agent 没有主动上报，Session Tailer 仍会从最近 JSONL 增量提取：
-
-- assistant 的非 thinking 文本。
-- tool_use 的工具名和开始事件。
-- tool_result 的 exit code、耗时和短输出。
-- user/manager 的派发或补充消息摘要。
-
-不提取或不转发：
-
-- `thinking` / chain-of-thought。
-- 完整输入上下文。
-- 系统 prompt。
-- token、API key、cookie、环境变量。
-- 未截断的 stdout/stderr。
-
-### 10.3 脱敏规则
-
-至少处理：
-
-- API key、Bearer token、密码、cookie。
-- `.env`、凭据文件和私钥路径。
-- 绝对路径中的用户目录和敏感目录。
-- 长 JSON、二进制内容和大段日志。
-- 可识别的个人信息。
-
-浏览器只收到 `USER_SAFE` 或 `INTERNAL_SUMMARY`，永远不直接读取原始 session JSONL。
-
-## 11. 子 Agent 实时可见性方案
-
-目标是：用户能在页面中看到子 Agent 的实时安全输出，并能沿父子关系追踪。
-
-### 11.1 正常路径
-
-```text
-parent Agent
-   │ sessions_spawn
-   ├─ 预先创建 child task/run
-   ├─ 记录 parent/child dispatch intent
-   ├─ child session 写 activity 或被 Session Tailer 读取
-   └─ Monitor 立即生成 child node + output stream
-```
-
-### 11.2 子 Agent 输出展示
-
-每个子 Agent 节点都有独立输出流：
-
-```text
-GET /api/workflows/:workflowId/tasks/:taskId/activity
-GET /api/workflows/:workflowId/agents/:agentId/activity
-```
-
-前端可以：
-
-- 只看当前 Agent。
-- 查看某个 Agent 的全部子树。
-- 查看 parent→child 的实时输出关系。
-- 把子 Agent 的最新摘要固定到父 Agent 详情页。
-- 将子 Agent 的结构化 checkpoint 汇总到父任务进度条。
-
-### 11.3 父 Agent 获取子 Agent 摘要
-
-如果后续需要让父 Agent 也能实时消费子 Agent 状态，不把原始输出直接塞入父 Agent 上下文，而是提供结构化摘要：
-
-```json
-{
-  "child_task_id": "TASK-child",
-  "status": "RUNNING",
-  "last_summary": "已完成接口定义，正在执行测试",
-  "last_checkpoint": "API_SCHEMA",
-  "last_activity_at": "...",
-  "blocking_reason": null
-}
-```
-
-manager 或父 Agent 通过安全的 child-status 查询读取，不读取完整 session 历史。
-
-### 11.4 未追踪子 Agent
-
-如果 Session Tailer 发现新的 session，但没有合法 task/dispatch 关系：
-
-- UI 显示黑色 `UNTRACKED_CHILD` 节点。
-- 显示 session key、Agent ID、最近安全输出摘要。
-- 不自动把它归入某个 workflow。
-- 生成 Monitor health warning。
-- 第二期由 manager 处理登记或终止请求。
-
-## 12. 用户交互和命令闭环
-
-### 12.1 第一期开启的交互
-
-- workflow 切换。
-- Agent 树展开/折叠。
-- 状态、Agent、task、事件类型过滤。
-- 点击节点查看详情。
-- 时间线定位。
-- 复制安全摘要。
-- 打开合法 artifact 路径。
-- 手动重新加载/断线重连。
-
-### 12.2 第二期命令请求
-
-新增：
-
-```text
-contracts/monitor-command.schema.json
-runtime/control/workflows/<workflow-id>/monitor-commands/
-```
-
-请求示例：
-
-```json
-{
-  "schema_version": 1,
-  "command_id": "CMD-...",
-  "workflow_id": "WF-...",
-  "task_id": "TASK-...",
-  "run_id": "RUN-...",
-  "target_agent_id": "developer-agent",
-  "command": "NUDGE",
-  "message": "请汇报当前进度和阻塞原因",
-  "requested_by": "local-user",
-  "requested_at": "...",
-  "status": "REQUESTED"
-}
-```
-
-支持的命令：
-
-```text
-NUDGE
-SEND_MESSAGE
-PAUSE_REQUEST
-RESUME_REQUEST
-CANCEL_REQUEST
-RETRY_REQUEST
-ESCALATE_REQUEST
-```
-
-流程：
-
-```text
-用户点击
-   ↓
-Monitor API 校验参数和权限
-   ↓
-写入 command request
-   ↓
-manager-agent 读取并验证 workflow/task/run/agent
-   ↓
-manager 调用 sessions_send 或 Runtime Guard 状态事务
-   ↓
-写入 command receipt
-   ↓
-Monitor 推送执行结果
-```
-
-Monitor 不直接执行 `sessions_send`、不直接写 `task.json`，这样仍然只有 manager 负责控制面变化。
-
-## 13. 具体实施阶段
-
-### Phase 0：基线和运行时探测
-
-目标：确认 OpenClaw session 文件位置、Agent 配置字段和当前运行时规模。
-
-工作：
-
-1. 读取 install manifest 和 OpenClaw Agent 配置。
-2. 确认每个 Agent 的 `agentDir`、workspace 和 session 目录。
-3. 检查 session JSONL 的真实格式，确认 assistant/tool/thinking 字段。
-4. 检查 `sessions_spawn` 返回的 session 标识和父子关系可见字段。
-5. 对现有 workflow 统计 task、run、dispatch、事件数量。
-6. 输出 `docs/plan/monitor-runtime-baseline.md`。
-
-验收：不修改 OpenClaw 配置，不修改 workflow，不读取或保存完整敏感 session 内容。
-
-### Phase 1：只读 Monitor MVP 后端
-
-新增：
-
-```text
-monitor/server.mjs
-monitor/event-source.mjs
-monitor/snapshot-projector.mjs
-monitor/activity-classifier.mjs
-monitor/event-hub.mjs
-monitor/file-watcher.mjs
-monitor/redactor.mjs
-```
-
-实现：
-
-1. 读取 active workflow。
-2. 读取 task、event、dispatch 和现有 artifact。
-3. 构建 Agent/task/run/session 节点。
-4. 生成状态、健康证据、父子边和最近活动。
-5. 提供快照、历史事件和 SSE。
-6. 支持断线后的 sequence 回放。
-7. 监控错误不阻塞 workflow。
-
-验收：没有 activity 文件时，仍能用现有文件显示基本状态。
-
-### Phase 2：活动协议和实时输出
-
-新增：
-
-```text
 contracts/agent-activity.schema.json
-contracts/agent-live-status.schema.json
 contracts/agent-checkpoint.schema.json
-scripts/monitor-core/emit-activity.mjs
-scripts/monitor-core/emit-checkpoint.mjs
-scripts/monitor-core/session-tailer.mjs
-scripts/monitor-core/session-parser.mjs
-templates/agent-activity.json
-templates/agent-live-status.json
-templates/agent-checkpoint.json
-```
+contracts/monitor-event.schema.json
+contracts/supervision-request.schema.json
+contracts/supervision-receipt.schema.json
+contracts/supervision-event.schema.json
+contracts/manager-wake-record.schema.json
 
-修改：
-
-```text
-agents/common/CONTEXT_PROTOCOL.md
-agents/common/COMMON_RULES.md
-agents/*/workspace/AGENTS.md
-agents/*/workspace/TOOLS.md
-```
-
-实现双通道：
-
-```text
-显式 emit-activity → 高精度结构化状态
-Session Tailer      → 没有主动上报时的安全输出兜底
-```
-
-验收：子 Agent 的安全文本、工具状态、短输出可以在 1～2 秒内出现在 Dashboard；`thinking` 不出现在 API 和 UI。
-
-### Phase 3：图形化 Dashboard
-
-第一期可使用原生 HTML/CSS/JS，等交互复杂度稳定后再使用 React/Vite。建议目录：
-
-```text
-monitor/ui/index.html
-monitor/ui/app.js
-monitor/ui/styles.css
-monitor/ui/components/agent-tree.js
-monitor/ui/components/activity-feed.js
-monitor/ui/components/task-drawer.js
-monitor/ui/components/timeline.js
-```
-
-实现：
-
-1. 顶部健康摘要。
-2. SVG Agent 树。
-3. Agent 状态卡片。
-4. 子 Agent 实时输出面板。
-5. Task 详情抽屉。
-6. 时间线和过滤器。
-7. 疑似停滞证据提示。
-8. SSE 断线重连。
-9. 空状态、旧 workflow 降级状态和监控异常提示。
-
-### Phase 4：命令闭环
-
-新增：
-
-```text
-contracts/monitor-command.schema.json
-monitor/command-api.mjs
-monitor/command-receipt-reader.mjs
-```
-
-修改 manager 规则和文档，使 manager 读取并处理 monitor command request。
-
-第一批命令只做：
-
-```text
-NUDGE
-SEND_MESSAGE
-PAUSE_REQUEST
-```
-
-验证命令处理、用户确认、幂等、审计、失败回执和恢复。
-
-### Phase 5：可追踪的任意层级 Subagent
-
-只有 Phase 1～4 稳定后才考虑开放非 manager Agent spawn。
-
-工作：
-
-1. 扩展 dispatch intent 父子字段。
-2. 扩展 task/run 创建规则。
-3. 允许列表和 Agent prompt 增加 tracked spawn 协议。
-4. 对 raw spawn 做拒绝或 `UNTRACKED_CHILD` 标记。
-5. 测试至少三层 Agent 树。
-6. 验证 parent/child 输出、完成回执和失败恢复。
-
-### Phase 6：规模化事件基础设施
-
-在以下情况出现前，不引入 Redis/Postgres：
-
-- workflow 数量和并发 Agent 数量超过本地文件投影能力。
-- session JSONL 尾读成为性能瓶颈。
-- 需要多台机器共享 Monitor。
-- 需要长期统计、成本分析和跨实例订阅。
-
-届时实现 EventBusAdapter，将本地 JSONL 事件复制到 Redis Streams/NATS，并保持同一 Event Envelope。
-
-## 14. 计划修改的文件清单
-
-### 新增
-
-```text
-docs/plan/2026-08-04-agent-observability-monitor.md
-contracts/agent-activity.schema.json
-contracts/agent-live-status.schema.json
-contracts/agent-checkpoint.schema.json
-contracts/monitor-command.schema.json
-templates/agent-activity.json
-templates/agent-live-status.json
-templates/agent-checkpoint.json
 config/monitoring.example.yaml
-monitor/server.mjs
-monitor/event-source.mjs
-monitor/event-hub.mjs
-monitor/file-watcher.mjs
-monitor/snapshot-projector.mjs
-monitor/activity-classifier.mjs
-monitor/session-tailer.mjs
-monitor/session-parser.mjs
-monitor/redactor.mjs
-monitor/ui/index.html
-monitor/ui/app.js
-monitor/ui/styles.css
-monitor/ui/components/agent-tree.js
-monitor/ui/components/activity-feed.js
-monitor/ui/components/task-drawer.js
-monitor/ui/components/timeline.js
+
 scripts/monitor-core/emit-activity.mjs
 scripts/monitor-core/emit-checkpoint.mjs
-scripts/monitor-core/session-tailer.mjs
-scripts/monitor-core/session-parser.mjs
-scripts/monitor-core/redactor.mjs
+
+tests/monitor-read-model.test.mjs
 tests/monitor-snapshot.test.mjs
 tests/monitor-activity.test.mjs
-tests/monitor-classifier.test.mjs
+tests/monitor-redactor.test.mjs
 tests/monitor-session-tailer.test.mjs
+tests/monitor-health.test.mjs
+tests/monitor-watchdog.test.mjs
+tests/monitor-supervision.test.mjs
 tests/monitor-http.test.mjs
-tests/fixtures/monitor-parent-child/
+tests/monitor-sse.test.mjs
+tests/manager-wake-outbox.test.mjs
+tests/fixtures/monitor/
 ```
 
-### 修改
+### 14.2 修改
 
 ```text
 package.json
-contracts/task.schema.json
-contracts/dispatch-intent.schema.json（如果当前已有独立契约）
-scripts/runtime-guard.mjs（只增加必要的契约/路径校验）
-agents/common/CONTEXT_PROTOCOL.md
+scripts/control-kernel.mjs
+scripts/control-core/repository.mjs
+scripts/control-core/task-repository.mjs
+scripts/control-core/audit.mjs
+scripts/control-core/projections.mjs
+
 agents/common/COMMON_RULES.md
+agents/common/CONTEXT_PROTOCOL.md
+agents/manager-agent/workspace/AGENTS.md
+agents/manager-agent/workspace/TOOLS.md
 agents/*/workspace/AGENTS.md
 agents/*/workspace/TOOLS.md
+
 docs/architecture.md
-docs/state-and-recovery.md
+docs/control-kernel-v2.md
 docs/manager-orchestration.md
+docs/state-and-recovery.md
+docs/troubleshooting.md
 README.md
 CHANGELOG.md
 docs/current-progress-assessment.md
 ```
 
-所有修改应先在独立分支实施，并沿现有 workflow、Runtime Guard、Ajv 和安装验证流程验收。
+## 15. 分阶段实施计划
 
-## 15. 测试和验收方案
+### Phase 0：ADR、基线和契约冻结（1～2 人日）
 
-### 15.1 契约测试
+目标：确定边界，避免实现过程中再次形成第二控制面。
 
-- Ajv 校验所有新增 JSON/JSONL schema。
-- `live-status.json` 原子写入，不出现半截 JSON。
-- `activity.jsonl` 末尾半行不会导致 Monitor 崩溃。
-- 不允许 activity 写到当前 run 之外的目录。
-- 事件 Envelope 的 ID 关联必须一致。
+工作：
 
-### 15.2 投影测试
+1. 编写 ADR：允许常驻 Monitor、Watchdog 和只唤醒 manager 的 Wake Adapter。
+2. 确认 Monitor 对 `control.db` 的只读连接方式。
+3. 探测真实 OpenClaw session 目录和 JSONL 格式。
+4. 确认 `sessions_send`、manager 唤醒和 session 查询接口。
+5. 统计现有 workflow/task/run/dispatch/session 规模。
+6. 冻结 activity、monitor event 和 supervision 契约。
+7. 定义敏感字段与脱敏规则。
 
-至少覆盖：
+验收：
 
-1. manager → worker。
-2. manager → worker → child。
-3. 三层 child tree。
-4. 多次 retry 的同 Agent、多 run。
-5. waiting human。
-6. waiting child。
-7. blocked/failed/completed。
-8. 没有 activity 文件的旧 workflow。
-9. session tailer 发现未追踪 child。
-10. session JSONL 中包含 thinking、tool_use、tool_result，确认只保留安全字段。
-11. 父子 task 关系缺失时标记 inferred。
-12. `events.jsonl` 哈希链未被改写。
+- 不修改 OpenClaw 配置。
+- 不改变现有 workflow/task 状态。
+- 形成 baseline 文档和 ADR。
 
-### 15.3 实时性测试
+### Phase 1：Control Kernel 只读模型与监督表（3～4 人日）
 
-目标：
+目标：提供适合 Dashboard 的一致性读取，并建立监督事实存储。
 
-| 指标 | MVP 目标 |
-|---|---:|
-| activity 文件到 API | ≤ 1 秒 |
-| API 到已连接浏览器 | ≤ 2 秒 |
-| SSE 断线重连 | ≤ 3 秒恢复 |
-| 单 workflow 快照生成 | ≤ 500ms |
-| 100 个 Agent 树渲染 | ≤ 2 秒可交互 |
-| 单个 workflow 最近事件保留 | 至少 500 条或最近 30 分钟 |
-| 监控服务空闲 CPU | 本地开发机目标 < 5% |
+工作：
 
-### 15.4 安全测试
+1. 新增 read-model 查询 workflow/task/run/dispatch/outbox/event。
+2. 新增 `snapshot` 命令或内部只读 API。
+3. 新增 supervision request/event/wake outbox 表和迁移。
+4. 新增 supervision 命令及幂等处理。
+5. 扩展 audit 校验监督事件链、请求状态和 outbox。
+6. 增加并发、重复 command 和响应丢失测试。
 
-- 原始 thinking 不出现在 API 响应。
-- 密钥、token、cookie、私钥不出现在输出摘要。
-- 任意路径访问被拒绝。
-- Monitor 默认不能写控制文件。
-- command API 拒绝未授权 Agent/task/run 组合。
-- 事件链被篡改时页面显示 `monitor-health=DEGRADED`，不自行修复历史。
+验收：
 
-### 15.5 用户验收场景
+- 原 Control Kernel 测试全部通过。
+- 重复 request 不产生重复记录。
+- audit 可以发现监督事件篡改和状态不一致。
 
-用一个实际 workflow 演示：
+### Phase 2：只读 Monitor MVP（2～3 人日）
 
-1. manager 创建 developer task。
-2. developer 开始工作并写入活动。
-3. developer 创建 child task。
-4. child session 开始输出安全摘要。
-5. 页面出现 child 节点和 parent-child 连线。
-6. child 工具调用和短输出实时出现。
-7. child 等待输入时显示 `WAITING_CHILD` 或 `WAITING_HUMAN`。
-8. 让一个 Agent 停止更新，页面显示“疑似停滞”和证据。
-9. child 完成后 parent 页面显示 child completion 摘要。
-10. workflow 完成后所有节点进入终态，时间线可回放。
+目标：在没有 activity 的情况下先看到现有控制状态。
 
-## 16. 性能和可靠性策略
+工作：
 
-借鉴 edict-main 的“性能基线单独记录”做法，新增：
+1. 实现 Monitor server 和配置加载。
+2. 只读查询 `control.db`。
+3. 构建 workflow/task/run/dispatch/session 基础节点。
+4. 提供 health、workflow、snapshot、events API。
+5. 实现 SSE sequence 和断线回放。
+6. 对 v1 workflow 只做降级显示。
+
+验收：
+
+- 不写 `control.db`。
+- 没有 activity 时仍能展示完整控制状态。
+- Monitor 停止不影响现有测试和工作流。
+
+### Phase 3：Activity、Session Tailer 与脱敏（3～4 人日）
+
+目标：实时看到 Agent 正在做什么，同时不泄露推理和凭据。
+
+工作：
+
+1. 实现 `emit-activity`、`emit-checkpoint`。
+2. 创建 `monitor.db`。
+3. 实现 session tailer、parser、cursor。
+4. 实现 artifact watcher。
+5. 实现 thinking 删除、凭据脱敏和文本截断。
+6. 更新 Agent 规则和 context package。
+7. 把多来源事件统一为 Monitor Event Envelope。
+
+验收：
+
+- activity 到 API P95 小于 1 秒。
+- API 到浏览器 P95 小于 2 秒。
+- thinking、API Key、cookie、私钥和环境变量不出现在响应中。
+- JSONL 末尾半行不会使服务崩溃。
+
+### Phase 4：Dashboard（4～5 人日）
+
+目标：提供可用于日常管理的图形化界面。
+
+工作：
+
+1. 顶部健康总览。
+2. Workflow 阶段看板。
+3. Agent 协作树。
+4. Task 详情抽屉。
+5. Activity、tool、artifact 和 supervision 时间线。
+6. 状态、Agent、task、事件类型筛选。
+7. SSE 断线重连和 sequence 补发。
+8. 空状态、DEGRADED 和旧 workflow 降级展示。
+
+验收：
+
+- 用户能从 workflow 下钻到 task/run/session。
+- 每个异常状态都能展示判定证据和置信度。
+- 浏览器刷新或断线后不丢活动事件。
+
+### Phase 5：Watchdog 影子模式（2～3 人日）
+
+目标：先验证停滞判定，不执行催办。
+
+工作：
+
+1. 实现 health classifier 和定期扫描。
+2. 按 task type 应用不同阈值。
+3. 记录“如果启用将产生什么请求”。
+4. 用真实长任务观察误报和漏报。
+5. 校准 tool running、WAITING_HUMAN 和 Gateway 离线场景。
+
+验收：
+
+- 正常长工具调用不被误判为需 retry。
+- BLOCKED/WAITING 状态不触发普通催办。
+- 同一窗口只产生一个影子动作。
+
+### Phase 6：监督请求与 manager 唤醒（4～5 人日）
+
+目标：形成真正的自动监督闭环。
+
+工作：
+
+1. Watchdog 创建幂等 supervision request 和 wake outbox。
+2. Wake Adapter 只唤醒 manager-agent。
+3. manager claim、audit、session 核查和 NUDGE。
+4. 写 supervision receipt/event。
+5. 实现冷却、重试退避和最大次数。
+6. Dashboard 开放人工 NUDGE、SEND_MESSAGE 和 RECONCILE。
+7. 验证 manager/Monitor/Gateway 重启恢复。
+
+验收：
+
+- 原 session 未确认终结前不会重复 spawn。
+- 失败的 manager 唤醒不会丢失请求。
+- manager 重启后可以继续处理未完成请求。
+- 每次催办都有完整 request、event 和 receipt。
+
+### Phase 7：受控 retry、暂停和人工升级（3～4 人日）
+
+目标：处理真正失联或失败的任务。
+
+工作：
+
+1. 实现 RETRY_REVIEW，而非 Watchdog 直接 retry。
+2. manager 确认 FAILED/LOST 后创建新 attempt/run。
+3. 实现 PAUSE/RESUME/CANCEL 请求的审批和状态机映射。
+4. 超过预算时进入 HOLD/WAITING_HUMAN。
+5. 增加影响预览和人工确认。
+
+验收：
+
+- retry 生成新 attempt/run/dispatch。
+- 历史 artifact、event 和 receipt 不被覆盖。
+- 高风险动作经过现有审批和 Gate 规则。
+
+### Phase 8：可靠性、性能和发布（3～4 人日）
+
+工作：
+
+1. 运行完整测试和故障注入。
+2. 完成 Windows/Linux 启动脚本。
+3. 日志轮转和 telemetry retention。
+4. 本地鉴权、CSRF 和安全 header。
+5. 性能基线与容量测试。
+6. 更新架构、恢复、排障、README、CHANGELOG 和完成度评估。
+7. 先 shadow rollout，再开启自动 NUDGE，最后开启受控 retry。
+
+总估算：约 22～30 人日。MVP 看板为 Phase 0～4；真正的自动监督必须完成 Phase 5～6。
+
+## 16. 测试计划
+
+### 16.1 契约测试
+
+- 所有 activity、monitor event、supervision request/receipt/event 通过 Ajv。
+- workflow/task/run/dispatch/agent 身份必须一致。
+- 非法 request type、状态和路径被拒绝。
+- activity 不能冒充其他 task/run/agent。
+
+### 16.2 Control Kernel 测试
+
+- supervision request 幂等重放。
+- 同 request ID 不同内容失败关闭。
+- request/event/outbox 同事务提交。
+- 并发 claim 只能有一个成功。
+- audit 检测哈希、sequence、状态和 outbox 不一致。
+- 响应丢失后相同 command 重放返回原结果。
+
+### 16.3 Monitor 投影测试
+
+- 无活动 workflow。
+- 多 workflow。
+- task 各种状态。
+- dispatch PREPARED/SENT/ACKNOWLEDGED/RUNNING/终态。
+- projection 缺失或漂移。
+- v1 workflow 降级。
+- control.db 暂时锁定。
+- Monitor 重启重建。
+
+### 16.4 Activity 与 Tailer 测试
+
+- 显式 activity 正常写入。
+- JSONL 末尾半行。
+- 文件截断和轮转。
+- 同一事件重复读取。
+- thinking 不进入 telemetry。
+- tool use/result 正确配对。
+- 超长输出截断。
+- token、cookie、密码和私钥脱敏。
+- 未跟踪 session 不自动归属 workflow。
+
+### 16.5 Watchdog 测试
+
+- 正常 RUNNING 不触发。
+- TOOL_STARTED 且工具仍活跃不触发。
+- WAITING_HUMAN 不触发普通 NUDGE。
+- Gateway 离线标记基础设施异常。
+- lease 过期只生成 RECONCILE。
+- 同一冷却窗口不重复请求。
+- 连续无响应按 L1→L2→L3 升级。
+- 达到 max attempts 后进入人工处理。
+
+### 16.6 端到端测试
 
 ```text
-docs/plan/monitor-runtime-baseline.md
-docs/plan/monitor-performance-report.md
+创建 workflow
+→ task-register/task-validate
+→ dispatch-prepare
+→ fake sessions_spawn
+→ SENT/ACKNOWLEDGED/RUNNING
+→ activity 实时显示
+→ 停止 activity
+→ Watchdog 创建请求
+→ Wake Adapter 唤醒 fake manager
+→ manager NUDGE 原 session
+→ Agent 恢复 activity
+→ 请求关闭
+→ result-ingest
+→ Dashboard 显示完成
 ```
 
-Monitor 性能策略：
+### 16.7 故障注入
 
-1. 只尾读发生变化的 session JSONL。
-2. 对每个 session 保存 byte offset，避免重复解析。
-3. 对 workflow snapshot 做短 TTL 缓存。
-4. 文件变化采用 debounce，避免一次写入触发多次推送。
-5. SSE 只推送增量事件，初次连接才发送完整 snapshot。
-6. 浏览器只保留最近 N 条实时输出，历史按需请求。
-7. 事件读取失败时保留上一个有效快照并显示降级原因。
-8. Monitor 进程重启后从文件和 sequence 重新构建，不依赖内存状态。
-9. 不把完整 session 历史复制进内存或发送到客户端。
+- Monitor 在写 telemetry 时退出。
+- Watchdog 在创建请求后退出。
+- Wake Adapter 调用成功但响应丢失。
+- manager 被唤醒但 claim 前退出。
+- manager claim 后执行前退出。
+- Gateway 离线后恢复。
+- session 已完成但 completion 未写。
+- session 丢失但 lease 尚未到期。
+- SQLite busy/locked。
+- SSE 连接大量断开重连。
 
-## 17. 回滚和失败处理
+### 16.8 安全测试
 
-本改造应具备独立回滚能力：
+- thinking 不出现在 DB、API、SSE 和浏览器。
+- XSS 文本经过安全渲染。
+- 路径穿越被拒绝。
+- Monitor 不能写 workflow/task 状态。
+- 监督命令不能指向不存在或不匹配的 Agent。
+- 本地 API 默认拒绝非允许 origin。
+- 日志不记录凭据和完整 session 内容。
 
-- 停止 `npm run monitor` 不影响 Agent 工作流。
-- 移除 Agent activity 上报规则后，旧 workflow 仍能运行。
-- 新增 schema 不应改变已有 schema 的合法数据。
-- Session Tailer 失败时退回 task/event/dispatch 基础状态。
-- SSE 失败时前端退回手动刷新/轮询快照。
-- Monitor 读取异常只显示 DEGRADED，不改写、不修复控制文件。
-- command request 失败不会改变任务状态，保留失败 receipt。
+## 17. 性能与容量指标
 
-## 18. 推荐实施顺序和里程碑
+第一期目标规模：
+
+```text
+活动 workflow       100
+累计 task            10,000
+并发 Agent/session   50
+单 workflow 事件     100,000
+SSE 客户端           20
+```
+
+验收指标：
+
+| 指标 | 目标 |
+|---|---|
+| Snapshot API P95 | ≤ 500 ms |
+| 初次页面可用 | ≤ 2 s |
+| Activity 到 Monitor | ≤ 1 s |
+| Monitor 到浏览器 | ≤ 2 s |
+| SSE 重连恢复 | ≤ 3 s |
+| Watchdog 扫描 | ≤ 1 s/100 个活动 task |
+| Monitor 重启重建 | ≤ 30 s |
+| 稳态 CPU | < 10% 单核 |
+| 稳态内存 | < 300 MB |
+
+优化策略：
+
+- 只读增量游标，不重复全表扫描。
+- session 文件只尾读。
+- snapshot 使用短 TTL 缓存。
+- SSE 只推增量。
+- activity 批量事务写入。
+- 完结 workflow 降低扫描频率。
+- telemetry 按保留策略归档。
+
+## 18. 上线、回滚与兼容
+
+### 18.1 上线顺序
+
+1. 只读 Monitor。
+2. Activity/Session Tailer。
+3. Dashboard。
+4. Watchdog 影子模式。
+5. 自动 NUDGE。
+6. RECONCILE。
+7. 受控 retry 和高风险命令。
+
+每一阶段通过验收后才开启下一阶段功能开关。
+
+### 18.2 功能开关
+
+```yaml
+monitor_enabled: true
+session_tailer_enabled: true
+watchdog_enabled: true
+watchdog_shadow_mode: true
+auto_nudge_enabled: false
+manager_wake_enabled: false
+controlled_retry_enabled: false
+```
+
+### 18.3 回滚
+
+- 关闭 Monitor 不影响 workflow。
+- 关闭 Watchdog 后不再创建自动请求。
+- 关闭 Wake Adapter 后请求留在 outbox 等待恢复。
+- `monitor.db` 可删除重建。
+- supervision 表属于追加控制事实，不通过删除记录回滚。
+- 已发送的外部消息不能假装撤销，只能记录后续补偿事件。
+
+### 18.4 兼容
+
+- v2 workflow 使用完整看板和监督。
+- v1 workflow 只读展示基础状态，不执行自动监督。
+- 没有显式 activity 的 Agent 通过 Session Tailer 降级显示。
+- Session Tailer 不可用时继续显示权威 task/dispatch 状态。
+
+## 19. 最终验收标准
+
+项目只有同时满足以下条件，才能宣布看板和监督机制完成：
+
+### 看板
+
+- 能看到所有活动 workflow。
+- 能按 workflow→task→run→dispatch→session 下钻。
+- 能看到 Agent 当前动作、checkpoint、工具摘要和最近活动。
+- 能看到 WAITING、BLOCKED、FAILED、LOST、STALE 和 POSSIBLY_STALLED。
+- 每个异常都有证据和置信度。
+- SSE 断线后可以补发事件。
+- Monitor 重启后可以确定性重建。
+
+### 监督
+
+- 同一停滞窗口最多一个监督请求。
+- Watchdog 不直接联系工作 Agent。
+- manager 处理前必须 audit 和核查原 session。
+- 原 session 未确认终结前不重复 spawn。
+- retry 使用新 attempt/run。
+- 超过预算后进入人工处理。
+- 每个监督动作都有 request、event、outbox 和 receipt。
+
+### 控制与安全
+
+- `control.db` 始终是唯一控制状态权威。
+- Monitor 不拥有 task/workflow 状态写权限。
+- Control Kernel audit 全部通过。
+- Runtime Guard、Gate、审批和 Git 规则不被绕过。
+- thinking、凭据、完整 prompt 和未脱敏日志不进入浏览器。
+- Monitor、Watchdog 或 Wake Adapter 故障不破坏主 workflow。
+
+## 20. 推荐实施决策
+
+建议批准以下架构决策：
+
+1. **采用常驻 Node.js Monitor 服务。** 当前“没有常驻编排器”的原则调整为“没有第二个
+   状态权威和没有直接调度工作 Agent 的服务”。
+2. **允许 Watchdog 自动创建监督请求。** Watchdog 只做检测和 durable request，不执行
+   工作流动作。
+3. **允许 Wake Adapter 唤醒 manager-agent。** 它不能直接联系工作 Agent。
+4. **监督请求进入 `control.db`。** 它是控制事实，不能只存在于遥测库。
+5. **Activity 进入独立 `monitor.db`。** 它是可重建观测数据，不污染权威 task 快照。
+6. **第一期使用 SSE。** 双向控制仍走 HTTP request → Control Kernel → manager 闭环。
+7. **禁止自动状态回滚。** 使用核查、新 attempt、HOLD 和人工审批替代。
+8. **先影子模式，再自动催办。** 先验证误报率，再开启外部动作。
+
+## 21. 里程碑摘要
 
 | 里程碑 | 内容 | 结果 |
 |---|---|---|
-| M0 | 运行时和 session 格式探测 | 明确真实路径和字段，形成 baseline |
-| M1 | 只读 snapshot + API + SSE | 能看到现有 workflow/task/dispatch |
-| M2 | activity 协议 + Session Tailer | 能看到 Agent 安全实时输出 |
-| M3 | 图形化 Agent 树、详情和时间线 | 用户可实时观察和筛选 |
-| M4 | 健康判定和疑似停滞证据 | 能发现长时间无进展 Agent |
-| M5 | command request 闭环 | 用户可催办、暂停、发送消息 |
-| M6 | tracked multi-level subagent | 子 Agent 可审计、可见、可回放 |
-| M7 | EventBus adapter | 为多实例和大规模部署准备 |
+| M0 | ADR、基线、契约 | 明确边界与真实 runtime 格式 |
+| M1 | Control read-model + supervision tables | 具备可靠读取和监督事实存储 |
+| M2 | Monitor API + SSE | 能查看现有 workflow/task/dispatch |
+| M3 | Activity + Session Tailer | 能看到 Agent 安全实时进展 |
+| M4 | Dashboard | 能图形化查看、筛选和下钻 |
+| M5 | Watchdog shadow | 能证据化识别疑似停滞 |
+| M6 | Manager supervision loop | 能自动催办和对账 |
+| M7 | Controlled retry/escalation | 能安全处理真正失联和失败 |
+| M8 | Hardening/rollout | 可长期稳定运行 |
 
-建议第一期优先完成 M0～M4，形成可独立运行的轻量监测平台。M5 以后再扩大权限和引入更重的基础设施。
-
-## 19. 最小 MVP 交付定义
-
-以下项目全部满足后，第一期即可交付：
-
-- 本地启动一个 Monitor 服务。
-- 浏览器能看到当前 workflow 的 Agent 树。
-- 能显示 manager、worker 和 child Agent。
-- 能实时显示安全文本、工具调用状态和短输出。
-- 不显示完整 thinking。
-- 能显示 heartbeat、当前动作、checkpoint 和最近活动。
-- 能显示等待、阻塞、完成和疑似停滞。
-- 子 Agent 输出可以单独查看，也可以从父 Agent 详情页进入。
-- SSE 断线后可按 sequence 回放。
-- 旧 workflow 兼容降级显示。
-- Monitor 不改变原有控制面权限和事件链。
-- 完成 schema、单元、集成、实时性和安全测试。
-
-这条路线兼顾了 edict-main 已验证的实时看板、活动解析、心跳判断和人工干预思路，也保留当前项目文件化状态、Runtime Guard、append-only 证据和 manager 唯一编排者边界。第一期不需要先重构整个系统，就能让用户实时看到包括子 Agent 在内的协作过程和安全输出。
-
+本计划完成后，当前项目将获得 edict-main 中最有价值的“任务看板、活动时间线、心跳、停滞
+检测、催办和升级”能力，同时保留 Control Kernel v2 在单一事实源、事务、不可变事件、
+幂等 dispatch、Gate、审批和恢复方面的优势。
