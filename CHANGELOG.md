@@ -1,5 +1,15 @@
 # Changelog
 
+### 记录 Manager-Agent 编排与执行协议整改计划
+
+#### 改动了什么
+
+- 新增 `docs/plan/2026-08-05-manager-orchestration-hardening.md`，记录计划持久化回执、Intake 分流、workflow/task/run 初始化、Agent 身份校验、不可绕过派发、JSON 原子写入、Windows 执行与恢复的完整整改计划。
+
+#### 为什么要改
+
+- 将最新一轮审计发现的问题、分阶段实施边界、测试要求、提交策略和最终验收标准固化到仓库，避免计划只存在于对话上下文中。
+
 ### OpenClaw Agent 单次输出预算上调
 
 #### 改动了什么
