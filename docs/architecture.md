@@ -5,7 +5,7 @@
 
 ## 核心结论
 
-系统没有 Python 控制平面，也没有常驻 orchestrator/daemon。`manager-agent` 仍是唯一流程总控，并使用 OpenClaw 原生 `sessions_spawn` 调度原有 6 个工作 Agent。确定性状态写入由按需运行的 Node.js Control Kernel 完成；它使用 Node 内置 SQLite，但不调用模型、不调度 Agent、不执行 Git 合并。
+系统没有 Python 控制平面，也没有第二个常驻 orchestrator。`manager-agent` 仍是唯一流程总控，并使用 OpenClaw 原生 `sessions_spawn` 调度原有 6 个工作 Agent。Node.js Control Kernel 负责确定性状态写入；宿主机原生 Supervisor Core 可常驻读取控制状态、采集遥测、执行健康分类和 Watchdog，但不调度工作 Agent、不执行 Git 合并，也不能成为第二个状态权威。
 
 LangGraph/StateGraph 当前没有引入。现阶段的关键故障来自多文件写入和多份“当前状态”并存，SQLite 事务、CAS、不可变事件和 outbox 已直接解决这一层问题。若以后需要动态子图、长周期人工节点或跨进程调度，可在 Control Kernel 之上使用 LangGraph；图状态仍不得成为第二个权威状态源。
 
@@ -22,10 +22,16 @@ Node.js Control Kernel（按需 CLI，不驻留、不调度）
     workflows + immutable workflow_events + command idempotency
     tasks + task_runs + immutable task_events
     dispatches + dispatch_outbox + operation idempotency
-    active_workflows SQL view + projection_outbox
+  active_workflows SQL view + projection_outbox
          │
          ├──只读投影──> runtime/control/v2/**
          └──引用──────> artifact/input/output、Gate、审批、证据、日志
+         │
+         ▼
+宿主机 Supervisor Core（可选常驻观察服务）
+  monitor.db、activity、session tailer、health、Watchdog、SSE API
+         │
+         └──静态 HTML Dashboard / supervision request → manager 核查
          │
          ▼
 本地 Git/worktree 层
@@ -35,6 +41,8 @@ Node.js Control Kernel（按需 CLI，不驻留、不调度）
 ## 权威边界
 
 - SQLite `<runtime>/control/control.db` 是 v2 workflow/task/run/dispatch 当前状态的唯一权威源。
+- SQLite `<runtime>/monitor/monitor.db` 只保存可删除、可重建的 activity、session cursor、artifact metadata 和 health snapshot。
+- Supervisor Core、Watchdog 和静态 Dashboard 都没有直接写 workflow/task 状态的权限；监督动作必须经过 request/outbox/receipt 和 manager 核查。
 - manager 只提交命令或事实，不自行计算下一版 workflow 快照；reducer 根据版本化状态机计算状态。
 - workflow state、不可变哈希事件、幂等 command result 和 projection outbox 在一个 `BEGIN IMMEDIATE` 事务内提交。
 - task 注册固定 contract set/output contract version。`COMPLETED` 必须在 result 与全部必需结构化输出通过 Schema、身份、路径和哈希校验后提交。

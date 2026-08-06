@@ -2,7 +2,7 @@
 
 > 版本：2.1
 > 更新日期：2026-08-06
-> 状态：待评审、待实施
+> 状态：核心实现完成，自动外部动作待实机验收
 > 适用项目：`openclaw-multi-agent`
 > 参考项目：`D:\MicroConnect\project\edict-main`
 > 替换说明：本文完整替换 2026-08-04 的旧版可观测性计划。旧计划以可写
@@ -11,6 +11,12 @@
 > 2.1 修订说明：监督能力运行在宿主机原生 Node.js 进程中；Dashboard 使用可直接打开的
 > 静态 HTML/CSS/JavaScript，不引入容器或前端构建链。关闭看板页面时，
 > Watchdog、活动采集、停滞判定、监督请求和 manager 唤醒均不受影响。
+
+> 当前落地状态：MVP Control Kernel、Supervisor Core、遥测采集、静态 Dashboard、健康判定、
+> Watchdog shadow、Wake Adapter、operator request 与 controlled retry API 已实现；
+> `manager_wake_enabled=false`、`watchdog_shadow_mode=true`。真实 OpenClaw manager 唤醒未执行，
+> controlled retry 仍依赖 Manager 正式处理；Manager 编排加固计划中的身份校验、不可绕过派发、
+> 原子写入和中断恢复验收仍是后续实机验收项。
 
 ## 1. 文档目的
 

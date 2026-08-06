@@ -64,6 +64,7 @@ export function createMonitorServer(config, { database: providedDatabase = null,
   const supervision = createSupervisionRepository(config.projectRoot, database);
   const telemetryDatabase = providedTelemetryDatabase ?? openTelemetryDatabase(config.monitorDatabasePath ?? ':memory:');
   const telemetry = createTelemetryRepository(config.projectRoot, telemetryDatabase);
+  telemetry.prune({ maxEvents: config.telemetryMaxEvents, activityRetentionDays: config.activityRetentionDays });
   const hub = eventHub ?? new MonitorEventHub({ retention: config.sseRetention });
   const publish = (type, payload, meta) => hub.publish(type, payload, meta);
   const activity = createActivityService({ controlDatabase: database, telemetry, publish });
@@ -111,6 +112,11 @@ export function createMonitorServer(config, { database: providedDatabase = null,
   };
   const timer = setInterval(reconcile, config.reconcileIntervalMs);
   timer.unref?.();
+  const maintenanceTimer = setInterval(() => {
+    try { telemetry.prune({ maxEvents: config.telemetryMaxEvents, activityRetentionDays: config.activityRetentionDays }); }
+    catch (error) { hub.publish('monitor-health', { status: 'DEGRADED', error: error.message }, { source: 'TELEMETRY_MAINTENANCE' }); }
+  }, config.maintenanceIntervalMs);
+  maintenanceTimer.unref?.();
 
   const server = createServer(async (request, response) => {
     const cors = originHeaders(request, config);
@@ -219,6 +225,7 @@ export function createMonitorServer(config, { database: providedDatabase = null,
     },
     async close() {
       clearInterval(timer);
+      clearInterval(maintenanceTimer);
       if (server.listening) await new Promise((resolveClose, reject) => server.close((error) => error ? reject(error) : resolveClose()));
       if (!providedDatabase) database.close();
       if (!providedTelemetryDatabase) telemetryDatabase.close();

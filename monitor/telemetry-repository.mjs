@@ -148,5 +148,16 @@ export function createTelemetryRepository(projectRootInput, database) {
     health(taskId) { const row = database.prepare('SELECT * FROM agent_health_snapshots WHERE task_id=?').get(taskId); return row ? { workflow_id: row.workflow_id, task_id: row.task_id, run_id: row.run_id, health: row.health, confidence: row.confidence, evidence: parseJson(row.evidence_json), calculated_at: row.calculated_at } : null; },
     healthList(workflowId = null) { const rows = workflowId ? database.prepare('SELECT * FROM agent_health_snapshots WHERE workflow_id=? ORDER BY task_id').all(workflowId)
       : database.prepare('SELECT * FROM agent_health_snapshots ORDER BY workflow_id, task_id').all(); return rows.map((row) => ({ workflow_id: row.workflow_id, task_id: row.task_id, run_id: row.run_id, health: row.health, confidence: row.confidence, evidence: parseJson(row.evidence_json), calculated_at: row.calculated_at })); },
+    prune({ maxEvents = 100000, activityRetentionDays = 30, now = new Date() } = {}) {
+      const count = database.prepare('SELECT COUNT(*) AS count FROM monitor_events').get().count;
+      let removedEvents = 0;
+      if (count > maxEvents) {
+        const cutoff = database.prepare('SELECT sequence FROM monitor_events ORDER BY sequence DESC LIMIT 1 OFFSET ?').get(maxEvents - 1)?.sequence;
+        if (cutoff) removedEvents = database.prepare('DELETE FROM monitor_events WHERE sequence < ?').run(cutoff).changes;
+      }
+      const activityCutoff = new Date(now.valueOf() - activityRetentionDays * 86400000).toISOString();
+      const removedActivities = database.prepare('DELETE FROM agent_activities WHERE timestamp < ?').run(activityCutoff).changes;
+      return { removed_events: removedEvents, removed_activities: removedActivities, retained_events: Math.min(count, maxEvents) };
+    },
   };
 }

@@ -157,13 +157,27 @@ Manager 保持 `deepseek/deepseek-v4-pro` 和 `thinking=high`。其模型窗口�
 
 ### 可观测性与监督计划状态
 
-实时看板和自动监督目前仍是待实施计划，不是已上线功能。修订后的方案使用宿主机原生
-Node.js Supervisor Core 读取 Control Kernel 权威状态、采集安全遥测、执行健康判定和
-Watchdog；图形界面使用可直接打开的静态 `monitor/ui/index.html`，不需要前端安装或构建。
-关闭或未打开 HTML 页面不会停止监督核心。
+核心实现已完成，运行在宿主机原生 Node.js Supervisor Core 中；图形界面是可直接打开的静态
+`monitor/ui/index.html`，不需要 Docker、前端安装或构建。关闭或未打开 HTML 页面不会停止
+监督核心。
 
-只读状态、活动采集和 Watchdog 影子模式可以先实施；自动 NUDGE、manager 唤醒和受控 retry
-必须等待 Manager 编排加固中对应的身份校验、不可绕过派发、原子写入及中断恢复验收通过。
+启动与查看：
+
+```powershell
+npm run supervisor:check
+$env:MONITOR_TOKEN = '<local-random-token>'
+npm run supervisor:start
+```
+
+然后直接打开 `monitor/ui/index.html`。Supervisor API 默认监听
+`http://127.0.0.1:4310`；可在 `monitor/ui/config.js` 中配置 API 地址和 token。
+
+当前安全默认值是 `watchdog_shadow_mode=true`、`manager_wake_enabled=false`：健康判定和
+影子动作会记录遥测，但不会自动唤醒 Manager 或改变 workflow。受控 retry 仅接受已确认
+`FAILED/LOST` 且创建新 run 的请求。Dashboard 只提交监督请求，不直接写 workflow/task。
+Agent 活动可通过 `node scripts/monitor-core/emit-activity.mjs --file <activity.json>` 上报。
+
+真实 OpenClaw manager session 唤醒尚未开启，需完成 Manager 编排加固和实机验收后再启用。
 完整节点职责、交互信息、阶段门槛与验收标准见
 [可观测性与监督实施计划](docs/plan/2026-08-04-agent-observability-monitor.md)。
 

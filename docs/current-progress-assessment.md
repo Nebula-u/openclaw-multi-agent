@@ -2,8 +2,8 @@
 
 > 更新日期：2026-08-06
 >
-> 提交口径：`2026-07-29 00:00 +08:00` 至 `2026-08-07 00:00 +08:00` 的 Git 历史；共 69 个提交，实际代码提交截至 2026-08-05。8 月 6 日没有新增提交。
-> 证据口径：区分已提交实现、提交中记录的自动化验证、实际 OpenClaw 实机演练，以及仅已形成的后续计划；不把未提交工作区变更计入结论。
+> 提交口径：`2026-07-29 00:00 +08:00` 至当前分支 HEAD 的 Git 历史。
+> 证据口径：区分已提交实现、自动化验证、实际 OpenClaw 实机演练，以及仍待验收的后续计划。
 
 ## 结论
 
@@ -14,7 +14,7 @@
 - JSON 不再仅靠提示词约束。Schema、保守摄取、分类重写、真实模型 Harness、任务产物复检和失败证据共同组成 fail-closed 链路。
 - workflow/task/dispatch 不再由多份可写 JSON 彼此同步。当前 v2 状态以 SQLite 事务、命令、事件链和 CAS 为唯一权威；JSON/JSONL 降为可删可重建的只读投影。
 
-提交记录显示，P0–P5 的框架、自动化 E2E、并发与恢复测试均已完成。但这不等同于生产运维完成：尚未以重装后的真实 OpenClaw Gateway 跑出一条新的完整 6 工作 Agent v2 workflow，也没有完成真正隔离的测试执行环境。2026-08-05 新增的 Manager 编排整改计划是下一轮待实施计划，并非已交付功能。
+提交记录显示，P0–P8 的框架、自动化 E2E、并发与恢复测试均已完成。Monitor Control Kernel、宿主机原生 Supervisor Core、静态 HTML Dashboard、activity/tailer、health、watchdog shadow、wake adapter 和 controlled retry 已落地；但这不等同于生产运维完成：尚未以真实 OpenClaw Gateway 跑出一条新的完整 6 工作 Agent v2 workflow，真实 manager 自动唤醒仍关闭，Manager 编排整改计划仍有未完成验收项，且当前环境没有可用浏览器实例执行截图式视觉 QA。
 
 ## 7 月 29 日至 8 月 6 日的改动脉络
 

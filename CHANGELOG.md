@@ -1,5 +1,21 @@
 # Changelog
 
+### Monitor Phase 8：可靠性、安全、启动脚本与完整回归
+
+#### 改动了什么
+
+- 为 `monitor.db` 增加遥测保留策略：按事件数量和活动天数清理，数据库可删除并可由控制事实重建。
+- 增加 Windows PowerShell 与 POSIX 启动脚本，统一设置项目根目录、runtime 根目录和监听端口。
+- 增加 100 个活动 workflow 快照性能基线与遥测保留边界测试，并在 Supervisor 启动、维护周期和关闭时处理清理任务。
+- 更新架构、状态恢复、README 与计划文档，明确静态 HTML 看板、宿主机原生 Supervisor、默认 shadow watchdog 和关闭的 manager wake。
+
+#### 验证
+
+- `npm test`：完整回归通过；Runtime Guard 105 项通过、2 项因当前 Windows 会话无符号链接权限跳过，其余套件全部通过。
+- `npm run test:monitor`：23 项通过。
+- `git diff --check`：通过。
+- 当前环境没有可用浏览器实例，未执行截图式视觉验收；静态结构测试和 API 测试已通过。
+
 ### Monitor Phase 7：人工控制请求与受控 retry
 
 #### 改动了什么

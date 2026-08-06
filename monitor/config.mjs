@@ -59,5 +59,8 @@ export function loadMonitorConfig(overrides = {}) {
     managerWakeEnabled: boolean(overrides.managerWakeEnabled ?? fileConfig.manager_wake_enabled, false),
     managerSessionKey: overrides.managerSessionKey ?? process.env.MANAGER_SESSION_KEY ?? fileConfig.manager_session_key ?? null,
     managerWakeTimeoutSeconds: integer(overrides.managerWakeTimeoutSeconds ?? fileConfig.manager_wake_timeout_seconds, 60),
+    telemetryMaxEvents: integer(overrides.telemetryMaxEvents ?? fileConfig.telemetry_max_events, 100000),
+    activityRetentionDays: integer(overrides.activityRetentionDays ?? fileConfig.activity_retention_days, 30),
+    maintenanceIntervalMs: integer(overrides.maintenanceIntervalMs ?? fileConfig.maintenance_interval_ms, 3600000),
   };
 }

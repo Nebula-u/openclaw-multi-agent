@@ -110,3 +110,12 @@ WF-<UUID> · TASK-<UUID> · RUN-<UUID> · DEC-<UUID> · FIND-<UUID> · EVD-<UUID
 ## 7. 相关文档
 
 `workflow.md`（状态枚举）、`manager-orchestration.md`（写状态的时机）、`context-and-rule-passing.md`（快照与上下文摘要）、`git-worktree-strategy.md`（Git 与 worktree 一致性）、`evidence-and-claims.md`（证据与哈希）。
+# Monitor 与监督恢复补充
+
+Supervisor Core 重启时先运行 `supervisor:check` 的 Control Kernel audit，再从 `control.db`、
+session cursor、artifact cursor 和 `monitor.db` 重建快照。`monitor.db` 删除或损坏不会回滚、
+修复或推进 workflow；它只会导致活动时间线暂时降级。
+
+Wake Adapter 重启时重复读取 `manager_wake_outbox`。每个 wake 先核查指定 manager session；
+外部响应不确定时不直接重复发送。请求已经 CLAIMED/完成时，Adapter 只记录 settled wake receipt。
+lease 过期仍需 manager 查询原 session，不能直接写 LOST 或 retry。

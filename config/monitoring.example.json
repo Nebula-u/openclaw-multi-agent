@@ -17,5 +17,8 @@
   "supervision_cooldown_seconds": 300,
   "manager_wake_enabled": false,
   "manager_session_key": null,
-  "manager_wake_timeout_seconds": 60
+  "manager_wake_timeout_seconds": 60,
+  "telemetry_max_events": 100000,
+  "activity_retention_days": 30,
+  "maintenance_interval_ms": 3600000
 }
