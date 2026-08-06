@@ -6,6 +6,10 @@ import { createControlRepository, openControlDatabase } from '../scripts/control
 import { createSupervisionRepository } from '../scripts/control-core/supervision-repository.mjs';
 import { createTaskRepository } from '../scripts/control-core/task-repository.mjs';
 import { MonitorEventHub, encodeSse } from './event-hub.mjs';
+import { openTelemetryDatabase, createTelemetryRepository } from './telemetry-repository.mjs';
+import { createActivityService } from './activity-api.mjs';
+import { createSessionTailer } from './session-tailer.mjs';
+import { createArtifactWatcher } from './artifact-watcher.mjs';
 
 function isLoopback(address = '') {
   return address === '127.0.0.1' || address === '::1' || address === '::ffff:127.0.0.1';
@@ -50,12 +54,19 @@ function integerQuery(url, name, fallback) {
   return Number.isInteger(parsed) && parsed >= 0 ? parsed : fallback;
 }
 
-export function createMonitorServer(config, { database: providedDatabase = null, eventHub = null } = {}) {
+export function createMonitorServer(config, { database: providedDatabase = null, telemetryDatabase: providedTelemetryDatabase = null, eventHub = null } = {}) {
   const database = providedDatabase ?? openControlDatabase(config.databasePath);
   createControlRepository(config.projectRoot, database);
   const tasks = createTaskRepository(config.projectRoot, database);
   const supervision = createSupervisionRepository(config.projectRoot, database);
+  const telemetryDatabase = providedTelemetryDatabase ?? openTelemetryDatabase(config.monitorDatabasePath ?? ':memory:');
+  const telemetry = createTelemetryRepository(config.projectRoot, telemetryDatabase);
   const hub = eventHub ?? new MonitorEventHub({ retention: config.sseRetention });
+  const publish = (type, payload, meta) => hub.publish(type, payload, meta);
+  const activity = createActivityService({ controlDatabase: database, telemetry, publish });
+  const sessionTailer = createSessionTailer({ controlDatabase: database, telemetry,
+    sessionRoot: config.sessionRoot ?? config.projectRoot, publish });
+  const artifactWatcher = createArtifactWatcher({ controlDatabase: database, telemetry, publish });
   let snapshot = createControlSnapshot(database);
   let fingerprint = JSON.stringify({ workflows: snapshot.workflows, supervision: snapshot.supervision });
   hub.publish('snapshot', snapshot, { source: 'CONTROL_DB' });
@@ -69,6 +80,8 @@ export function createMonitorServer(config, { database: providedDatabase = null,
         fingerprint = nextFingerprint;
         hub.publish('snapshot', snapshot, { source: 'CONTROL_DB' });
       }
+      sessionTailer.scan();
+      artifactWatcher.scan();
     } catch (error) {
       hub.publish('monitor-health', { status: 'DEGRADED', error: error.message }, { source: 'MONITOR' });
     }
@@ -130,6 +143,14 @@ export function createMonitorServer(config, { database: providedDatabase = null,
         const task = tasks.get(decodeURIComponent(taskMatch[1]));
         return sendJson(response, task ? 200 : 404, task ? { ok: true, task } : { ok: false, error: 'TASK_NOT_FOUND' }, cors);
       }
+      const taskActivity = path.match(/^\/api\/tasks\/([^/]+)\/activity$/u);
+      if (request.method === 'GET' && taskActivity) {
+        return sendJson(response, 200, { ok: true, activities: telemetry.activities({ taskId: decodeURIComponent(taskActivity[1]) }) }, cors);
+      }
+      const agentActivity = path.match(/^\/api\/agents\/([^/]+)\/activity$/u);
+      if (request.method === 'GET' && agentActivity) {
+        return sendJson(response, 200, { ok: true, activities: telemetry.activities({ agentId: decodeURIComponent(agentActivity[1]) }) }, cors);
+      }
       if (request.method === 'GET' && path === '/api/supervision') {
         return sendJson(response, 200, { ok: true, requests: supervision.list({ status: url.searchParams.get('status') }) }, cors);
       }
@@ -139,6 +160,11 @@ export function createMonitorServer(config, { database: providedDatabase = null,
         reconcile();
         hub.publish('supervision', value, { source: 'LOCAL_API' });
         return sendJson(response, 201, value, cors);
+      }
+      if (request.method === 'POST' && path === '/api/activity') {
+        if (!authorized(request, url, config)) return sendJson(response, 401, { ok: false, error: 'TOKEN_REQUIRED' }, cors);
+        const value = activity.emit(await readJsonBody(request, config.requestBodyLimit));
+        return sendJson(response, value.idempotent_replay ? 200 : 201, value, cors);
       }
       return sendJson(response, 404, { ok: false, error: 'NOT_FOUND' }, cors);
     } catch (error) {
@@ -151,6 +177,8 @@ export function createMonitorServer(config, { database: providedDatabase = null,
     server,
     database,
     hub,
+    telemetry,
+    activity,
     config,
     snapshot: () => snapshot,
     async start() {
@@ -164,7 +192,7 @@ export function createMonitorServer(config, { database: providedDatabase = null,
       clearInterval(timer);
       if (server.listening) await new Promise((resolveClose, reject) => server.close((error) => error ? reject(error) : resolveClose()));
       if (!providedDatabase) database.close();
+      if (!providedTelemetryDatabase) telemetryDatabase.close();
     },
   };
 }
-

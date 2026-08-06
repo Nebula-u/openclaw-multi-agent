@@ -31,11 +31,14 @@ export const CONTRACT_SCENARIOS = {
 // must be compiled by Runtime Guard self-check, but must never be delegated to
 // an LLM as an Agent communication exercise.
 export const INTERNAL_CONTRACTS = new Set([
+  'agent-activity.schema.json',
+  'agent-checkpoint.schema.json',
   'active-workflows-v2.schema.json',
   'control-event-v2.schema.json',
   'control-state-v2.schema.json',
   'legacy-quarantine-report-v2.schema.json',
   'manager-wake-record.schema.json',
+  'monitor-event.schema.json',
   'supervision-claim.schema.json',
   'supervision-receipt.schema.json',
   'supervision-request.schema.json',

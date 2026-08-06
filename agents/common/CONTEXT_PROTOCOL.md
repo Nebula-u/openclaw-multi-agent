@@ -55,6 +55,8 @@ manager-agent 在每次派发前，于 `<artifact_root_abs>/input/` 创建完整
 6. manager 更新规则后，**不篡改**已派发任务的 input；必须创建新 attempt + 新 run_id + 新规则快照。
 7. manager 每阶段结束更新 `context-summary.md`，只保留后续阶段真正需要的事实/决策/限制/证据引用。
 8. 最小充分原则：只传递完成当前任务所必需的上下文。
+9. Monitor endpoint 只通过运行环境提供；上下文包可以声明“activity enabled”，但不得包含
+   `MONITOR_TOKEN` 或其他凭据。
 
 ## 7. Dispatch 启动与完成确认
 

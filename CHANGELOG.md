@@ -1,5 +1,24 @@
 # Changelog
 
+### Monitor Phase 3：Activity、遥测库、脱敏与兜底采集
+
+#### 改动了什么
+
+- 新增 Agent Activity、Checkpoint 和 Monitor Event 契约，以及独立可重建的 `monitor.db` repository。
+- 新增 activity API/CLI、Agent 和 task 活动查询、递归 thinking/凭据/路径脱敏与文本截断。
+- 新增 OpenClaw session JSONL 增量 tailer、半行 cursor 恢复、tool/assistant 安全摘要解析和结构化产物 watcher。
+- 更新通用 Agent 规则：有 Monitor 环境时在关键节点上报，token 只从环境读取且不得落盘。
+
+#### 为什么要改
+
+- 仅靠 task `updated_at` 无法判断 Agent 是否真实推进；显式 activity 提供高可信信号，session 和 artifact 变化用于 Agent 未及时上报时的安全兜底。
+
+#### 验证
+
+- `npm run test:monitor`：14 项通过。
+- `npm run test:agent-json:offline`：12 项通过。
+- `node --check monitor/config.mjs` 和 `git diff --check` 通过。
+
 ### Monitor Phase 2：原生 Supervisor Core、HTTP API 与 SSE
 
 #### 改动了什么

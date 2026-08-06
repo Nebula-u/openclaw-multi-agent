@@ -14,6 +14,12 @@ function readConfig(path) {
   return JSON.parse(readFileSync(path, 'utf8'));
 }
 
+function expandEnvironment(value) {
+  if (typeof value !== 'string') return value;
+  return value.replace(/%([A-Za-z_][A-Za-z0-9_]*)%/gu, (_, name) => process.env[name] ?? `%${name}%`)
+    .replace(/\$\{([A-Za-z_][A-Za-z0-9_]*)\}/gu, (_, name) => process.env[name] ?? `\${${name}}`);
+}
+
 export function loadMonitorConfig(overrides = {}) {
   const projectRoot = resolve(overrides.projectRoot ?? process.env.OPENCLAW_PROJECT_ROOT ?? process.cwd());
   const fileConfig = readConfig(overrides.configPath ?? process.env.MONITOR_CONFIG_PATH);
@@ -24,6 +30,10 @@ export function loadMonitorConfig(overrides = {}) {
     projectRoot,
     runtimeRoot,
     databasePath: resolve(overrides.databasePath ?? fileConfig.database_path ?? join(runtimeRoot, 'control', 'control.db')),
+    monitorDatabasePath: overrides.monitorDatabasePath === ':memory:' ? ':memory:'
+      : resolve(expandEnvironment(overrides.monitorDatabasePath ?? fileConfig.monitor_database_path ?? join(runtimeRoot, 'monitor', 'monitor.db'))),
+    sessionRoot: resolve(expandEnvironment(overrides.sessionRoot ?? process.env.OPENCLAW_SESSION_ROOT ?? fileConfig.session_root
+      ?? join(process.env.USERPROFILE ?? process.env.HOME ?? projectRoot, '.openclaw', 'agents'))),
     host: overrides.host ?? process.env.MONITOR_HOST ?? fileConfig.host ?? '127.0.0.1',
     port: integer(overrides.port ?? process.env.MONITOR_PORT ?? fileConfig.port, 4310),
     token: overrides.token ?? process.env.MONITOR_TOKEN ?? fileConfig.token ?? randomBytes(24).toString('base64url'),
@@ -33,4 +43,3 @@ export function loadMonitorConfig(overrides = {}) {
     requestBodyLimit: integer(overrides.requestBodyLimit ?? fileConfig.request_body_limit, 1024 * 1024),
   };
 }
-

@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://openclaw.local/contracts/agent-checkpoint.schema.json",
+  "title": "Agent Checkpoint",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "title", "status"],
+  "properties": {
+    "id": { "type": "string", "minLength": 1, "maxLength": 200 },
+    "title": { "type": "string", "minLength": 1, "maxLength": 500 },
+    "status": { "enum": ["PENDING", "IN_PROGRESS", "COMPLETED", "BLOCKED", "SKIPPED"] }
+  }
+}

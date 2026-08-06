@@ -31,7 +31,10 @@ npm run supervisor:start
 - `GET /api/workflows/:workflowId/events?after=<seq>&limit=<n>`
 - `GET /api/workflows/:workflowId/stream?after=<seq>&token=<token>`
 - `GET /api/tasks/:taskId`
+- `GET /api/tasks/:taskId/activity`
+- `GET /api/agents/:agentId/activity`
 - `GET /api/supervision?status=<status>`
+- `POST /api/activity`
 - `POST /api/supervision/request`
 
 SSE 先发送当前 snapshot，再回放保留窗口内的增量事件。客户端可以使用 `Last-Event-ID` 或
@@ -45,3 +48,19 @@ SSE 先发送当前 snapshot，再回放保留窗口内的增量事件。客户�
 - 未知 Origin、非 loopback 来源和超限 body 失败关闭。
 - 服务不读取 thinking，不向浏览器发送完整 prompt 或原始 session。
 
+## Activity 与兜底采集
+
+Agent 在环境提供 `MONITOR_URL` 和 `MONITOR_TOKEN` 时，可以把符合
+`contracts/agent-activity.schema.json` 的文件发送到：
+
+```powershell
+node scripts/monitor-core/emit-activity.mjs --file <activity.json>
+```
+
+显式 activity 是高置信度主信号。Supervisor Core 同时增量尾读与当前 dispatch 绑定的
+OpenClaw 主 session JSONL，并观察 task 声明的结构化输出；它们只生成中等置信度兜底事件。
+Tailer 跳过 trajectory、thinking 和半行，按 byte offset 持久化 cursor；Artifact Watcher 默认
+只发送文件类型、大小、mtime 和哈希等元数据。
+
+所有活动在写入 `runtime/monitor/monitor.db` 前执行递归脱敏和长度限制。该数据库可以删除后
+重建，不能用于修复 `control.db`。

@@ -95,6 +95,18 @@
 
 完成前先落盘、校验并保留所有本次 run 的产物。完成通知必须给出 `dispatch_id`、`result.json` 的绝对路径和 SHA-256、真实 `result_status`；它只是通知，manager-agent 独立校验后才会把 completion 作为事实持久化。收到 manager-agent 的 supersede/cancel/终结通知后，停止新增写入并如实报告。
 
+## 9.2 可观测性 Activity（启用时）
+
+若运行环境提供 `MONITOR_URL` 和 `MONITOR_TOKEN`，工作 Agent 应使用
+`scripts/monitor-core/emit-activity.mjs` 上报结构化活动：preflight 后 `STARTED`、重要阶段
+`PROGRESS`、checkpoint 更新、长工具调用前后、等待、阻塞及完成前摘要。Activity 只包含当前
+动作、已完成事实、下一步、阻塞和产物定位，不包含 thinking、完整 prompt、凭据或未截断日志。
+
+Activity 是遥测，不是 workflow/task 状态事实。上报暂时失败不得伪造成功，也不得直接改变
+任务状态；保存本地错误摘要后继续按原任务契约执行。收到 NUDGE 时只上报现状，不重新执行已
+完成步骤或外部副作用。`MONITOR_TOKEN` 只能从进程环境读取，禁止写入 artifact、日志、上下文包
+或 Git。
+
 ## 10. 用户验收后的项目状态同步（长期规则）
 
 适用于本项目自身的所有改动，包括代码、Agent 规则、配置、运行时修复、测试、文档与流程变更。

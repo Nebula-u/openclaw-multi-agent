@@ -65,3 +65,20 @@ test('monitor rejects unknown origins and requires token for supervision writes'
   } finally { await value.close(); }
 });
 
+test('monitor accepts explicit activity and exposes agent activity history', async () => {
+  const value = await setup();
+  try {
+    const activity = {
+      schema_version: 1, activity_id: 'ACT-monitor-http', workflow_id: WORKFLOW_ID, agent_id: 'manager-agent',
+      kind: 'HEARTBEAT', status: 'RUNNING', current_action: 'Monitoring workflow', summary: 'Control state is healthy',
+      checkpoint: null, progress: null, tool: null, visibility: 'USER_SAFE', timestamp: '2026-08-06T10:00:02.000Z',
+    };
+    const response = await fetch(`${value.base}/api/activity`, {
+      method: 'POST', headers: { 'content-type': 'application/json', 'x-monitor-token': 'test-token', origin: 'null' },
+      body: JSON.stringify(activity),
+    });
+    assert.equal(response.status, 201);
+    const history = await (await fetch(`${value.base}/api/agents/manager-agent/activity`)).json();
+    assert.equal(history.activities[0].activity_id, activity.activity_id);
+  } finally { await value.close(); }
+});
