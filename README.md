@@ -155,6 +155,18 @@ Manager 保持 `deepseek/deepseek-v4-pro` 和 `thinking=high`。其模型窗口�
 
 7 个 Agent 统一使用 DeepSeek V4 Pro + Chat Completions API，模型引用为 `deepseek/deepseek-v4-pro`。配置样例见 `config/agent-models.deepseek-routing.example.json`。
 
+### 可观测性与监督计划状态
+
+实时看板和自动监督目前仍是待实施计划，不是已上线功能。修订后的方案使用宿主机原生
+Node.js Supervisor Core 读取 Control Kernel 权威状态、采集安全遥测、执行健康判定和
+Watchdog；图形界面使用可直接打开的静态 `monitor/ui/index.html`，不需要前端安装或构建。
+关闭或未打开 HTML 页面不会停止监督核心。
+
+只读状态、活动采集和 Watchdog 影子模式可以先实施；自动 NUDGE、manager 唤醒和受控 retry
+必须等待 Manager 编排加固中对应的身份校验、不可绕过派发、原子写入及中断恢复验收通过。
+完整节点职责、交互信息、阶段门槛与验收标准见
+[可观测性与监督实施计划](docs/plan/2026-08-04-agent-observability-monitor.md)。
+
 ## Agent LLM JSON 合约测试
 
 本地完整回归入口（Runtime Guard、离线 LLM harness、Bash/PowerShell 安装验证）：
@@ -541,6 +553,8 @@ Manager 只有在用户批准后才能调用 `NewAgent`；构建完成后还需�
 - [docs/threat-model.md](docs/threat-model.md) — 威胁模型
 - [docs/component-management.md](docs/component-management.md) — Agent package、审批式生成、Skill Workshop 与删除边界
 - [docs/model-routing.md](docs/model-routing.md) — Agent 模型路由、Responses/Chat 边界与空输出恢复
+- [docs/plan/2026-08-04-agent-observability-monitor.md](docs/plan/2026-08-04-agent-observability-monitor.md) — 原生 Supervisor Core、静态 HTML 看板与监督闭环计划
+- [docs/plan/2026-08-05-manager-orchestration-hardening.md](docs/plan/2026-08-05-manager-orchestration-hardening.md) — 自动监督前置的 Manager 编排加固计划
 
 ## 许可与安全
 
