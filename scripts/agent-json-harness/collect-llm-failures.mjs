@@ -159,9 +159,10 @@ export async function collectLlmRun({
     scenarios: [],
     totals: { planned: scenarios.reduce((total, item) => total + item.cases.length * repetitions, 0), executed: 0, passed_first: 0, repair_retry_succeeded: 0, empty_retry_failed: 0, retry_failed: 0, packaged: 0 },
   };
-  const client = await createClient();
+  let client = null;
   let abortError = null;
   try {
+    client = await createClient();
     const jobs = [];
     for (const scenario of scenarios) {
       const row = { name: scenario.name, schema: `contracts/${scenario.schemaFile}`, agent_id: scenario.agentId, planned: scenario.cases.length * repetitions, executed: 0, passed_first: 0, repair_retry_succeeded: 0, empty_retry_failed: 0, retry_failed: 0, packaged: 0, failures: [] };
@@ -201,7 +202,7 @@ export async function collectLlmRun({
     summary.run_status = 'ABORTED';
     summary.abort_reason = error.message;
   } finally {
-    client.close();
+    client?.close();
   }
   writeJson(join(runRoot, 'summary.json'), summary);
   writeText(join(runRoot, 'report.md'), renderReport(summary));
