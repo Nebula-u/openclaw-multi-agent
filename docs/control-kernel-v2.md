@@ -65,10 +65,16 @@ Task 当前快照、run 固定信息、不可变哈希事件、dispatch、outbox
 - `task-register --task-file <abs>`
 - `task-validate --task-id <id> [--occurred-at <ISO>]`
 - `task-get --task-id <id>`
+- `task-retry --task-file <new-attempt-task.json>`
 - `dispatch-prepare --intent-file <abs>`
 - `dispatch-receipt --receipt-file <abs>`
 - `dispatch-list --task-id <id>` / `dispatch-outbox`
 - `result-ingest --completion-file <abs>`
+
+`task-retry` 只接受当前状态为 FAILED/LOST 且原 dispatch 有同状态 completion 的 task。它要求
+attempt 递增、新 run ID、新 artifact root 和新 context manifest，保留 workflow/task/type/Agent/
+max attempts/output contract 等不可变身份。旧 run、dispatch、artifact 和事件保留不覆盖；新 run
+从 CREATED 开始，仍需重新 package validation 和 dispatch prepare。
 
 ## Snapshot 与监督事实
 

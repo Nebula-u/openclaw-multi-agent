@@ -204,3 +204,28 @@ test('database audit detects task snapshot and event status divergence', () => {
     assert.ok(audit.errors.some((error) => error.code === 'TASK_CURRENT_STATUS_MISMATCH'));
   } finally { value.close(); }
 });
+
+test('controlled retry requires terminal failed dispatch and creates a new immutable run', () => {
+  const value = setup();
+  try {
+    const dispatch = readyAndRunning(value);
+    writeValidOutputs(value, 'FAILED');
+    const failed = complete(value, dispatch, { status: 'FAILED', error_code: 'AGENT_FAILED', error_message: 'worker stopped' });
+    const ingested = value.tasks.ingestCompletion(failed);
+    assert.equal(ingested.task.status, 'FAILED');
+    const nextArtifact = join(value.directory, 'artifacts-attempt-2');
+    const nextTask = { ...value.task, run_id: 'RUN-task-kernel-test-attempt-2', attempt: 2, status: 'CREATED',
+      artifact_root_abs: nextArtifact, context_manifest_path_abs: join(nextArtifact, 'context-manifest.json'),
+      worktree_path_abs: join(value.directory, 'worktree-attempt-2'),
+      structured_outputs: value.task.structured_outputs.map((output) => ({ ...output, path_abs: join(nextArtifact, 'output', output.path_abs.split(/[\\/]/u).at(-1)) })),
+      created_at: '2026-08-05T08:12:00.000Z', updated_at: '2026-08-05T08:12:00.000Z' };
+    const retried = value.tasks.retry(nextTask);
+    assert.equal(retried.task.run_id, nextTask.run_id);
+    assert.equal(retried.task.attempt, 2);
+    assert.equal(retried.event.from_status, 'FAILED');
+    assert.equal(value.database.prepare('SELECT COUNT(*) AS count FROM task_runs WHERE task_id=?').get(value.task.task_id).count, 2);
+    assert.equal(auditControlDatabase(value.database).ok, true);
+    assert.throws(() => value.tasks.retry({ ...nextTask, run_id: 'RUN-third', attempt: 3, artifact_root_abs: join(value.directory, 'third'),
+      context_manifest_path_abs: join(value.directory, 'third', 'context.json') }), (error) => error.code === 'TASK_RETRY_SOURCE_INVALID');
+  } finally { value.close(); }
+});

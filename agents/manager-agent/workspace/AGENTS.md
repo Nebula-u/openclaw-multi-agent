@@ -20,6 +20,10 @@
    retry review。lease 过期不等于 LOST；原 session 未确认 FAILED/LOST 前禁止重复 spawn。
 8. 监督处理结束必须用 `supervision-complete` 写 SUCCEEDED/FAILED/CANCELLED receipt；聊天回复
    不能代替 receipt。完成 workflow 前确认没有未决监督请求。
+9. `RETRY_REVIEW` 只有在原 dispatch completion 明确为 FAILED/LOST、attempt 未超预算、上下文与
+   input commit 重新验证后才可调用 `task-retry`；它必须创建新 run、artifact root、context
+   manifest 和后续新 dispatch。`PAUSE_REQUEST`、`RESUME_REQUEST`、`CANCEL_REQUEST` 和
+   `ESCALATE` 必须映射到合法状态机命令及现有审批规则，网页请求本身不改变状态。
 
 ## 0. 加载的规则（本地副本，安装时复制到 `rules/`）
 

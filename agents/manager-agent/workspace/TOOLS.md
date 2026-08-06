@@ -40,6 +40,9 @@ v2 每次调用遵循持久化顺序：Control Kernel `task-validate` → `dispa
 - 监督请求只通过 Control Kernel `supervision-list`、`supervision-claim`、`supervision-events` 和
   `supervision-complete` 处理。收到 Wake Adapter 消息后先 audit 和核查原 session；NUDGE 只发送
   到 request 绑定的原 session，不重新执行任务。
+- 受控重试使用 `task-retry --task-file <new-attempt-task.json>`；只有原 dispatch 有 FAILED/LOST
+  completion 时允许执行。新 task snapshot 必须保留 task 身份和责任 Agent，递增 attempt，并使用
+  新 run、artifact/context 路径。随后重新 `task-validate` 和 `dispatch-prepare`。
 
 ## 4. Git 工具（仅本地）
 

@@ -393,6 +393,41 @@ export function createTaskRepository(projectRootInput, database) {
         return { ok: true, command: 'result-ingest', task: next, completion, result: validated?.result ?? null, event };
       });
     },
+    retry(newTask) {
+      assertValid(validators.task, newTask, 'TASK_SCHEMA_INVALID');
+      if (newTask.status !== 'CREATED') fail('TASK_RETRY_STATUS_INVALID', 'retry task must start in CREATED');
+      return transactional(database, `RETRY:${newTask.task_id}:${newTask.run_id}`, newTask, () => {
+        const current = loadTask(database, newTask.task_id);
+        if (!current) fail('TASK_NOT_FOUND', `task does not exist: ${newTask.task_id}`);
+        if (!['FAILED', 'LOST'].includes(current.status)) fail('TASK_RETRY_SOURCE_INVALID', `retry requires FAILED or LOST task, received ${current.status}`);
+        if (current.attempt >= current.max_attempts) fail('TASK_RETRY_BUDGET_EXHAUSTED', 'task retry budget is exhausted');
+        for (const key of ['workflow_id', 'task_id', 'task_type', 'assigned_agent', 'max_attempts', 'output_contract_version']) {
+          if (newTask[key] !== current[key]) fail('TASK_RETRY_IDENTITY_MISMATCH', `retry changed immutable field: ${key}`);
+        }
+        if (newTask.attempt !== current.attempt + 1 || newTask.run_id === current.run_id) fail('TASK_RETRY_ATTEMPT_INVALID', 'retry requires a new run_id and incremented attempt');
+        if (normalized(newTask.artifact_root_abs) === normalized(current.artifact_root_abs)
+          || normalized(newTask.context_manifest_path_abs) === normalized(current.context_manifest_path_abs)) {
+          fail('TASK_RETRY_PATH_REUSE', 'retry requires a new artifact root and context manifest');
+        }
+        const dispatch = database.prepare('SELECT status, completion_json FROM dispatches WHERE run_id=? ORDER BY created_at DESC LIMIT 1').get(current.run_id);
+        const completion = parseJson(dispatch?.completion_json);
+        if (!dispatch || !['FAILED', 'LOST'].includes(dispatch.status) || completion?.status !== dispatch.status) {
+          fail('TASK_RETRY_DISPATCH_UNCONFIRMED', 'retry requires a terminal FAILED or LOST dispatch completion');
+        }
+        const workflow = database.prepare('SELECT state_json FROM workflows WHERE workflow_id=?').get(current.workflow_id);
+        if (!workflow || parseJson(workflow.state_json).condition === 'TERMINAL') fail('TASK_WORKFLOW_TERMINAL', 'cannot retry task on terminal workflow');
+        const contractSetId = database.prepare('SELECT contract_set_id FROM tasks WHERE task_id=?').get(current.task_id).contract_set_id;
+        database.prepare(`UPDATE tasks SET run_id=?, attempt=?, status='CREATED', task_json=?, updated_at=? WHERE task_id=?`)
+          .run(newTask.run_id, newTask.attempt, json(newTask), newTask.updated_at, newTask.task_id);
+        database.prepare(`INSERT INTO task_runs(run_id, task_id, attempt, status, contract_set_id, output_contract_version,
+          task_snapshot_json, created_at, updated_at) VALUES (?, ?, ?, 'CREATED', ?, ?, ?, ?, ?)`)
+          .run(newTask.run_id, newTask.task_id, newTask.attempt, contractSetId, newTask.output_contract_version,
+            json(newTask), newTask.created_at, newTask.updated_at);
+        const event = appendTaskEvent(database, newTask, `TEV-RETRY-${newTask.run_id}`, 'TASK_RETRY_CREATED', current.status, 'CREATED',
+          newTask.created_at, { prior_run_id: current.run_id, prior_attempt: current.attempt, new_run_id: newTask.run_id, new_attempt: newTask.attempt });
+        return { ok: true, command: 'task-retry', task: newTask, event };
+      });
+    },
     get(taskId) { return loadTask(database, taskId); },
     dispatches(taskId) { return database.prepare('SELECT intent_json, latest_receipt_json, completion_json, status FROM dispatches WHERE task_id = ? ORDER BY created_at').all(taskId).map((row) => ({ intent: parseJson(row.intent_json), receipt: parseJson(row.latest_receipt_json), completion: parseJson(row.completion_json), status: row.status })); },
     outbox() { return database.prepare("SELECT * FROM dispatch_outbox WHERE status <> 'DELIVERED' ORDER BY created_at").all(); },

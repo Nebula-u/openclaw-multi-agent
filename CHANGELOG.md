@@ -1,5 +1,24 @@
 # Changelog
 
+### Monitor Phase 7：人工控制请求与受控 retry
+
+#### 改动了什么
+
+- 新增 `task-retry` Control Kernel 边界：仅允许已确认 FAILED/LOST 的终态 dispatch 创建新 attempt/run，并禁止复用 artifact/context 路径。
+- Dashboard 增加 SEND_MESSAGE、RECONCILE、RETRY_REVIEW、PAUSE、RESUME、CANCEL 和 ESCALATE 请求及影响确认。
+- 更新 manager 规则，将人工请求映射到 audit、原 session 核查、状态机和审批；网页请求本身不改变控制状态。
+
+#### 为什么要改
+
+- 真正失败后的恢复需要保留历史 run 和外部副作用事实；不能覆盖旧 artifact，也不能由 Watchdog 或网页直接重跑。
+
+#### 验证
+
+- `npm run test:control-kernel`：21 项通过，包含失败 completion、新 run 和 retry budget/路径边界。
+- `npm run test:monitor`：新增所有人工 request type 不改变 workflow 状态的测试。
+- `npm run test:runtime-bundle`：3 项通过。
+- `node --check monitor/ui/app.js` 和 `git diff --check` 通过。
+
 ### Monitor Phase 6：监督请求自动化与 Manager Wake Adapter
 
 #### 改动了什么

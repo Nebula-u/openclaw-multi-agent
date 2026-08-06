@@ -133,3 +133,20 @@ test('audit detects a tampered supervision event hash', () => {
     assert.ok(audit.errors.some((error) => error.code === 'SUPERVISION_EVENT_HASH'));
   } finally { value.close(); }
 });
+
+test('manual pause, resume, cancel, retry review and escalation remain requests without direct state mutation', () => {
+  const value = setup();
+  try {
+    const before = value.database.prepare('SELECT state_json FROM workflows WHERE workflow_id=?').get(WORKFLOW_ID).state_json;
+    const types = ['SEND_MESSAGE', 'RECONCILE', 'RETRY_REVIEW', 'PAUSE_REQUEST', 'RESUME_REQUEST', 'CANCEL_REQUEST', 'ESCALATE'];
+    types.forEach((requestType, index) => value.supervision.request(request({
+      request_id: `SUP-manual-${index}`, idempotency_key: `${WORKFLOW_ID}/${requestType}/${index}`,
+      request_type: requestType, source: 'LOCAL_USER', reason: `manual ${requestType}`,
+      requested_at: `2026-08-06T08:${String(10 + index).padStart(2, '0')}:00.000Z`,
+    })));
+    assert.equal(value.supervision.list().length, types.length);
+    const after = value.database.prepare('SELECT state_json FROM workflows WHERE workflow_id=?').get(WORKFLOW_ID).state_json;
+    assert.equal(after, before);
+    assert.equal(auditControlDatabase(value.database).ok, true);
+  } finally { value.close(); }
+});

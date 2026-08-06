@@ -115,3 +115,19 @@ Wake Adapter 默认关闭。启用前必须在配置中同时设置：
 
 Manager 必须自行查询监督请求、claim、核查原 worker session，并用 supervision receipt 结束请求。
 调用失败会写 FAILED wake receipt 和下次退避时间；请求已被 claim/完成时不会重复唤醒。
+
+## 人工控制与受控 retry
+
+Dashboard 可以创建 `SEND_MESSAGE`、`RECONCILE`、`RETRY_REVIEW`、`PAUSE_REQUEST`、
+`RESUME_REQUEST`、`CANCEL_REQUEST` 和 `ESCALATE`。除普通 NUDGE 外，页面会先显示影响确认。
+这些操作只创建 supervision request，不直接修改 task/workflow。
+
+Manager 对 `RETRY_REVIEW` 完成原 session 和 completion 核查后，才可调用：
+
+```text
+task-retry --task-file <new-attempt-task.json>
+```
+
+Control Kernel 只接受 FAILED/LOST 且原 dispatch 有同状态 completion 的任务；attempt 必须递增，
+run、artifact root 和 context manifest 必须是新值。之后仍需重新执行 task package validation、
+dispatch prepare、真实 spawn 和 receipt 闭环。超过 `max_attempts` 时失败关闭并升级人工。
