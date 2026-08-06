@@ -62,7 +62,9 @@ export async function connectGatewayLlmClient({ connectTimeoutMs = 30000 } = {})
   let reconnecting = null;
 
   async function establish() {
-    const next = await GatewayChatClient.connect({});
+    // Newer Gateway clients can wait indefinitely inside connect().  Bound
+    // both connection phases so a harness always reaches its final report.
+    const next = await withTimeout(GatewayChatClient.connect({}), connectTimeoutMs, 'Gateway connection');
     next.start();
     await withTimeout(next.waitForReady(), connectTimeoutMs, 'Gateway connection');
     client = next;
@@ -103,7 +105,15 @@ export async function connectGatewayLlmClient({ connectTimeoutMs = 30000 } = {})
           'Gateway chat.send',
         );
       } catch (error) {
-        await request((active) => active.abortChat({ agentId, sessionKey }), 5000, 'Gateway chat.abort').catch(() => {});
+        // Cleanup must never extend the caller's failed-request budget.  In
+        // particular, a disconnected Gateway used to make `request()` try a
+        // full reconnect here, leaving contract runs stuck after a timeout.
+        // An abort is best-effort; use the current connection only and cap it.
+        await withTimeout(
+          Promise.resolve(client?.abortChat({ agentId, sessionKey })),
+          5000,
+          'Gateway chat.abort',
+        ).catch(() => {});
         throw error;
       }
       const deadline = Date.now() + timeoutMs;

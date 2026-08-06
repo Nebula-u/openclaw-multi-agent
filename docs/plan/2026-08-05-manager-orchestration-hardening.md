@@ -4,6 +4,10 @@
 分支：`dev`
 范围：Manager-Agent、Control Kernel、派发协议、JSON 写入、Windows 执行与恢复
 
+> **实施状态同步（2026-08-06）：待开始。** 截至本次核对，此计划创建后的 Git 历史没有对应的功能实现提交；因此第 0–8 轮及最终验收标准均不得视为完成。P0–P5 Control Kernel 已提供 workflow/task/run/dispatch、Schema、outbox、审计与恢复基础，但不等同于本计划要求的计划持久化回执、Intake 分流、pre-spawn `agentId` 校验、不可绕过派发、统一 JSON 原子写入或 Windows 锁恢复已经实现。
+
+> **下周执行顺序：** 先完成第 0 轮并记录失败基线；随后优先第 1–5 轮，形成“可确认计划 → 执行实体初始化 → Agent 身份 → 不可绕过派发 → 原子 JSON 写入”的最小闭环；第 6–7 轮处理 Windows 参数/锁与中断恢复；最后才执行第 8 轮完整回归和 README 收尾。每轮必须有独立提交、定向测试、`git diff --check` 与 Changelog 记录。
+
 ## 一、目标与约束
 
 本计划针对最新一轮审计发现的以下问题进行代码层整改：
