@@ -1,5 +1,24 @@
 # Changelog
 
+### Monitor Phase 4：可直接打开的静态 HTML Dashboard
+
+#### 改动了什么
+
+- 新增无需构建的 `monitor/ui/index.html`、`app.js`、`styles.css` 和本地配置文件。
+- 实现 workflow 索引、系统总览、13 阶段轨道、task/session 卡片、Agent relay、SSE live feed、task activity 详情和人工 NUDGE。
+- 增加 loopback CSP、sessionStorage token、断线重连、sequence 恢复、响应式布局和 reduced-motion 支持。
+
+#### 为什么要改
+
+- 用户需要无需启动前端工程即可观察多 Agent 运行；静态页面仅作为观察入口，关闭页面不影响监督核心。
+
+#### 验证
+
+- `node --check monitor/ui/app.js` 通过。
+- `npm run test:monitor`：15 项通过，包含无外部依赖和无需构建检查。
+- 本地浏览器控制当前无可用实例，因此未生成视觉截图；结构、响应式和 API 行为已由自动化检查覆盖。
+- `git diff --check` 通过。
+
 ### Monitor Phase 3：Activity、遥测库、脱敏与兜底采集
 
 #### 改动了什么

@@ -19,6 +19,9 @@ $env:MONITOR_TOKEN = '<local-random-token>'
 npm run supervisor:start
 ```
 
+启动后直接双击打开 `monitor/ui/index.html`，填写 Supervisor 启动时输出的本地 token，然后点击
+“连接”。页面本身不需要 `npm install`、构建命令或静态文件服务器。
+
 默认地址为 `http://127.0.0.1:4310`。也可以通过 `MONITOR_PORT`、`MONITOR_HOST`、
 `OPENCLAW_RUNTIME_ROOT` 或 `MONITOR_CONFIG_PATH` 覆盖；示例配置见
 `config/monitoring.example.json`。
@@ -64,3 +67,18 @@ Tailer 跳过 trajectory、thinking 和半行，按 byte offset 持久化 cursor
 
 所有活动在写入 `runtime/monitor/monitor.db` 前执行递归脱敏和长度限制。该数据库可以删除后
 重建，不能用于修复 `control.db`。
+
+## Dashboard
+
+静态看板提供：
+
+- Control Kernel、同步时间和 workflow/Agent/等待/监督总览。
+- 13 阶段 phase rail。
+- task、dispatch、session、attempt 卡片。
+- Agent relay 视图。
+- SSE live feed 和断线恢复。
+- task activity 详情。
+- 受 token 保护的人工 NUDGE 请求。
+
+token 只保存在当前浏览器 sessionStorage；API 地址保存在 localStorage。页面关闭不会停止
+Supervisor Core 或 Watchdog。

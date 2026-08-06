@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self' file:; connect-src http://127.0.0.1:*; script-src 'self' file:; style-src 'self' file:; img-src 'self' data:; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>OpenClaw Mission Monitor</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="noise" aria-hidden="true"></div>
+  <header class="masthead">
+    <div class="brand-lockup">
+      <span class="eyebrow">CONTROL KERNEL / LOCAL OBSERVATORY</span>
+      <h1>Mission Monitor</h1>
+      <p>Workflow、Agent 与监督请求的本地飞行记录台</p>
+    </div>
+    <div class="connection-panel" aria-label="连接设置">
+      <label>API <input id="api-url" value="http://127.0.0.1:4310" spellcheck="false"></label>
+      <label>TOKEN <input id="api-token" type="password" placeholder="本地短期 token" autocomplete="off"></label>
+      <button id="connect-button" class="button primary">连接</button>
+      <span id="connection-state" class="signal offline"><i></i> OFFLINE</span>
+    </div>
+  </header>
+
+  <main>
+    <section class="telemetry-strip" aria-label="系统总览">
+      <article><span>ACTIVE WORKFLOWS</span><strong id="metric-workflows">—</strong></article>
+      <article><span>RUNNING AGENTS</span><strong id="metric-running">—</strong></article>
+      <article><span>WAIT / BLOCK</span><strong id="metric-waiting">—</strong></article>
+      <article><span>SUPERVISION</span><strong id="metric-supervision">—</strong></article>
+      <article class="wide"><span>CONTROL STATUS</span><strong id="metric-control">UNKNOWN</strong><small id="last-sync">尚未同步</small></article>
+    </section>
+
+    <section class="workspace-shell">
+      <aside class="workflow-index">
+        <div class="section-heading">
+          <span>01</span><div><h2>Workflows</h2><p>选择任务航线</p></div>
+        </div>
+        <div id="workflow-list" class="workflow-list empty-state">等待连接…</div>
+      </aside>
+
+      <section class="mission-canvas">
+        <div class="mission-header">
+          <div>
+            <span id="workflow-id" class="eyebrow">NO WORKFLOW SELECTED</span>
+            <h2 id="workflow-title">等待控制状态</h2>
+          </div>
+          <div class="mission-meta">
+            <span id="workflow-condition" class="pill neutral">UNKNOWN</span>
+            <span id="workflow-revision">REV —</span>
+          </div>
+        </div>
+
+        <div id="phase-rail" class="phase-rail" aria-label="Workflow 阶段"></div>
+
+        <div class="mission-grid">
+          <section class="board-panel">
+            <div class="section-heading compact">
+              <span>02</span><div><h2>Task Deck</h2><p>当前阶段任务与 session</p></div>
+            </div>
+            <div id="task-board" class="task-board empty-state">选择 workflow 查看任务</div>
+          </section>
+
+          <aside class="agent-panel">
+            <div class="section-heading compact">
+              <span>03</span><div><h2>Agent Relay</h2><p>角色与当前动作</p></div>
+            </div>
+            <div id="agent-tree" class="agent-tree empty-state">暂无 Agent 数据</div>
+          </aside>
+        </div>
+
+        <section class="event-panel">
+          <div class="section-heading compact">
+            <span>04</span><div><h2>Live Feed</h2><p>SSE 增量与监督事件</p></div>
+          </div>
+          <div class="feed-tools">
+            <select id="feed-filter" aria-label="事件筛选">
+              <option value="all">全部事件</option>
+              <option value="activity">Agent 活动</option>
+              <option value="snapshot">控制快照</option>
+              <option value="supervision">监督请求</option>
+              <option value="health">健康状态</option>
+            </select>
+            <button id="clear-feed" class="button ghost">清空显示</button>
+          </div>
+          <ol id="event-feed" class="event-feed"><li class="empty-state">连接后显示实时事件</li></ol>
+        </section>
+      </section>
+    </section>
+  </main>
+
+  <dialog id="task-dialog" class="task-dialog">
+    <form method="dialog"><button class="dialog-close" aria-label="关闭">×</button></form>
+    <div id="task-detail"></div>
+  </dialog>
+
+  <template id="task-card-template">
+    <button class="task-card">
+      <span class="task-card-top"><b class="task-type"></b><i class="task-status"></i></span>
+      <strong class="task-title"></strong>
+      <span class="task-agent"></span>
+      <span class="task-session"></span>
+      <span class="task-foot"><em class="task-attempt"></em><em class="task-time"></em></span>
+    </button>
+  </template>
+
+  <script src="config.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
