@@ -1,5 +1,22 @@
 # Changelog
 
+### Monitor Phase 0：基线与原生监督 ADR
+
+#### 改动了什么
+
+- 新增 `docs/adr/2026-08-06-native-supervisor-core.md`，冻结宿主机 Supervisor Core、静态 HTML Dashboard、唯一编排者和故障隔离边界。
+- 新增 `docs/monitor-baseline.md`，记录 Node/OpenClaw 版本、基线测试、CLI 能力、session JSONL 结构和自动监督进入门槛。
+
+#### 为什么要改
+
+- 在扩展数据库和实现常驻服务前先固定权威状态、外部副作用和隐私边界，避免 Monitor 演变成第二个控制面。
+
+#### 验证
+
+- `npm test` 基线全量通过。
+- 已只读探测 `openclaw agent --help`、`openclaw sessions --help` 和 session JSONL 字段结构，未输出 session 内容。
+- `git diff --check` 通过。
+
 ### README 同步可观测性计划状态
 
 #### 改动了什么
