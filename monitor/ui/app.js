@@ -1,7 +1,8 @@
 (function () {
   'use strict';
   const PHASES = ['INTAKE','REQUIREMENTS','REQUIREMENT_GATE','ARCHITECTURE','ARCHITECTURE_GATE','DEVELOPMENT','CODE_REVIEW','DEVELOPER_REWORK','TESTING','TEST_CODE_REVIEW','FAILURE_TRIAGE','RELEASE_VERIFICATION','FINAL_REPORT'];
-  const state = { apiUrl: localStorage.getItem('monitor.apiUrl') || window.MONITOR_CONFIG?.apiUrl || 'http://127.0.0.1:4310', token: sessionStorage.getItem('monitor.token') || '', workflows: [], supervision: [], selectedId: null, source: null, feed: [] };
+  const defaultApiUrl = window.MONITOR_CONFIG?.apiUrl || 'http://127.0.0.1:4319';
+  const state = { apiUrl: localStorage.getItem('monitor.apiUrl') || defaultApiUrl, token: sessionStorage.getItem('monitor.token') || '', workflows: [], supervision: [], selectedId: null, source: null, feed: [] };
   const $ = (id) => document.getElementById(id);
   const escapeHtml = (value) => String(value ?? '').replace(/[&<>'"]/gu, (char) => ({ '&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;' }[char]));
   const formatTime = (value) => { const date = new Date(value); return Number.isNaN(date.valueOf()) ? '—' : date.toLocaleTimeString('zh-CN',{hour12:false}); };
@@ -78,7 +79,26 @@
   async function connect() { state.apiUrl = $('api-url').value.trim().replace(/\/$/u,''); state.token = $('api-token').value.trim(); localStorage.setItem('monitor.apiUrl',state.apiUrl); sessionStorage.setItem('monitor.token',state.token); setConnection('degraded','CONNECTING');
     try { const [health,workflows,supervision] = await Promise.all([request('/api/health'),request('/api/workflows'),request('/api/supervision')]); state.workflows = workflows.workflows || []; state.supervision = supervision.requests || []; if (!state.workflows.some((item) => item.workflow_id === state.selectedId)) state.selectedId = state.workflows[0]?.workflow_id || null; renderMetrics(health); renderSelected(); setConnection(health.ok ? 'online':'degraded',health.status); connectStream(); }
     catch (error) { setConnection('offline','OFFLINE'); $('metric-control').textContent = 'UNREACHABLE'; addFeed({type:'monitor-health',timestamp:new Date().toISOString(),payload:{error:error.message}}); } }
+  async function bootstrap() {
+    if (!state.token) {
+      for (const apiUrl of [...new Set([state.apiUrl, defaultApiUrl])]) {
+        try {
+          const response = await fetch(`${apiUrl}/api/client-config`);
+          if (!response.ok) continue;
+          const config = await response.json();
+          state.apiUrl = apiUrl;
+          state.token = config.token || '';
+          $('api-url').value = state.apiUrl;
+          $('api-token').value = state.token;
+          localStorage.setItem('monitor.apiUrl', state.apiUrl);
+          sessionStorage.setItem('monitor.token', state.token);
+          break;
+        } catch (_) { /* try the configured fallback before showing offline */ }
+      }
+    }
+    await connect();
+  }
   $('api-url').value = state.apiUrl; $('api-token').value = state.token; $('connect-button').addEventListener('click',connect); $('feed-filter').addEventListener('change',renderFeed); $('clear-feed').addEventListener('click',() => { state.feed=[]; renderFeed(); });
   window.addEventListener('beforeunload',() => state.source?.close());
-  if (state.token) connect(); else { renderPhaseRail(null); }
+  void bootstrap();
 }());

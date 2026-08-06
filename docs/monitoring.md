@@ -15,20 +15,28 @@ npm run supervisor:check
 启动：
 
 ```powershell
-$env:MONITOR_TOKEN = '<local-random-token>'
 npm run supervisor:start
 ```
 
-启动后直接双击打开 `monitor/ui/index.html`，填写 Supervisor 启动时输出的本地 token，然后点击
-“连接”。页面本身不需要 `npm install`、构建命令或静态文件服务器。
+Supervisor 自动读取项目根目录 `.env`。默认本地配置为：
 
-默认地址为 `http://127.0.0.1:4310`。也可以通过 `MONITOR_PORT`、`MONITOR_HOST`、
+```dotenv
+MONITOR_TOKEN=openclaw-local-monitor
+MONITOR_PORT=4319
+MONITOR_URL=http://127.0.0.1:4319
+```
+
+启动后直接双击打开 `monitor/ui/index.html`；页面会从 `/api/client-config` 自动取得 token
+并连接，不需要手工填写。页面本身不需要构建命令或静态文件服务器。
+
+默认地址为 `http://127.0.0.1:4319`。也可以通过 `MONITOR_PORT`、`MONITOR_HOST`、
 `OPENCLAW_RUNTIME_ROOT` 或 `MONITOR_CONFIG_PATH` 覆盖；示例配置见
 `config/monitoring.example.json`。
 
 ## API
 
 - `GET /api/health`
+- `GET /api/client-config`
 - `GET /api/workflows`
 - `GET /api/workflows/:workflowId/snapshot`
 - `GET /api/workflows/:workflowId/events?after=<seq>&limit=<n>`
@@ -80,7 +88,7 @@ Tailer 跳过 trajectory、thinking 和半行，按 byte offset 持久化 cursor
 - task activity 详情。
 - 受 token 保护的人工 NUDGE 请求。
 
-token 只保存在当前浏览器 sessionStorage；API 地址保存在 localStorage。页面关闭不会停止
+token 由本机 Supervisor 自动提供并只保存在当前浏览器 sessionStorage；API 地址保存在 localStorage。页面关闭不会停止
 Supervisor Core 或 Watchdog。
 
 ## 健康状态与 Watchdog shadow

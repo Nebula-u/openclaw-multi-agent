@@ -1,4 +1,3 @@
-import { randomBytes } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 
@@ -22,6 +21,22 @@ function readConfig(path) {
   return JSON.parse(readFileSync(path, 'utf8'));
 }
 
+function readEnvironmentFile(path) {
+  if (!existsSync(path)) return {};
+  const values = {};
+  for (const rawLine of readFileSync(path, 'utf8').split(/\r?\n/u)) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith('#')) continue;
+    const separator = line.indexOf('=');
+    if (separator <= 0) continue;
+    const name = line.slice(0, separator).trim();
+    let value = line.slice(separator + 1).trim();
+    if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) value = value.slice(1, -1);
+    values[name] = value;
+  }
+  return values;
+}
+
 function expandEnvironment(value) {
   if (typeof value !== 'string') return value;
   return value.replace(/%([A-Za-z_][A-Za-z0-9_]*)%/gu, (_, name) => process.env[name] ?? `%${name}%`)
@@ -30,21 +45,23 @@ function expandEnvironment(value) {
 
 export function loadMonitorConfig(overrides = {}) {
   const projectRoot = resolve(overrides.projectRoot ?? process.env.OPENCLAW_PROJECT_ROOT ?? process.cwd());
+  const localEnvironment = readEnvironmentFile(join(projectRoot, '.env'));
+  const environment = (name) => process.env[name] ?? localEnvironment[name];
   const fileConfig = readConfig(overrides.configPath ?? process.env.MONITOR_CONFIG_PATH);
-  const runtimeRoot = resolve(overrides.runtimeRoot ?? process.env.OPENCLAW_RUNTIME_ROOT ?? fileConfig.runtime_root ?? join(projectRoot, 'runtime'));
+  const runtimeRoot = resolve(overrides.runtimeRoot ?? environment('OPENCLAW_RUNTIME_ROOT') ?? fileConfig.runtime_root ?? join(projectRoot, 'runtime'));
   const allowedOrigins = overrides.allowedOrigins ?? fileConfig.allowed_origins
-    ?? String(process.env.MONITOR_ALLOWED_ORIGINS ?? 'null').split(',').map((value) => value.trim()).filter(Boolean);
+    ?? String(environment('MONITOR_ALLOWED_ORIGINS') ?? 'null').split(',').map((value) => value.trim()).filter(Boolean);
   return {
     projectRoot,
     runtimeRoot,
     databasePath: resolve(overrides.databasePath ?? fileConfig.database_path ?? join(runtimeRoot, 'control', 'control.db')),
     monitorDatabasePath: overrides.monitorDatabasePath === ':memory:' ? ':memory:'
       : resolve(expandEnvironment(overrides.monitorDatabasePath ?? fileConfig.monitor_database_path ?? join(runtimeRoot, 'monitor', 'monitor.db'))),
-    sessionRoot: resolve(expandEnvironment(overrides.sessionRoot ?? process.env.OPENCLAW_SESSION_ROOT ?? fileConfig.session_root
+    sessionRoot: resolve(expandEnvironment(overrides.sessionRoot ?? environment('OPENCLAW_SESSION_ROOT') ?? fileConfig.session_root
       ?? join(process.env.USERPROFILE ?? process.env.HOME ?? projectRoot, '.openclaw', 'agents'))),
-    host: overrides.host ?? process.env.MONITOR_HOST ?? fileConfig.host ?? '127.0.0.1',
-    port: integer(overrides.port ?? process.env.MONITOR_PORT ?? fileConfig.port, 4310),
-    token: overrides.token ?? process.env.MONITOR_TOKEN ?? fileConfig.token ?? randomBytes(24).toString('base64url'),
+    host: overrides.host ?? environment('MONITOR_HOST') ?? fileConfig.host ?? '127.0.0.1',
+    port: integer(overrides.port ?? environment('MONITOR_PORT') ?? fileConfig.port, 4319),
+    token: overrides.token ?? environment('MONITOR_TOKEN') ?? fileConfig.token ?? 'openclaw-local-monitor',
     allowedOrigins,
     reconcileIntervalMs: integer(overrides.reconcileIntervalMs ?? fileConfig.reconcile_interval_ms, 2000),
     sseRetention: integer(overrides.sseRetention ?? fileConfig.sse_retention, 2000),

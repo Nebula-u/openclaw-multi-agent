@@ -1,5 +1,21 @@
 # Changelog
 
+### Monitor Phase 9：固定本地配置与零输入连接
+
+#### 改动了什么
+
+- Supervisor Core 自动读取项目根目录的 `.env`，本地默认 token 固定为 `openclaw-local-monitor`。
+- 新增 `/api/client-config`，静态 Dashboard 启动时自动取得本地 token 并连接，不再要求手工复制。
+- activity/checkpoint 上报脚本自动复用 Monitor 配置，不再要求当前终端预先设置 `MONITOR_TOKEN`。
+- 默认端口由 `4310` 调整为 `4319`；本机 `4310` 已被 `QQ.exe` 占用，是此前 `Failed to fetch` 的直接原因。
+- 增加受版本控制的 `.env.example`；实际 `.env` 继续被 Git 忽略。
+
+#### 验证
+
+- `npm run test:monitor`：23 项通过。
+- 实际启动 Supervisor 后，`http://127.0.0.1:4319/api/health` 返回 `HEALTHY`，识别到 4 个 workflow。
+- `/api/client-config` 正确返回固定本地 token，看板可自动完成配置。
+
 ### Monitor Phase 8：可靠性、安全、启动脚本与完整回归
 
 #### 改动了什么

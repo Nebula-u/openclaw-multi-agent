@@ -165,12 +165,21 @@ Manager 保持 `deepseek/deepseek-v4-pro` 和 `thinking=high`。其模型窗口�
 
 ```powershell
 npm run supervisor:check
-$env:MONITOR_TOKEN = '<local-random-token>'
 npm run supervisor:start
 ```
 
 然后直接打开 `monitor/ui/index.html`。Supervisor API 默认监听
-`http://127.0.0.1:4310`；可在 `monitor/ui/config.js` 中配置 API 地址和 token。
+`http://127.0.0.1:4319`。看板会从本机 Supervisor 自动取得 token 并连接，不需要手工填写。
+固定本地 token 配置在项目根目录的 `.env`：
+
+```dotenv
+MONITOR_TOKEN=openclaw-local-monitor
+MONITOR_PORT=4319
+MONITOR_URL=http://127.0.0.1:4319
+```
+
+实际 `.env` 不提交到 Git；新 checkout 可复制 `.env.example`。固定 token 只适用于当前
+`127.0.0.1` 本机监听边界，不应在局域网或公网监听时继续使用。
 
 当前安全默认值是 `watchdog_shadow_mode=true`、`manager_wake_enabled=false`：健康判定和
 影子动作会记录遥测，但不会自动唤醒 Manager 或改变 workflow。受控 retry 仅接受已确认

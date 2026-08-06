@@ -1,7 +1,7 @@
 param(
   [string]$ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path,
   [string]$RuntimeRoot = '',
-  [int]$Port = 4310
+  [int]$Port = 4319
 )
 
 $ErrorActionPreference = 'Stop'
@@ -15,4 +15,3 @@ $env:MONITOR_PORT = [string]$Port
 
 & node (Join-Path $resolvedProject 'monitor\supervisor.mjs')
 exit $LASTEXITCODE
-

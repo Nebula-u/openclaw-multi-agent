@@ -130,6 +130,10 @@ export function createMonitorServer(config, { database: providedDatabase = null,
       }
       const url = new URL(request.url, `http://${config.host}:${config.port}`);
       const path = url.pathname;
+      if (request.method === 'GET' && path === '/api/client-config') {
+        return sendJson(response, 200, { ok: true, api_url: `http://${config.host}:${config.port}`, token: config.token,
+          local_only: true }, cors);
+      }
       if (request.method === 'GET' && path === '/api/health') {
         const audit = auditControlDatabase(database);
         return sendJson(response, audit.ok ? 200 : 503, { ok: audit.ok, status: audit.ok ? 'HEALTHY' : 'DEGRADED',

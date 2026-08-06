@@ -1,6 +1,6 @@
 {
   "host": "127.0.0.1",
-  "port": 4310,
+  "port": 4319,
   "runtime_root": "./runtime",
   "monitor_database_path": "./runtime/monitor/monitor.db",
   "session_root": "%USERPROFILE%/.openclaw/agents",

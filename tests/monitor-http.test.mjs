@@ -31,6 +31,9 @@ test('monitor HTTP exposes health, workflows and workflow snapshot', async () =>
     const health = await fetch(`${value.base}/api/health`);
     assert.equal(health.status, 200);
     assert.equal((await health.json()).status, 'HEALTHY');
+    const clientConfig = await (await fetch(`${value.base}/api/client-config`, { headers: { origin: 'null' } })).json();
+    assert.equal(clientConfig.token, 'test-token');
+    assert.equal(clientConfig.local_only, true);
     const workflows = await (await fetch(`${value.base}/api/workflows`)).json();
     assert.equal(workflows.workflows[0].workflow_id, WORKFLOW_ID);
     const snapshot = await (await fetch(`${value.base}/api/workflows/${WORKFLOW_ID}/snapshot`)).json();
