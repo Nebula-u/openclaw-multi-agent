@@ -1,5 +1,23 @@
 # Changelog
 
+### Monitor Phase 1：Control Kernel 监督事实与只读快照
+
+#### 改动了什么
+
+- 新增 supervision request/claim/receipt 和 manager wake record Schema，以及 SQLite `supervision_requests`、不可变 `supervision_events`、`manager_wake_outbox` 和幂等 operation 表。
+- 新增 `snapshot`、`supervision-request/list/claim/complete/events`、`wake-outbox` 和 `wake-record` Control Kernel 命令。
+- 扩展 Control Kernel audit，验证监督作用域、事件哈希链、请求状态与 wake outbox。
+- 新增 Monitor 测试入口及监督事务、幂等、wake、快照和篡改检测测试。
+
+#### 为什么要改
+
+- 自动或人工催办必须先形成可审计控制事实和 outbox，不能由 Watchdog、网页或外部调用直接控制工作 Agent。
+
+#### 验证
+
+- `node --test tests/monitor-supervision.test.mjs tests/control-kernel.test.mjs tests/task-repository.test.mjs`：19 项通过。
+- `git diff --check` 通过。
+
 ### Monitor Phase 0：基线与原生监督 ADR
 
 #### 改动了什么

@@ -2,6 +2,7 @@ import { canonicalJson } from '../runtime-core/atomic-store.mjs';
 import { auditProjectionFiles } from './projections.mjs';
 import { listEvents, listWorkflows, storedEventHash } from './repository.mjs';
 import { storedTaskEventHash } from './task-repository.mjs';
+import { storedSupervisionEventHash } from './supervision-repository.mjs';
 
 const ZERO_HASH = '0'.repeat(64);
 
@@ -77,6 +78,65 @@ function auditTasks(database, errors) {
   };
 }
 
+function auditSupervision(database, errors) {
+  if (!tableExists(database, 'supervision_requests')) return { supervision_requests: 0, supervision_events: 0, manager_wake_outbox: [] };
+  const rows = database.prepare('SELECT * FROM supervision_requests ORDER BY request_id').all();
+  for (const row of rows) {
+    let request;
+    try { request = JSON.parse(row.request_json); }
+    catch (error) { errors.push({ code: 'SUPERVISION_REQUEST_JSON_INVALID', request_id: row.request_id, message: error.message }); continue; }
+    for (const key of ['request_id', 'idempotency_key', 'workflow_id', 'task_id', 'run_id', 'dispatch_id', 'target_agent_id', 'request_type', 'source', 'reason', 'requested_at']) {
+      if ((request[key] ?? null) !== (row[key] ?? null)) errors.push({ code: 'SUPERVISION_REQUEST_COLUMN_MISMATCH', request_id: row.request_id, field: key });
+    }
+    const workflow = database.prepare('SELECT 1 AS present FROM workflows WHERE workflow_id=?').get(row.workflow_id);
+    if (!workflow) errors.push({ code: 'SUPERVISION_WORKFLOW_MISSING', request_id: row.request_id, workflow_id: row.workflow_id });
+    if (row.task_id) {
+      const task = database.prepare('SELECT workflow_id, run_id, assigned_agent FROM tasks WHERE task_id=?').get(row.task_id);
+      if (!task || task.workflow_id !== row.workflow_id || (row.run_id && task.run_id !== row.run_id)
+        || (row.target_agent_id && task.assigned_agent !== row.target_agent_id)) {
+        errors.push({ code: 'SUPERVISION_TASK_SCOPE_MISMATCH', request_id: row.request_id });
+      }
+    }
+    if (row.dispatch_id) {
+      const dispatch = database.prepare('SELECT workflow_id, task_id, run_id, agent_id FROM dispatches WHERE dispatch_id=?').get(row.dispatch_id);
+      if (!dispatch || dispatch.workflow_id !== row.workflow_id || (row.task_id && dispatch.task_id !== row.task_id)
+        || (row.run_id && dispatch.run_id !== row.run_id) || (row.target_agent_id && dispatch.agent_id !== row.target_agent_id)) {
+        errors.push({ code: 'SUPERVISION_DISPATCH_SCOPE_MISMATCH', request_id: row.request_id });
+      }
+    }
+    const events = database.prepare('SELECT * FROM supervision_events WHERE request_id=? ORDER BY seq').all(row.request_id);
+    let priorHash = ZERO_HASH;
+    for (let index = 0; index < events.length; index += 1) {
+      const stored = events[index];
+      let payload;
+      try { payload = JSON.parse(stored.payload_json); }
+      catch (error) { errors.push({ code: 'SUPERVISION_EVENT_JSON_INVALID', request_id: row.request_id, seq: stored.seq, message: error.message }); continue; }
+      const event = { request_id: stored.request_id, seq: stored.seq, event_id: stored.event_id, event_type: stored.event_type,
+        occurred_at: stored.occurred_at, payload, previous_event_hash: stored.previous_event_hash, event_hash: stored.event_hash };
+      if (event.seq !== index + 1) errors.push({ code: 'SUPERVISION_EVENT_SEQUENCE', request_id: row.request_id, seq: event.seq, expected: index + 1 });
+      if (event.previous_event_hash !== priorHash) errors.push({ code: 'SUPERVISION_EVENT_PREVIOUS_HASH', request_id: row.request_id, seq: event.seq });
+      if (event.event_hash !== storedSupervisionEventHash(event)) errors.push({ code: 'SUPERVISION_EVENT_HASH', request_id: row.request_id, seq: event.seq });
+      priorHash = event.event_hash;
+    }
+    if (events.length === 0 || events[0].event_type !== 'REQUEST_CREATED') errors.push({ code: 'SUPERVISION_REQUEST_EVENT_MISSING', request_id: row.request_id });
+    if (row.status === 'CLAIMED' && !events.some((event) => event.event_type === 'REQUEST_CLAIMED')) errors.push({ code: 'SUPERVISION_CLAIM_EVENT_MISSING', request_id: row.request_id });
+    if (['SUCCEEDED', 'FAILED', 'CANCELLED'].includes(row.status) && !events.some((event) => ['REQUEST_COMPLETED', 'REQUEST_FAILED', 'REQUEST_CANCELLED'].includes(event.event_type))) {
+      errors.push({ code: 'SUPERVISION_COMPLETION_EVENT_MISSING', request_id: row.request_id });
+    }
+  }
+  const wakeRows = database.prepare('SELECT * FROM manager_wake_outbox ORDER BY wake_id').all();
+  for (const wake of wakeRows) {
+    const request = database.prepare('SELECT source FROM supervision_requests WHERE request_id=?').get(wake.request_id);
+    if (!request || request.source === 'MANAGER') errors.push({ code: 'MANAGER_WAKE_SCOPE_MISMATCH', wake_id: wake.wake_id });
+    if (wake.status === 'DELIVERED' && !wake.delivered_at) errors.push({ code: 'MANAGER_WAKE_DELIVERY_TIME_MISSING', wake_id: wake.wake_id });
+  }
+  return {
+    supervision_requests: rows.length,
+    supervision_events: database.prepare('SELECT COUNT(*) AS count FROM supervision_events').get().count,
+    manager_wake_outbox: database.prepare('SELECT status, COUNT(*) AS count FROM manager_wake_outbox GROUP BY status').all(),
+  };
+}
+
 export function auditControlDatabase(database, { runtimeRoot = null, projections = false } = {}) {
   const errors = [];
   const integrity = database.prepare('PRAGMA integrity_check').all();
@@ -146,5 +206,6 @@ export function auditControlDatabase(database, { runtimeRoot = null, projections
   }
   const outbox = database.prepare(`SELECT status, COUNT(*) AS count FROM projection_outbox GROUP BY status`).all();
   const taskAudit = auditTasks(database, errors);
-  return { ok: errors.length === 0, errors, workflows: workflows.length, events: eventCount, commands: commandCount, outbox, ...taskAudit };
+  const supervisionAudit = auditSupervision(database, errors);
+  return { ok: errors.length === 0, errors, workflows: workflows.length, events: eventCount, commands: commandCount, outbox, ...taskAudit, ...supervisionAudit };
 }

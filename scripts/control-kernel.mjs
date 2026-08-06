@@ -8,6 +8,8 @@ import { createControlRepository, openControlDatabase } from './control-core/rep
 import { createTaskRepository } from './control-core/task-repository.mjs';
 import { auditControlDatabase } from './control-core/audit.mjs';
 import { exportControlProjections } from './control-core/projections.mjs';
+import { createSupervisionRepository } from './control-core/supervision-repository.mjs';
+import { createControlSnapshot } from './control-core/read-model.mjs';
 
 function parseArgs(argv) {
   const [command, ...tokens] = argv;
@@ -38,6 +40,7 @@ function main() {
   try {
     const repository = createControlRepository(projectRoot, database);
     const tasks = createTaskRepository(projectRoot, database);
+    const supervision = createSupervisionRepository(projectRoot, database);
     if (command === 'init') {
       emit({ ok: true, command: 'init', database: databasePath, schema_version: 2 });
     } else if (command === 'apply') {
@@ -52,6 +55,8 @@ function main() {
       emit({ ok: true, command: 'events', workflow_id: workflowId, events: repository.events(workflowId) });
     } else if (command === 'active') {
       emit({ ok: true, command: 'active', workflows: repository.workflows({ activeOnly: true }) });
+    } else if (command === 'snapshot') {
+      emit({ ok: true, command: 'snapshot', snapshot: createControlSnapshot(database, { workflowId: options['workflow-id'] ?? null }) });
     } else if (command === 'project') {
       const runtimeRoot = resolve(required(options, 'runtime-root'));
       emit({ ...exportControlProjections(database, runtimeRoot), command: 'project' });
@@ -87,8 +92,22 @@ function main() {
       emit({ ok: true, command: 'dispatch-outbox', pending: tasks.outbox() });
     } else if (command === 'result-ingest') {
       emit(tasks.ingestCompletion(JSON.parse(readFileSync(resolve(required(options, 'completion-file')), 'utf8'))));
+    } else if (command === 'supervision-request') {
+      emit(supervision.request(JSON.parse(readFileSync(resolve(required(options, 'request-file')), 'utf8'))));
+    } else if (command === 'supervision-list') {
+      emit({ ok: true, command: 'supervision-list', requests: supervision.list({ status: options.status ?? null }) });
+    } else if (command === 'supervision-claim') {
+      emit(supervision.claim(JSON.parse(readFileSync(resolve(required(options, 'claim-file')), 'utf8'))));
+    } else if (command === 'supervision-complete') {
+      emit(supervision.complete(JSON.parse(readFileSync(resolve(required(options, 'receipt-file')), 'utf8'))));
+    } else if (command === 'supervision-events') {
+      emit({ ok: true, command: 'supervision-events', request_id: required(options, 'request-id'), events: supervision.events(required(options, 'request-id')) });
+    } else if (command === 'wake-outbox') {
+      emit({ ok: true, command: 'wake-outbox', pending: supervision.wakeOutbox() });
+    } else if (command === 'wake-record') {
+      emit(supervision.recordWake(JSON.parse(readFileSync(resolve(required(options, 'record-file')), 'utf8'))));
     } else {
-      throw new Error('usage: control-kernel.mjs <init|apply|get|events|active|project|audit|recover|task-register|task-validate|task-get|dispatch-prepare|dispatch-receipt|dispatch-list|dispatch-outbox|result-ingest> [options]');
+      throw new Error('usage: control-kernel.mjs <init|apply|get|events|active|snapshot|project|audit|recover|task-register|task-validate|task-get|dispatch-prepare|dispatch-receipt|dispatch-list|dispatch-outbox|result-ingest|supervision-request|supervision-list|supervision-claim|supervision-complete|supervision-events|wake-outbox|wake-record> [options]');
     }
   } catch (error) {
     const code = error instanceof ControlTransitionError ? error.code : 'CONTROL_KERNEL_ERROR';

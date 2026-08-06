@@ -70,6 +70,31 @@ Task 当前快照、run 固定信息、不可变哈希事件、dispatch、outbox
 - `dispatch-list --task-id <id>` / `dispatch-outbox`
 - `result-ingest --completion-file <abs>`
 
+## Snapshot 与监督事实
+
+`snapshot [--workflow-id <id>]` 提供适合 Monitor 的一致性只读模型，按
+workflow → task → dispatch 组合当前控制状态，并附带 supervision request。它不读取或信任
+`runtime/control/v2/**` 投影，也不写数据库。
+
+监督请求属于控制事实，保存在 `supervision_requests`、不可变 `supervision_events` 和
+`manager_wake_outbox` 中。Watchdog 和本地用户只能创建 request；Wake Adapter 只能消费 wake
+outbox；真正的 session 核查、NUDGE、completion reconciliation 和 retry review 仍由
+manager-agent 执行。
+
+监督 CLI：
+
+- `supervision-request --request-file <abs>`
+- `supervision-list [--status <status>]`
+- `supervision-claim --claim-file <abs>`
+- `supervision-complete --receipt-file <abs>`
+- `supervision-events --request-id <id>`
+- `wake-outbox`
+- `wake-record --record-file <abs>`
+
+请求、claim、完成和 wake receipt 都使用 operation/request 幂等键；相同内容重放返回原结果，
+不同内容复用同一键失败关闭。`audit` 会验证 request scope、监督事件 sequence/hash、状态对应
+事件和 wake outbox 一致性。
+
 ## 并发与故障语义
 
 - 同 workflow 的并发命令使用 `expected_revision` CAS，只有一个事务成功；不同 workflow 共享数据库事务但不会覆盖 active view。

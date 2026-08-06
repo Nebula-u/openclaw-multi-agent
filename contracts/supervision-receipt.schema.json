@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://openclaw.local/contracts/supervision-receipt.schema.json",
+  "title": "Supervision Receipt",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "operation_id", "request_id", "status", "completed_at", "result_code", "result_summary"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "operation_id": { "type": "string", "minLength": 1 },
+    "request_id": { "type": "string", "pattern": "^SUP-[A-Za-z0-9-]+$" },
+    "status": { "enum": ["SUCCEEDED", "FAILED", "CANCELLED"] },
+    "completed_at": { "type": "string", "format": "date-time" },
+    "result_code": { "type": "string", "minLength": 1, "maxLength": 200 },
+    "result_summary": { "type": "string", "minLength": 1, "maxLength": 4000 }
+  }
+}

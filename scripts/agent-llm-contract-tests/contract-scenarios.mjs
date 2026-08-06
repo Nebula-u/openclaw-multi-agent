@@ -35,6 +35,10 @@ export const INTERNAL_CONTRACTS = new Set([
   'control-event-v2.schema.json',
   'control-state-v2.schema.json',
   'legacy-quarantine-report-v2.schema.json',
+  'manager-wake-record.schema.json',
+  'supervision-claim.schema.json',
+  'supervision-receipt.schema.json',
+  'supervision-request.schema.json',
   'transition-command.schema.json',
 ]);
 
