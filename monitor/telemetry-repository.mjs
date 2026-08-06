@@ -133,6 +133,8 @@ export function createTelemetryRepository(projectRootInput, database) {
       else rows = database.prepare('SELECT activity_json FROM agent_activities ORDER BY timestamp DESC LIMIT ?').all(limit);
       return rows.map((row) => parseJson(row.activity_json));
     },
+    latestActivity(taskId) { const row = database.prepare('SELECT activity_json FROM agent_activities WHERE task_id=? ORDER BY timestamp DESC LIMIT 1').get(taskId); return row ? parseJson(row.activity_json) : null; },
+    latestEvent(taskId) { const row = database.prepare('SELECT event_json FROM monitor_events WHERE task_id=? ORDER BY sequence DESC LIMIT 1').get(taskId); return row ? parseJson(row.event_json) : null; },
     getSessionCursor(path) { return database.prepare('SELECT offset_bytes FROM session_cursors WHERE source_path=?').get(path)?.offset_bytes ?? 0; },
     setSessionCursor(path, offset, at) { database.prepare(`INSERT INTO session_cursors(source_path, offset_bytes, updated_at) VALUES (?, ?, ?)
       ON CONFLICT(source_path) DO UPDATE SET offset_bytes=excluded.offset_bytes, updated_at=excluded.updated_at`).run(path, offset, at); },
@@ -144,6 +146,7 @@ export function createTelemetryRepository(projectRootInput, database) {
       confidence=excluded.confidence, evidence_json=excluded.evidence_json, calculated_at=excluded.calculated_at`)
       .run(value.workflow_id, value.task_id, value.run_id ?? null, value.health, value.confidence, json(value.evidence), value.calculated_at); },
     health(taskId) { const row = database.prepare('SELECT * FROM agent_health_snapshots WHERE task_id=?').get(taskId); return row ? { workflow_id: row.workflow_id, task_id: row.task_id, run_id: row.run_id, health: row.health, confidence: row.confidence, evidence: parseJson(row.evidence_json), calculated_at: row.calculated_at } : null; },
+    healthList(workflowId = null) { const rows = workflowId ? database.prepare('SELECT * FROM agent_health_snapshots WHERE workflow_id=? ORDER BY task_id').all(workflowId)
+      : database.prepare('SELECT * FROM agent_health_snapshots ORDER BY workflow_id, task_id').all(); return rows.map((row) => ({ workflow_id: row.workflow_id, task_id: row.task_id, run_id: row.run_id, health: row.health, confidence: row.confidence, evidence: parseJson(row.evidence_json), calculated_at: row.calculated_at })); },
   };
 }
-

@@ -82,3 +82,17 @@ Tailer 跳过 trajectory、thinking 和半行，按 byte offset 持久化 cursor
 
 token 只保存在当前浏览器 sessionStorage；API 地址保存在 localStorage。页面关闭不会停止
 Supervisor Core 或 Watchdog。
+
+## 健康状态与 Watchdog shadow
+
+Health Classifier 综合 task、dispatch、lease、显式 activity、session 和 artifact 事件，输出：
+
+`NOT_STARTED`、`STARTING`、`RUNNING`、`WAITING_CHILD`、`WAITING_HUMAN`、`BLOCKED`、
+`STALE`、`POSSIBLY_STALLED`、`COMPLETED`、`FAILED`、`LOST`、`UNKNOWN`。
+
+默认阈值在 `config/monitoring.example.json` 中。`lease_deadline` 过期只作为核查证据，不直接
+判定 LOST。未完成的 `TOOL_STARTED` 在工具宽限时间内保持 RUNNING，WAITING/BLOCKED 不触发
+普通催办。
+
+Watchdog 默认启用 shadow mode：同一 task/run/冷却窗口只写一个 `watchdog.shadow_action`
+遥测事件，展示如果启用会创建的 NUDGE 请求，但不写 supervision request、不唤醒 manager。

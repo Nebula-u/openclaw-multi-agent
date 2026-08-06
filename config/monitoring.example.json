@@ -7,5 +7,12 @@
   "allowed_origins": ["null"],
   "reconcile_interval_ms": 2000,
   "sse_retention": 2000,
-  "request_body_limit": 1048576
+  "request_body_limit": 1048576,
+  "watchdog_enabled": true,
+  "watchdog_shadow_mode": true,
+  "heartbeat_stale_seconds": 180,
+  "possibly_stalled_seconds": 300,
+  "starting_timeout_seconds": 120,
+  "tool_running_grace_seconds": 900,
+  "supervision_cooldown_seconds": 300
 }

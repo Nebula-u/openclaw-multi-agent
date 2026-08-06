@@ -10,6 +10,8 @@ import { openTelemetryDatabase, createTelemetryRepository } from './telemetry-re
 import { createActivityService } from './activity-api.mjs';
 import { createSessionTailer } from './session-tailer.mjs';
 import { createArtifactWatcher } from './artifact-watcher.mjs';
+import { createHealthClassifier } from './health-classifier.mjs';
+import { createWatchdog } from './watchdog.mjs';
 
 function isLoopback(address = '') {
   return address === '127.0.0.1' || address === '::1' || address === '::ffff:127.0.0.1';
@@ -67,21 +69,37 @@ export function createMonitorServer(config, { database: providedDatabase = null,
   const sessionTailer = createSessionTailer({ controlDatabase: database, telemetry,
     sessionRoot: config.sessionRoot ?? config.projectRoot, publish });
   const artifactWatcher = createArtifactWatcher({ controlDatabase: database, telemetry, publish });
+  const healthClassifier = createHealthClassifier({ telemetry, publish, thresholds: {
+    heartbeatStaleSeconds: config.heartbeatStaleSeconds, possiblyStalledSeconds: config.possiblyStalledSeconds,
+    startingTimeoutSeconds: config.startingTimeoutSeconds, toolRunningGraceSeconds: config.toolRunningGraceSeconds,
+  } });
+  const watchdog = createWatchdog({ telemetry, supervision, publish, enabled: config.watchdogEnabled,
+    shadowMode: config.watchdogShadowMode, cooldownSeconds: config.supervisionCooldownSeconds });
+  const attachHealth = (value) => {
+    for (const workflow of value.workflows) for (const task of workflow.tasks ?? []) task.health = telemetry.health(task.task_id);
+    return value;
+  };
   let snapshot = createControlSnapshot(database);
+  const initialHealth = healthClassifier.scan(snapshot);
+  watchdog.scan(initialHealth);
+  snapshot = attachHealth(snapshot);
   let fingerprint = JSON.stringify({ workflows: snapshot.workflows, supervision: snapshot.supervision });
   hub.publish('snapshot', snapshot, { source: 'CONTROL_DB' });
 
   const reconcile = () => {
     try {
+      sessionTailer.scan();
+      artifactWatcher.scan();
       const next = createControlSnapshot(database);
+      const health = healthClassifier.scan(next);
+      watchdog.scan(health);
+      attachHealth(next);
       const nextFingerprint = JSON.stringify({ workflows: next.workflows, supervision: next.supervision });
       if (nextFingerprint !== fingerprint) {
         snapshot = next;
         fingerprint = nextFingerprint;
         hub.publish('snapshot', snapshot, { source: 'CONTROL_DB' });
       }
-      sessionTailer.scan();
-      artifactWatcher.scan();
     } catch (error) {
       hub.publish('monitor-health', { status: 'DEGRADED', error: error.message }, { source: 'MONITOR' });
     }
@@ -146,6 +164,11 @@ export function createMonitorServer(config, { database: providedDatabase = null,
       const taskActivity = path.match(/^\/api\/tasks\/([^/]+)\/activity$/u);
       if (request.method === 'GET' && taskActivity) {
         return sendJson(response, 200, { ok: true, activities: telemetry.activities({ taskId: decodeURIComponent(taskActivity[1]) }) }, cors);
+      }
+      const taskHealth = path.match(/^\/api\/tasks\/([^/]+)\/health$/u);
+      if (request.method === 'GET' && taskHealth) {
+        const health = telemetry.health(decodeURIComponent(taskHealth[1]));
+        return sendJson(response, health ? 200 : 404, health ? { ok: true, health } : { ok: false, error: 'HEALTH_NOT_FOUND' }, cors);
       }
       const agentActivity = path.match(/^\/api\/agents\/([^/]+)\/activity$/u);
       if (request.method === 'GET' && agentActivity) {

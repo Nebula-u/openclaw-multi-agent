@@ -1,5 +1,25 @@
 # Changelog
 
+### Monitor Phase 5：健康分类与 Watchdog 影子模式
+
+#### 改动了什么
+
+- 新增多证据 Health Classifier、持久化 task health snapshot 和 `/api/tasks/:id/health`。
+- 新增 Watchdog shadow mode：只记录拟创建的 NUDGE，同一 task/run/冷却窗口幂等去重。
+- 增加 STARTING、RUNNING、WAITING、BLOCKED、STALE、POSSIBLY_STALLED、终态和 UNKNOWN 判定；lease 过期不直接判 LOST，长工具调用使用独立宽限窗口。
+- Dashboard task、Agent 和总览接入派生健康状态。
+- Monitor 测试改为单并发，避免 Windows 并行 SQLite 测试触发虚拟内存分配失败。
+
+#### 为什么要改
+
+- 主动监督必须先证明停滞判定的证据质量和误报率，不能按单一更新时间直接催办或 retry。
+
+#### 验证
+
+- `npm run test:monitor`：17 项通过。
+- `node --check monitor/health-classifier.mjs monitor/watchdog.mjs monitor/ui/app.js` 通过。
+- `git diff --check` 通过。
+
 ### Monitor Phase 4：可直接打开的静态 HTML Dashboard
 
 #### 改动了什么

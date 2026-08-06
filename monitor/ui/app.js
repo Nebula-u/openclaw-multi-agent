@@ -19,7 +19,7 @@
     const tasks = state.workflows.flatMap((workflow) => workflow.tasks || []);
     $('metric-workflows').textContent = state.workflows.filter((workflow) => workflow.condition !== 'TERMINAL').length;
     $('metric-running').textContent = tasks.filter((task) => task.status === 'RUNNING').length;
-    $('metric-waiting').textContent = tasks.filter((task) => ['WAITING_HUMAN','BLOCKED','NEEDS_REWORK'].includes(task.status)).length;
+    $('metric-waiting').textContent = tasks.filter((task) => ['WAITING_HUMAN','BLOCKED','NEEDS_REWORK'].includes(task.status) || ['STALE','POSSIBLY_STALLED'].includes(task.health?.health)).length;
     $('metric-supervision').textContent = state.supervision.filter((item) => ['REQUESTED','CLAIMED'].includes(item.status)).length;
     $('metric-control').textContent = health?.status || 'CONNECTED'; $('last-sync').textContent = `LAST SYNC ${new Date().toLocaleTimeString('zh-CN',{hour12:false})}`;
   }
@@ -38,7 +38,7 @@
     if (!tasks.length) { root.className = 'task-board empty-state'; root.textContent = '这个 workflow 尚无 task'; return; }
     root.className = 'task-board'; root.innerHTML = '';
     tasks.forEach((task) => { const card = $('task-card-template').content.firstElementChild.cloneNode(true); const dispatch = latestDispatch(task);
-      card.querySelector('.task-type').textContent = task.task_type || 'TASK'; card.querySelector('.task-status').textContent = task.status;
+      card.querySelector('.task-type').textContent = task.task_type || 'TASK'; card.querySelector('.task-status').textContent = task.health?.health || task.status;
       card.querySelector('.task-title').textContent = task.title || task.task_id; card.querySelector('.task-agent').textContent = `AGENT / ${task.assigned_agent || 'UNASSIGNED'}`;
       card.querySelector('.task-session').textContent = `SESSION / ${dispatch?.session_id || dispatch?.session_key || 'NOT STARTED'}`;
       card.querySelector('.task-attempt').textContent = `ATTEMPT ${task.attempt || 0}/${task.max_attempts || '—'}`; card.querySelector('.task-time').textContent = formatTime(task.updated_at);
@@ -46,7 +46,7 @@
   }
   function renderAgents(workflow) { const root = $('agent-tree'); const tasks = workflow?.tasks || []; const agents = new Map(); tasks.forEach((task) => agents.set(task.assigned_agent || 'unassigned', task));
     if (!agents.size) { root.className = 'agent-tree empty-state'; root.textContent = '暂无 Agent 数据'; return; } root.className = 'agent-tree'; root.innerHTML = `<div class="agent-node running"><strong>manager-agent</strong><span>唯一编排者 / ${escapeHtml(workflow.phase)}</span></div>`;
-    agents.forEach((task, agent) => { const node = document.createElement('div'); node.className = `agent-node ${String(task.status).toLowerCase()}`; node.innerHTML = `<strong>${escapeHtml(agent)}</strong><span>${escapeHtml(task.status)} · ${escapeHtml(task.title || task.task_id)}</span>`; root.appendChild(node); }); }
+    agents.forEach((task, agent) => { const health = task.health?.health || task.status; const node = document.createElement('div'); node.className = `agent-node ${String(health).toLowerCase()}`; node.innerHTML = `<strong>${escapeHtml(agent)}</strong><span>${escapeHtml(health)} · ${escapeHtml(task.title || task.task_id)}</span>`; root.appendChild(node); }); }
   function renderSelected() { const workflow = selected(); renderWorkflowList(); if (!workflow) return;
     $('workflow-id').textContent = workflow.workflow_id; $('workflow-title').textContent = workflow.phase.replaceAll('_',' '); $('workflow-condition').textContent = workflow.condition; $('workflow-condition').className = `pill ${String(workflow.condition).toLowerCase()}`; $('workflow-revision').textContent = `REV ${workflow.revision}`;
     renderPhaseRail(workflow); renderTasks(workflow); renderAgents(workflow); }
@@ -59,14 +59,14 @@
     $('event-feed').innerHTML = events.length ? events.map((event) => `<li class="event-row"><time>${formatTime(event.timestamp)}</time><b>${escapeHtml(event.type)}</b><p>${escapeHtml(summaryOf(event))}</p></li>`).join('') : '<li class="empty-state">当前筛选没有事件</li>'; }
   async function openTask(task) { const dialog = $('task-dialog'); const dispatch = latestDispatch(task); let activities = []; try { activities = (await request(`/api/tasks/${encodeURIComponent(task.task_id)}/activity`)).activities; } catch (_) { activities = []; }
     $('task-detail').innerHTML = `<span class="eyebrow">${escapeHtml(task.task_id)}</span><h2 class="detail-title">${escapeHtml(task.title || task.task_type)}</h2><div class="detail-grid">
-      ${[['STATUS',task.status],['AGENT',task.assigned_agent],['RUN',task.run_id],['DISPATCH',dispatch?.dispatch_id || '—'],['SESSION',dispatch?.session_id || dispatch?.session_key || '—'],['ARTIFACT',task.artifact_root_abs || '—']].map(([label,value]) => `<div class="detail-cell"><span>${label}</span><strong>${escapeHtml(value)}</strong></div>`).join('')}</div>
+      ${[['STATUS',task.status],['HEALTH',task.health?.health || 'UNKNOWN'],['AGENT',task.assigned_agent],['RUN',task.run_id],['DISPATCH',dispatch?.dispatch_id || '—'],['SESSION',dispatch?.session_id || dispatch?.session_key || '—'],['ARTIFACT',task.artifact_root_abs || '—']].map(([label,value]) => `<div class="detail-cell"><span>${label}</span><strong>${escapeHtml(value)}</strong></div>`).join('')}</div>
       <h3>RECENT ACTIVITY</h3><ul class="activity-list">${activities.length ? activities.slice(0,20).map((item) => `<li><b>${escapeHtml(item.kind)}</b> · ${escapeHtml(item.summary)}<br><small>${formatTime(item.timestamp)}</small></li>`).join('') : '<li>暂无显式 activity</li>'}</ul>
       <div class="nudge-form"><label for="nudge-reason">监督请求说明</label><textarea id="nudge-reason">请汇报当前 checkpoint、已完成事实、阻塞原因和下一步；不要重新执行已完成副作用。</textarea><button id="nudge-button" class="button primary">创建 NUDGE 请求</button></div>`;
     $('nudge-button').addEventListener('click', () => createNudge(task)); dialog.showModal(); }
   async function createNudge(task) { const dispatch = latestDispatch(task); const now = new Date(); const uuid = crypto.randomUUID(); const reason = $('nudge-reason').value.trim();
     const body = { schema_version:1, request_id:`SUP-${uuid}`, idempotency_key:`${task.workflow_id}/${task.task_id}/${task.run_id}/NUDGE/${Math.floor(now.valueOf()/300000)}`,
       workflow_id:task.workflow_id, task_id:task.task_id, run_id:task.run_id, dispatch_id:dispatch?.dispatch_id || null, target_agent_id:task.assigned_agent,
-      request_type:'NUDGE', source:'LOCAL_USER', reason, evidence:{ source:'static-dashboard', requested_for_status:task.status }, requested_at:now.toISOString() };
+      request_type:'NUDGE', source:'LOCAL_USER', reason, evidence:{ source:'static-dashboard', requested_for_status:task.status, health:task.health || null }, requested_at:now.toISOString() };
     try { const result = await request('/api/supervision/request',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)}); addFeed({type:'supervision',timestamp:now.toISOString(),payload:result}); alert('监督请求已创建，等待 manager 处理。'); }
     catch (error) { alert(`创建失败：${error.message}`); } }
   function connectStream() { state.source?.close(); const workflow = selected(); if (!workflow || !state.token) return; const after = Number(localStorage.getItem(`monitor.seq.${workflow.workflow_id}`) || 0);

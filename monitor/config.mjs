@@ -9,6 +9,14 @@ function integer(value, fallback) {
   return parsed;
 }
 
+function boolean(value, fallback) {
+  if (value === undefined || value === null || value === '') return fallback;
+  if (typeof value === 'boolean') return value;
+  if (String(value).toLowerCase() === 'true') return true;
+  if (String(value).toLowerCase() === 'false') return false;
+  throw new Error(`expected boolean, received: ${value}`);
+}
+
 function readConfig(path) {
   if (!path || !existsSync(path)) return {};
   return JSON.parse(readFileSync(path, 'utf8'));
@@ -41,5 +49,12 @@ export function loadMonitorConfig(overrides = {}) {
     reconcileIntervalMs: integer(overrides.reconcileIntervalMs ?? fileConfig.reconcile_interval_ms, 2000),
     sseRetention: integer(overrides.sseRetention ?? fileConfig.sse_retention, 2000),
     requestBodyLimit: integer(overrides.requestBodyLimit ?? fileConfig.request_body_limit, 1024 * 1024),
+    watchdogEnabled: boolean(overrides.watchdogEnabled ?? fileConfig.watchdog_enabled, true),
+    watchdogShadowMode: boolean(overrides.watchdogShadowMode ?? fileConfig.watchdog_shadow_mode, true),
+    heartbeatStaleSeconds: integer(overrides.heartbeatStaleSeconds ?? fileConfig.heartbeat_stale_seconds, 180),
+    possiblyStalledSeconds: integer(overrides.possiblyStalledSeconds ?? fileConfig.possibly_stalled_seconds, 300),
+    startingTimeoutSeconds: integer(overrides.startingTimeoutSeconds ?? fileConfig.starting_timeout_seconds, 120),
+    toolRunningGraceSeconds: integer(overrides.toolRunningGraceSeconds ?? fileConfig.tool_running_grace_seconds, 900),
+    supervisionCooldownSeconds: integer(overrides.supervisionCooldownSeconds ?? fileConfig.supervision_cooldown_seconds, 300),
   };
 }
