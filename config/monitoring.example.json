@@ -1,0 +1,9 @@
+{
+  "host": "127.0.0.1",
+  "port": 4310,
+  "runtime_root": "./runtime",
+  "allowed_origins": ["null"],
+  "reconcile_interval_ms": 2000,
+  "sse_retention": 2000,
+  "request_body_limit": 1048576
+}

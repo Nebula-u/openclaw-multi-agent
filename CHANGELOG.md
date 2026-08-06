@@ -1,5 +1,23 @@
 # Changelog
 
+### Monitor Phase 2：原生 Supervisor Core、HTTP API 与 SSE
+
+#### 改动了什么
+
+- 新增原生 Node.js Supervisor Core、配置加载、事件保留/回放 hub、loopback HTTP API 和 SSE stream。
+- 提供 health、workflow、snapshot、workflow event、task、supervision 查询与受 token 保护的监督请求 API。
+- 新增 `supervisor:start`、`supervisor:check`、配置样例和运行文档。
+- 增加 HTTP、Origin/token、防越权和 SSE 初始快照/重放测试。
+
+#### 为什么要改
+
+- 在不引入第二个编排器或前端服务依赖的前提下，为静态 HTML 看板提供一致、可恢复、最小暴露的本地数据接口。
+
+#### 验证
+
+- `npm run test:monitor`：9 项通过。
+- `git diff --check` 通过。
+
 ### Monitor Phase 1：Control Kernel 监督事实与只读快照
 
 #### 改动了什么
