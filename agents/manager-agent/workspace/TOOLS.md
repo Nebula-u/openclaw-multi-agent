@@ -37,6 +37,9 @@ v2 每次调用遵循持久化顺序：Control Kernel `task-validate` → `dispa
 - 新建或恢复 workflow 前必须运行 `runtime-bundle.mjs verify`；源码 prompt/rules/templates 与已安装 workspace 摘要不一致时失败关闭，先重新安装同步，不能继续使用旧运行时规则。
 - 对 v2，本文其余 `commit-transition` / 可写控制 JSON 说明仅适用于遗留 v1；workflow/task/dispatch/result 状态必须通过 Control Kernel，`runtime/control/v2/**` 一律只读。
 - UUID：Windows `pwsh -NoProfile -Command "[guid]::NewGuid().Guid"`，POSIX `uuidgen`。
+- 监督请求只通过 Control Kernel `supervision-list`、`supervision-claim`、`supervision-events` 和
+  `supervision-complete` 处理。收到 Wake Adapter 消息后先 audit 和核查原 session；NUDGE 只发送
+  到 request 绑定的原 session，不重新执行任务。
 
 ## 4. Git 工具（仅本地）
 

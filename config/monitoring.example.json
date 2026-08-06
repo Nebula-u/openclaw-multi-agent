@@ -14,5 +14,8 @@
   "possibly_stalled_seconds": 300,
   "starting_timeout_seconds": 120,
   "tool_running_grace_seconds": 900,
-  "supervision_cooldown_seconds": 300
+  "supervision_cooldown_seconds": 300,
+  "manager_wake_enabled": false,
+  "manager_session_key": null,
+  "manager_wake_timeout_seconds": 60
 }

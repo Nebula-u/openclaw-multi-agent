@@ -12,6 +12,7 @@ import { createSessionTailer } from './session-tailer.mjs';
 import { createArtifactWatcher } from './artifact-watcher.mjs';
 import { createHealthClassifier } from './health-classifier.mjs';
 import { createWatchdog } from './watchdog.mjs';
+import { createWakeAdapter } from './wake-adapter.mjs';
 
 function isLoopback(address = '') {
   return address === '127.0.0.1' || address === '::1' || address === '::ffff:127.0.0.1';
@@ -75,6 +76,9 @@ export function createMonitorServer(config, { database: providedDatabase = null,
   } });
   const watchdog = createWatchdog({ telemetry, supervision, publish, enabled: config.watchdogEnabled,
     shadowMode: config.watchdogShadowMode, cooldownSeconds: config.supervisionCooldownSeconds });
+  const wakeAdapter = createWakeAdapter({ controlDatabase: database, supervision, publish,
+    enabled: config.managerWakeEnabled, managerSessionKey: config.managerSessionKey,
+    timeoutSeconds: config.managerWakeTimeoutSeconds });
   const attachHealth = (value) => {
     for (const workflow of value.workflows) for (const task of workflow.tasks ?? []) task.health = telemetry.health(task.task_id);
     return value;
@@ -93,6 +97,7 @@ export function createMonitorServer(config, { database: providedDatabase = null,
       const next = createControlSnapshot(database);
       const health = healthClassifier.scan(next);
       watchdog.scan(health);
+      void wakeAdapter.scan().catch((error) => hub.publish('monitor-health', { status: 'DEGRADED', error: error.message }, { source: 'MANAGER_WAKE_ADAPTER' }));
       attachHealth(next);
       const nextFingerprint = JSON.stringify({ workflows: next.workflows, supervision: next.supervision });
       if (nextFingerprint !== fingerprint) {
@@ -202,6 +207,7 @@ export function createMonitorServer(config, { database: providedDatabase = null,
     hub,
     telemetry,
     activity,
+    wakeAdapter,
     config,
     snapshot: () => snapshot,
     async start() {

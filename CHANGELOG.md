@@ -1,5 +1,24 @@
 # Changelog
 
+### Monitor Phase 6：监督请求自动化与 Manager Wake Adapter
+
+#### 改动了什么
+
+- Watchdog 非 shadow 模式现在通过 supervision repository 创建完整、幂等的 NUDGE request 和 wake outbox。
+- 新增默认关闭的 Manager Wake Adapter：Control Kernel audit 前置、指定 manager session 校验、CLI 参数数组调用、失败退避和 durable wake receipt。
+- 更新 manager-agent 规则和工具协议：启动/恢复/被唤醒时查询、claim、核查原 session，并用 receipt 结束监督请求；原 session 未确认终结前禁止 retry/spawn。
+
+#### 为什么要改
+
+- 监督外部副作用必须经过 request/outbox/receipt 闭环，并且只能唤醒唯一编排者，不能让 Watchdog 直接控制工作 Agent。
+
+#### 验证
+
+- `npm run test:monitor`：20 项通过。
+- `npm run test:runtime-bundle`：3 项通过。
+- `node --check monitor/wake-adapter.mjs` 和 `git diff --check` 通过。
+- 真实 OpenClaw CLI 已确认支持 manager `--session-key` 定位和 JSON session 列表；自动唤醒保持默认关闭，测试使用注入 runner，未向真实 manager 发送消息。
+
 ### Monitor Phase 5：健康分类与 Watchdog 影子模式
 
 #### 改动了什么

@@ -47,6 +47,7 @@ export function createHealthClassifier({ telemetry, thresholds = {}, publish, no
         for (const task of workflow.tasks ?? []) {
           const classified = classifyTaskHealth(task, { telemetry, thresholds, now: now() });
           const value = { workflow_id: workflow.workflow_id, task_id: task.task_id, run_id: task.run_id,
+            dispatch_id: task.dispatches?.at(-1)?.dispatch_id ?? null, target_agent_id: task.assigned_agent ?? null,
             ...classified, calculated_at: now().toISOString() };
           const prior = telemetry.health(task.task_id);
           telemetry.saveHealth(value);

@@ -96,3 +96,22 @@ Health Classifier 综合 task、dispatch、lease、显式 activity、session 和
 
 Watchdog 默认启用 shadow mode：同一 task/run/冷却窗口只写一个 `watchdog.shadow_action`
 遥测事件，展示如果启用会创建的 NUDGE 请求，但不写 supervision request、不唤醒 manager。
+
+## Manager Wake Adapter
+
+Wake Adapter 默认关闭。启用前必须在配置中同时设置：
+
+```json
+{
+  "watchdog_shadow_mode": false,
+  "manager_wake_enabled": true,
+  "manager_session_key": "agent:manager-agent:<dedicated-workflow-session>"
+}
+```
+
+每轮先运行 Control Kernel audit，再读取 `manager_wake_outbox`。Adapter 使用
+`openclaw sessions --agent manager-agent --json --limit all` 验证指定 session 存在，然后使用
+`openclaw agent --agent manager-agent --session-key ...` 只发送 request ID 和核查要求。
+
+Manager 必须自行查询监督请求、claim、核查原 worker session，并用 supervision receipt 结束请求。
+调用失败会写 FAILED wake receipt 和下次退避时间；请求已被 claim/完成时不会重复唤醒。

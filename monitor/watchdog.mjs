@@ -14,8 +14,11 @@ export function createWatchdog({ telemetry, supervision = null, shadowMode = tru
         const key = `${health.workflow_id}/${health.task_id}/${health.run_id ?? 'none'}/NUDGE/${window}`;
         const eventId = `MEVT-${shortHash(`watchdog:${key}`)}`;
         if (telemetry.eventById(eventId)) continue;
-        const proposed = { request_type: 'NUDGE', idempotency_key: key, workflow_id: health.workflow_id,
-          task_id: health.task_id, run_id: health.run_id, reason: 'Task has no reliable progress signal beyond the configured threshold',
+        const proposed = { schema_version: 1, request_id: `SUP-${shortHash(key)}`, request_type: 'NUDGE',
+          idempotency_key: key, workflow_id: health.workflow_id, task_id: health.task_id, run_id: health.run_id,
+          dispatch_id: health.dispatch_id ?? null, target_agent_id: health.target_agent_id ?? null, source: 'WATCHDOG',
+          reason: 'Task has no reliable progress signal beyond the configured threshold',
+          requested_at: now().toISOString(),
           evidence: { health: health.health, confidence: health.confidence, signals: health.evidence } };
         const event = telemetry.addEvent({
           schema_version: 1, event_id: eventId, sequence: null, workflow_id: health.workflow_id, task_id: health.task_id,

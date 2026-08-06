@@ -56,5 +56,8 @@ export function loadMonitorConfig(overrides = {}) {
     startingTimeoutSeconds: integer(overrides.startingTimeoutSeconds ?? fileConfig.starting_timeout_seconds, 120),
     toolRunningGraceSeconds: integer(overrides.toolRunningGraceSeconds ?? fileConfig.tool_running_grace_seconds, 900),
     supervisionCooldownSeconds: integer(overrides.supervisionCooldownSeconds ?? fileConfig.supervision_cooldown_seconds, 300),
+    managerWakeEnabled: boolean(overrides.managerWakeEnabled ?? fileConfig.manager_wake_enabled, false),
+    managerSessionKey: overrides.managerSessionKey ?? process.env.MANAGER_SESSION_KEY ?? fileConfig.manager_session_key ?? null,
+    managerWakeTimeoutSeconds: integer(overrides.managerWakeTimeoutSeconds ?? fileConfig.manager_wake_timeout_seconds, 60),
   };
 }

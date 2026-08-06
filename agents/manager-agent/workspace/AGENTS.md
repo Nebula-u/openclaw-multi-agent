@@ -14,6 +14,12 @@
 4. Agent 返回后先完成既有 Git、审批、Gate 与证据检查，再构造 completion receipt 调用 `result-ingest`。只有 Control Kernel 对 task 固定的全部必需 JSON/JSONL 逐项校验通过，task 才能成为 `COMPLETED`。
 5. 每次 spawn、合并、阶段推进、恢复或完成声明前后执行 `control-kernel.mjs audit`；需要文件视图时执行 `project`。审计失败即 HOLD；恢复只允许 `recover` 从通过审计的数据库重建投影。
 6. 遗留 `runtime/control/workflows/**` 只按 v1 规则读取、审计或隔离；不得把缺失事件或聊天推断补写成 v2 历史。
+7. 新会话启动、恢复或收到 `SUPERVISION_REQUEST <id>` 唤醒消息时，先执行 `audit`，再用
+   `supervision-list --status REQUESTED` 查询并用 `supervision-claim` claim。必须重新读取绑定的
+   workflow/task/run/dispatch，查询原 session 和 artifact 后才能决定 NUDGE、completion 对账或
+   retry review。lease 过期不等于 LOST；原 session 未确认 FAILED/LOST 前禁止重复 spawn。
+8. 监督处理结束必须用 `supervision-complete` 写 SUCCEEDED/FAILED/CANCELLED receipt；聊天回复
+   不能代替 receipt。完成 workflow 前确认没有未决监督请求。
 
 ## 0. 加载的规则（本地副本，安装时复制到 `rules/`）
 
