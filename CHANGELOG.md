@@ -1,5 +1,24 @@
 # Changelog
 
+### 可观测性计划改为原生监督核心与静态 HTML 看板
+
+#### 改动了什么
+
+- 将 `docs/plan/2026-08-04-agent-observability-monitor.md` 更新为 2.1：监督、健康判定、Watchdog 和 manager 唤醒固定由宿主机原生 Node.js Supervisor Core 承担。
+- Dashboard 改为可直接打开的原生 `index.html`、`app.js` 和 `styles.css`，移除容器部署和前端构建链规划。
+- 补充当前 Control Kernel P0～P5 已完成、Manager 编排加固仍待实施的基线修正，并为自动 NUDGE、manager 唤醒和受控 retry 增加明确进入条件。
+- 增加节点职责、交互对象、交换信息，以及页面未打开、关闭和浏览器重启时监督不中断的验收场景。
+
+#### 为什么要改
+
+- 图形化看板只是观察入口，不应成为监督运行的依赖；用户不打开 HTML 页面时，停滞检测和监督闭环仍需持续工作。
+- 当前 Manager 的真实 spawn 身份校验、统一派发入口和中断恢复尚未按加固计划实现，自动监督不能提前假设这些边界已经可靠。
+
+#### 验证
+
+- 计划文档中已无容器部署相关文件、命令、阶段或验收项。
+- `git diff --check` 通过。
+
 ### 记录 Manager-Agent 编排与执行协议整改计划
 
 #### 改动了什么

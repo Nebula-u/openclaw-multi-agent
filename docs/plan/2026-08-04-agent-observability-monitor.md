@@ -1,13 +1,16 @@
 # 多 Agent 实时看板与监督执行机制实施计划（Control Kernel v2）
 
-> 版本：2.0
-> 更新日期：2026-08-05
+> 版本：2.1
+> 更新日期：2026-08-06
 > 状态：待评审、待实施
 > 适用项目：`openclaw-multi-agent`
 > 参考项目：`D:\MicroConnect\project\edict-main`
 > 替换说明：本文完整替换 2026-08-04 的旧版可观测性计划。旧计划以可写
 > `workflow.json`、`task.json` 和 `active-workflows.json` 为主要事实源；当前项目已经升级为
 > SQLite Control Kernel v2，因此旧方案的数据源、写入边界、命令闭环和恢复策略均已失效。
+> 2.1 修订说明：监督能力运行在宿主机原生 Node.js 进程中；Dashboard 使用可直接打开的
+> 静态 HTML/CSS/JavaScript，不引入容器或前端构建链。关闭看板页面时，
+> Watchdog、活动采集、停滞判定、监督请求和 manager 唤醒均不受影响。
 
 ## 1. 文档目的
 
@@ -20,12 +23,12 @@
 
 本计划的核心结论是：
 
-> 保留 `control.db` 作为唯一控制状态权威；新增只读 Monitor、独立可重建遥测库、SSE
-> Dashboard，以及“Watchdog 创建监督请求 → 唤醒 manager-agent → manager 核验并执行”
-> 的监督闭环。
+> 保留 `control.db` 作为唯一控制状态权威；新增宿主机原生 Supervisor Core、独立可重建
+> 遥测库、SSE API，以及“Watchdog 创建监督请求 → 唤醒 manager-agent → manager 核验并
+> 执行”的监督闭环。Dashboard 是可直接打开的静态 HTML，只负责展示，不承载监督职责。
 
-Monitor 不成为第二个编排器，Watchdog 不直接控制工作 Agent，网页也不直接修改 workflow
-或 task 状态。
+Supervisor Core 不成为第二个编排器，Watchdog 不直接控制工作 Agent，Dashboard 页面也不
+直接修改 workflow 或 task 状态。
 
 ## 2. 为什么必须替换旧计划
 
@@ -224,6 +227,25 @@ React Dashboard（5 秒轮询）
 - 没有用户从看板发起催办、暂停、核查或升级的闭环。
 - 当前 Control Kernel 查询接口偏命令行，不足以支持持续 Dashboard 快照。
 
+### 4.3 2026-08-06 基线修正
+
+计划之后已经完成并合入的是 Control Kernel v2 的 P0～P5：SQLite 权威状态、task/run、
+dispatch intent/outbox/receipt、result ingest、audit、recover 和只读投影。工作区当前干净。
+
+但 `docs/plan/2026-08-05-manager-orchestration-hardening.md` 明确仍为待实施，以下能力不能作为
+本计划的现成前提：
+
+- plan revision 的持久化确认回执。
+- standard SDLC / lightweight prototype 的 Intake 分流和执行实体初始化。
+- 真实 `sessions_spawn` 前不可绕过的 `agentId` 校验。
+- 对真实 spawn 的统一派发编排入口。
+- 全部业务 JSON 的 Schema 校验原子写入。
+- Windows 参数、锁和中断恢复加固。
+
+因此 Phase 0～5 的只读观察、遥测和影子判定可以按本计划推进；Phase 6 的自动 NUDGE 和
+manager 唤醒必须至少以前述 Manager 加固计划第 1～4 轮完成并验收为前置门槛。Phase 7 的
+受控 retry 还依赖第 5～7 轮及真实 OpenClaw session 接口验证。
+
 ## 5. 设计原则与不可破坏边界
 
 ### 5.1 单一事实源
@@ -255,11 +277,15 @@ React Dashboard（5 秒轮询）
 - 所有文本先脱敏、再截断、再推送。
 - 浏览器只接收 `USER_SAFE` 或 `INTERNAL_SUMMARY` 内容。
 - Monitor 默认仅监听 `127.0.0.1`。
+- 静态 Dashboard 只接收已脱敏 API/SSE 数据，不能读取 `control.db`、session 原始目录、
+  Agent workspace 或凭据目录。
 
 ### 5.5 故障隔离
 
 - Monitor 停止时，原 workflow 继续运行。
 - Watchdog 停止时，只丢失自动催办，不破坏控制状态。
+- Dashboard HTML 未打开、页面关闭或浏览器断开时，宿主机 Supervisor Core 和 Watchdog
+  继续运行。
 - 遥测损坏时重新构建，不从遥测库修复 `control.db`。
 - 控制库 audit 失败时，监督动作全部失败关闭。
 
@@ -272,7 +298,7 @@ React Dashboard（5 秒轮询）
 │       │                                      │               │
 │       └──────── session/completion facts ────┘               │
 └──────────────────────────┬───────────────────────────────────┘
-                           │
+                           │ commands / receipts / session facts
                  ┌─────────▼─────────┐
                  │ Control Kernel v2 │
                  │ control.db        │
@@ -289,25 +315,37 @@ React Dashboard（5 秒轮询）
 └──────┬────────┘  └───────┬────────┘       └────────┬─────────┘
        └───────────────────┼──────────────────────────┘
                            ▼
-                 ┌───────────────────┐
-                 │ Monitor Service   │
-                 │ monitor.db        │
-                 │ snapshot/projector│
-                 │ health classifier │
-                 │ SSE event hub     │
-                 └──────┬───────┬────┘
-                        │       │
-                        │       ▼
-                        │  Supervisor Watchdog
-                        │       │ supervision request
-                        │       ▼
-                        │  Manager Wake Adapter
-                        │       │ only wakes manager
-                        │       ▼
-                        │  manager verifies and acts
-                        ▼
-                 Web Dashboard
+        ┌────────────────────────────────────────────┐
+        │ Supervisor Core（宿主机原生 Node.js）      │
+        │ monitor.db / snapshot / health / SSE API   │
+        │ Watchdog / Manager Wake Adapter             │
+        └──────────────┬──────────────────┬───────────┘
+                       │                  │ supervision request/outbox
+                       │                  ▼
+                       │        manager verifies and acts
+                       │
+             HTTP/SSE（已脱敏、最小暴露）
+                       │
+                       ▼
+             Static HTML Dashboard
+          （浏览器直接打开 index.html）
 ```
+
+### 6.1 节点职责与交换信息
+
+| 节点 | 作用 | 交互对象 | 传递的信息 |
+|---|---|---|---|
+| `manager-agent` | 唯一编排者，创建任务、派发、核查、Gate、重试决策 | Control Kernel、OpenClaw、工作 Agent | command、task/context 身份、dispatch ID、session receipt、completion、监督执行结果 |
+| 工作 Agent | 执行 requirement/architecture/development/review/test/release 任务 | manager、Activity API、artifact 目录 | ACK、结构化 activity/checkpoint、result/evidence/command records、产物摘要 |
+| OpenClaw Runtime | 创建和维持隔离 session，转发消息 | manager、工作 Agent、Wake Adapter | agent ID、session key/ID、消息、session history/状态 |
+| Control Kernel | 唯一控制状态权威和事务边界 | manager、Supervisor Core | workflow/task/run/dispatch/supervision command、event、outbox、receipt、snapshot |
+| Activity API | 接收 Agent 主动上报 | 工作 Agent、Telemetry Repository | activity envelope，不接收状态迁移命令 |
+| Session Tailer | activity 缺失时读取已关联 session 的安全片段 | OpenClaw session 文件、Supervisor Core | cursor、非 thinking 文本摘要、tool start/finish、session 活跃时间 |
+| Artifact Watcher | 观察产物变化 | artifact/raw-log/worktree、Supervisor Core | 文件标识、mtime、大小、哈希、产物类型；默认不传完整内容 |
+| Supervisor Core | 聚合控制事实与遥测，生成快照、健康状态和 SSE | Control Kernel、采集器、Dashboard、Watchdog | snapshot、增量事件、health evidence、脱敏摘要 |
+| Watchdog | 定时识别疑似停滞，只创建 durable request | Supervisor Core、Control Kernel | 阈值窗口、证据摘要、幂等 supervision request |
+| Manager Wake Adapter | 消费 wake outbox，只唤醒 manager | Control Kernel、OpenClaw、manager | request ID、workflow/task/run/dispatch 身份、原因摘要；不向 worker 下达工作指令 |
+| Dashboard | 只读展示并提交受限人工监督请求 | Supervisor Core API/SSE | 只读 snapshot/event；人工操作只提交 request type、目标身份、补充说明 |
 
 ## 7. 权威数据模型扩展
 
@@ -748,7 +786,9 @@ Watchdog 不得把 task 或 workflow 恢复到历史快照。
 
 - Node.js ESM，与当前项目一致。
 - Node 内置 SQLite，避免新增数据库依赖。
-- React + Vite 构建 Dashboard。
+- Supervisor Core 作为宿主机原生进程运行。
+- Dashboard 使用原生 HTML、CSS 和 JavaScript，不引入 React、Vite 或打包器。
+- `monitor/ui/index.html` 可以由用户直接双击打开；页面只连接本机 HTTP/SSE API。
 - SSE 作为第一期实时推送。
 - `fs.watch` 快速发现 session/artifact 变化，定时 reconciliation 兜底。
 - Ajv 校验所有新增 JSON/JSONL 协议。
@@ -795,6 +835,30 @@ event: monitor-health
 - 每 30 秒重新计算健康状态。
 - Monitor 重启后从 control.db、session cursor 和 artifact 重建。
 - 发现控制投影与数据库冲突时以数据库为准并显示 Monitor DEGRADED。
+
+### 12.5 部署模式
+
+Supervisor Core 的唯一正式运行入口为宿主机命令，例如：
+
+```text
+npm run supervisor:start
+npm run supervisor:check
+```
+
+Windows 可另提供计划任务/服务包装，Linux 可提供 systemd user unit，但二者都调用同一原生
+Node.js 入口。
+
+Dashboard 不需要安装、构建或启动前端服务：
+
+1. 启动宿主机 Supervisor Core。
+2. 直接打开 `monitor/ui/index.html`。
+3. 页面从配置、URL 参数或本地设置读取 `http://127.0.0.1:<port>` API 地址。
+4. 页面先获取 snapshot，再使用 SSE sequence 接收增量；页面重新打开后按最后 sequence 补发。
+
+宿主机 API 只绑定 `127.0.0.1`。浏览器通过 `file://` 打开 HTML 时 Origin 通常为 `null`，
+服务只对 loopback 请求有条件允许该 Origin，并校验短期本地 token。SSE token 可通过一次性或
+短期查询参数传入，服务端不得把 token 写入普通访问日志。任何非 loopback 来源、未知 Origin
+或缺少 token 的写请求均拒绝。
 
 ## 13. Dashboard 页面设计
 
@@ -901,6 +965,7 @@ manager-agent
 ```text
 monitor/
 ├── server.mjs
+├── supervisor.mjs
 ├── config.mjs
 ├── control-read-model.mjs
 ├── snapshot-projector.mjs
@@ -918,19 +983,9 @@ monitor/
 ├── telemetry-repository.mjs
 └── ui/
     ├── index.html
-    ├── src/
-    │   ├── App.tsx
-    │   ├── api.ts
-    │   ├── store.ts
-    │   └── components/
-    │       ├── Overview.tsx
-    │       ├── WorkflowBoard.tsx
-    │       ├── AgentTree.tsx
-    │       ├── TaskDrawer.tsx
-    │       ├── ActivityFeed.tsx
-    │       ├── HealthEvidence.tsx
-    │       └── SupervisionPanel.tsx
-    └── package.json
+    ├── app.js
+    ├── styles.css
+    └── config.example.js
 
 contracts/agent-activity.schema.json
 contracts/agent-checkpoint.schema.json
@@ -955,6 +1010,7 @@ tests/monitor-watchdog.test.mjs
 tests/monitor-supervision.test.mjs
 tests/monitor-http.test.mjs
 tests/monitor-sse.test.mjs
+tests/monitor-static-dashboard.test.mjs
 tests/manager-wake-outbox.test.mjs
 tests/fixtures/monitor/
 ```
@@ -994,19 +1050,22 @@ docs/current-progress-assessment.md
 
 工作：
 
-1. 编写 ADR：允许常驻 Monitor、Watchdog 和只唤醒 manager 的 Wake Adapter。
+1. 编写 ADR：允许常驻 Monitor、Watchdog 和只唤醒 manager 的 Wake Adapter；明确
+   Supervisor Core 原生运行，Dashboard 为可直接打开的静态 HTML。
 2. 确认 Monitor 对 `control.db` 的只读连接方式。
 3. 探测真实 OpenClaw session 目录和 JSONL 格式。
 4. 确认 `sessions_send`、manager 唤醒和 session 查询接口。
 5. 统计现有 workflow/task/run/dispatch/session 规模。
 6. 冻结 activity、monitor event 和 supervision 契约。
 7. 定义敏感字段与脱敏规则。
+8. 记录 Manager 编排加固计划与本计划的依赖矩阵；确认 Phase 6/7 的进入门槛。
 
 验收：
 
 - 不修改 OpenClaw 配置。
 - 不改变现有 workflow/task 状态。
 - 形成 baseline 文档和 ADR。
+- Dashboard 未打开时，Supervisor Core 的启动和健康检查可通过。
 
 ### Phase 1：Control Kernel 只读模型与监督表（3～4 人日）
 
@@ -1033,7 +1092,7 @@ docs/current-progress-assessment.md
 
 工作：
 
-1. 实现 Monitor server 和配置加载。
+1. 实现宿主机原生 Supervisor Core/Monitor server 和配置加载。
 2. 只读查询 `control.db`。
 3. 构建 workflow/task/run/dispatch/session 基础节点。
 4. 提供 health、workflow、snapshot、events API。
@@ -1045,6 +1104,7 @@ docs/current-progress-assessment.md
 - 不写 `control.db`。
 - 没有 activity 时仍能展示完整控制状态。
 - Monitor 停止不影响现有测试和工作流。
+- Dashboard HTML 未打开时，API、健康计算和 Watchdog 相关单元测试仍通过。
 
 ### Phase 3：Activity、Session Tailer 与脱敏（3～4 人日）
 
@@ -1081,12 +1141,14 @@ docs/current-progress-assessment.md
 6. 状态、Agent、task、事件类型筛选。
 7. SSE 断线重连和 sequence 补发。
 8. 空状态、DEGRADED 和旧 workflow 降级展示。
+9. 提供可直接打开的 `index.html`、原生 JavaScript 数据层和 CSS，不要求 `npm install` 或构建。
 
 验收：
 
 - 用户能从 workflow 下钻到 task/run/session。
 - 每个异常状态都能展示判定证据和置信度。
 - 浏览器刷新或断线后不丢活动事件。
+- 页面关闭后 Supervisor Core 继续扫描；重新打开 HTML 后通过 snapshot/sequence 恢复显示。
 
 ### Phase 5：Watchdog 影子模式（2～3 人日）
 
@@ -1110,6 +1172,10 @@ docs/current-progress-assessment.md
 
 目标：形成真正的自动监督闭环。
 
+进入条件：`2026-08-05-manager-orchestration-hardening.md` 第 1～4 轮已经代码化并通过验收，且
+真实 OpenClaw 的 manager 唤醒、session 查询和 `sessions_send` 接口已探测确认。否则保持
+Watchdog shadow mode，不执行外部动作。
+
 工作：
 
 1. Watchdog 创建幂等 supervision request 和 wake outbox。
@@ -1131,6 +1197,8 @@ docs/current-progress-assessment.md
 
 目标：处理真正失联或失败的任务。
 
+进入条件：Manager 加固第 5～7 轮通过，Windows/中断恢复和原子写入边界已经验证。
+
 工作：
 
 1. 实现 RETRY_REVIEW，而非 Watchdog 直接 retry。
@@ -1150,12 +1218,13 @@ docs/current-progress-assessment.md
 工作：
 
 1. 运行完整测试和故障注入。
-2. 完成 Windows/Linux 启动脚本。
+2. 完成 Windows/Linux 原生 Supervisor Core 启动脚本和静态 HTML 看板打开说明。
 3. 日志轮转和 telemetry retention。
 4. 本地鉴权、CSRF 和安全 header。
 5. 性能基线与容量测试。
 6. 更新架构、恢复、排障、README、CHANGELOG 和完成度评估。
 7. 先 shadow rollout，再开启自动 NUDGE，最后开启受控 retry。
+8. 执行“看板未打开”“页面关闭”“浏览器重启并恢复 sequence”三类独立故障测试。
 
 总估算：约 22～30 人日。MVP 看板为 Phase 0～4；真正的自动监督必须完成 Phase 5～6。
 
@@ -1242,6 +1311,8 @@ docs/current-progress-assessment.md
 - session 丢失但 lease 尚未到期。
 - SQLite busy/locked。
 - SSE 连接大量断开重连。
+- Dashboard HTML 未打开时 Supervisor Core 正常启动和监督。
+- 页面关闭、刷新或浏览器重启时不影响 Watchdog，并能在重新打开后恢复 snapshot/sequence。
 
 ### 16.8 安全测试
 
@@ -1252,6 +1323,8 @@ docs/current-progress-assessment.md
 - 监督命令不能指向不存在或不匹配的 Agent。
 - 本地 API 默认拒绝非允许 origin。
 - 日志不记录凭据和完整 session 内容。
+- 静态 Dashboard 不能通过浏览器文件 API 读取控制库、遥测库、session、workspace 或凭据目录。
+- `file://` Dashboard 访问宿主机 API 时必须通过 loopback、短期 token、Origin 和最小 CORS 校验。
 
 ## 17. 性能与容量指标
 
@@ -1293,13 +1366,14 @@ SSE 客户端           20
 
 ### 18.1 上线顺序
 
-1. 只读 Monitor。
+1. 宿主机原生只读 Supervisor Core。
 2. Activity/Session Tailer。
-3. Dashboard。
+3. 静态 HTML Dashboard。
 4. Watchdog 影子模式。
-5. 自动 NUDGE。
-6. RECONCILE。
-7. 受控 retry 和高风险命令。
+5. Manager 加固前置门槛验收。
+6. 自动 NUDGE。
+7. RECONCILE。
+8. 受控 retry 和高风险命令。
 
 每一阶段通过验收后才开启下一阶段功能开关。
 
@@ -1318,6 +1392,7 @@ controlled_retry_enabled: false
 ### 18.3 回滚
 
 - 关闭 Monitor 不影响 workflow。
+- 关闭 Dashboard 页面不影响 Monitor、Watchdog、Wake Adapter 和 workflow。
 - 关闭 Watchdog 后不再创建自动请求。
 - 关闭 Wake Adapter 后请求留在 outbox 等待恢复。
 - `monitor.db` 可删除重建。
@@ -1344,6 +1419,7 @@ controlled_retry_enabled: false
 - 每个异常都有证据和置信度。
 - SSE 断线后可以补发事件。
 - Monitor 重启后可以确定性重建。
+- Dashboard 未打开时所有监督能力正确运行；打开或关闭 HTML 只影响图形化展示。
 
 ### 监督
 
@@ -1363,13 +1439,14 @@ controlled_retry_enabled: false
 - Runtime Guard、Gate、审批和 Git 规则不被绕过。
 - thinking、凭据、完整 prompt 和未脱敏日志不进入浏览器。
 - Monitor、Watchdog 或 Wake Adapter 故障不破坏主 workflow。
+- 静态 Dashboard 无权直接读取数据库、session 原文或 Agent workspace。
 
 ## 20. 推荐实施决策
 
 建议批准以下架构决策：
 
-1. **采用常驻 Node.js Monitor 服务。** 当前“没有常驻编排器”的原则调整为“没有第二个
-   状态权威和没有直接调度工作 Agent 的服务”。
+1. **采用宿主机原生常驻 Node.js Supervisor Core。** 当前“没有常驻编排器”的原则调整为
+   “没有第二个状态权威和没有直接调度工作 Agent 的服务”。
 2. **允许 Watchdog 自动创建监督请求。** Watchdog 只做检测和 durable request，不执行
    工作流动作。
 3. **允许 Wake Adapter 唤醒 manager-agent。** 它不能直接联系工作 Agent。
@@ -1378,6 +1455,10 @@ controlled_retry_enabled: false
 6. **第一期使用 SSE。** 双向控制仍走 HTTP request → Control Kernel → manager 闭环。
 7. **禁止自动状态回滚。** 使用核查、新 attempt、HOLD 和人工审批替代。
 8. **先影子模式，再自动催办。** 先验证误报率，再开启外部动作。
+9. **Dashboard 使用可直接打开的静态 HTML。** 页面只连接宿主机脱敏 API/SSE，不引入
+   容器或前端构建链，不参与任何控制事实写入。
+10. **自动监督服从 Manager 加固门槛。** Phase 0～5 可先实施；Phase 6/7 必须等待对应的
+    Manager 编排、身份校验、不可绕过派发、原子写入和恢复能力验收通过。
 
 ## 21. 里程碑摘要
 
