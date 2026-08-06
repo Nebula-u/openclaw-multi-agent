@@ -69,7 +69,7 @@
 
 ## 其他较大改动及效果
 
-- **运行时防漂移与安装同步：** `runtime-bundle.mjs` 对 package workspace、规则、模板和 skill 生成摘要；Manager 恢复前验证安装副本与源码。历史直接覆盖 runtime 控制文件的 8 个脚本已禁用并移入取证目录。8/5 已完成受管理 7 Agent 的备份、重装、校验和原路由恢复。
+- **运行时防漂移与安装同步：** `runtime-bundle.mjs` 对 package workspace、规则、模板和 skill 生成摘要；Manager 恢复前验证安装副本与源码。历史直接覆盖 runtime 控制文件的 8 个脚本已禁用并移入取证目录。8/6 已完成受管理 7 Agent 的备份、重装、校验和原路由恢复；安装器同时修复了 OpenClaw 诊断输出和配置锁冲突兼容性。
 - **任务、派发、结果三段式闭环：** task 注册锁定 contract set/output version；派发必须校验 context identity、输入哈希、依赖、Agent policy 和绝对路径；completion 必须闭合 run、session 和所有必需产物。它解决了“控制层显示完成、实际文件缺失”的断层。
 - **遗留 v1 取证隔离：** 4 个旧 workflow 被复制、哈希、只读归档，再以 `QUARANTINED` tombstone 导入 v2；源目录未修改。这样既保留审计证据，也避免把无法证明正确的历史当作可恢复当前状态。
 - **模型路由、会话预算与截断：** 先清理 Manager 会话级模型覆盖、设 80% 软预算与文件化恢复，再统一 7 Agent 到 DeepSeek V4 Pro Chat Completions。8/5 将明确 `maxTokens` 提升至 49,152，解决长 HTML 等输出被旧上限截断的问题。

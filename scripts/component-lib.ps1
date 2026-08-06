@@ -28,6 +28,34 @@ function Read-JsonFile {
   }
 }
 
+function ConvertFrom-OpenClawJsonOutput {
+  param(
+    [Parameter(Mandatory)][AllowEmptyString()][string]$Output,
+    [string]$Description = 'OpenClaw JSON output'
+  )
+
+  $ansiPattern = [char]27 + '\[[0-9;?]*[ -/]*[@-~]'
+  $clean = [regex]::Replace($Output, $ansiPattern, '')
+  try {
+    return $clean | ConvertFrom-Json -ErrorAction Stop
+  } catch {
+    $lines = @($clean -split "\r?\n")
+    for ($start = 0; $start -lt $lines.Count; $start++) {
+      $first = $lines[$start].TrimStart()
+      if (-not ($first.StartsWith('[') -or $first.StartsWith('{'))) { continue }
+      for ($end = $lines.Count - 1; $end -ge $start; $end--) {
+        $candidate = ($lines[$start..$end] -join [Environment]::NewLine).Trim()
+        try {
+          return $candidate | ConvertFrom-Json -ErrorAction Stop
+        } catch {
+          continue
+        }
+      }
+    }
+  }
+  throw "$Description 不可解析；OpenClaw 可能没有返回完整 JSON。"
+}
+
 function Write-JsonAtomic {
   param(
     [Parameter(Mandatory)]$Value,

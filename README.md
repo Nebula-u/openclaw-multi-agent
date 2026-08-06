@@ -70,14 +70,24 @@ npm install
 当源码 workspace 规则更新、或现有 runtime 缺少 bundle manifest 时，使用受限重装脚本同步**当前已安装**的项目 Agent。它仅处理 workspace/agentDir 与本项目 manifest 完全匹配的 Agent；未安装的 package（例如 `dialogue-agent`）不会被顺带注册。脚本会先备份 OpenClaw 配置及这些 Agent 的 runtime workspace/state，保留已有的每 Agent 模型路由，随后删除、重建、更新 `agents.list` 并校验 runtime bundle。
 
 本仓库修改 `agents/*/workspace/` 下的规则后，也必须执行该同步流程；否则运行中的 Agent 仍使用旧 workspace 规则。
+重装前请先暂停 OpenClaw Gateway，避免 Gateway 内存中的 Agent catalog 与配置文件产生冲突；完成后再启动：
 
 ```powershell
 # 先只查看将处理哪些 Agent
 pwsh -NoProfile -File scripts/reinstall-agents.ps1 -RuntimeRoot runtime
 
+# 重装前停止 Gateway
+openclaw gateway stop
+
 # 执行卸载、重新安装、配置与 runtime 同步
 pwsh -NoProfile -File scripts/reinstall-agents.ps1 -Apply -Yes -RuntimeRoot runtime
+
+# 重装完成后启动 Gateway
+openclaw gateway start
 ```
+
+脚本会备份到 `runtime/control/reinstall-backups/<timestamp>/`；如果 OpenClaw CLI 输出诊断
+文本再跟随 JSON，安装器会提取并校验 JSON，而不是把诊断文本误判为配置内容。
 
 ### Runtime Guard（artifact/Gate 与遗留 v1）
 

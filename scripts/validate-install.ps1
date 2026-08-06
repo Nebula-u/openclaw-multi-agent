@@ -93,7 +93,7 @@ try {
 case "${1:-}" in
   --version) printf 'validation-openclaw 0\n' ;;
   config) printf '/tmp/validation-openclaw-config.json\n' ;;
-  agents) printf '[]\n' ;;
+  agents) printf 'validation diagnostic before JSON\n' >&2; printf '[]\n' ;;
   *) exit 0 ;;
 esac
 '@ | Set-Content -LiteralPath (Join-Path $validationBin 'openclaw') -NoNewline
@@ -101,7 +101,7 @@ esac
 @echo off
 if "%~1"=="--version" (echo validation-openclaw 0 & exit /b 0)
 if "%~1"=="config" (echo C:\validation-openclaw-config.json & exit /b 0)
-if "%~1"=="agents" (echo [] & exit /b 0)
+if "%~1"=="agents" (1>&2 echo validation diagnostic before JSON & echo [] & exit /b 0)
 exit /b 0
 '@ | Set-Content -LiteralPath (Join-Path $validationBin 'openclaw.cmd') -NoNewline
   if (-not $IsWindows) {

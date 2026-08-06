@@ -41,27 +41,26 @@ function Invoke-OpenClaw {
 function Remove-ManagedAgentWithRetry {
   param(
     [Parameter(Mandatory)][string]$AgentId,
-    [int]$MaxAttempts = 5
+    [int]$MaxAttempts = 8
   )
 
   for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
     $deleted = Invoke-OpenClaw @('agents','delete',$AgentId,'--force','--json')
     if ($deleted.ExitCode -eq 0) { return }
 
-    $isRevisionConflict = $deleted.Output -match 'ConfigMutationConflictError'
-    if (-not $isRevisionConflict -or $attempt -eq $MaxAttempts) {
+    $isTransientConflict = $deleted.Output -match 'ConfigMutationConflictError|file lock timeout|configuration changed|stale revision'
+    if (-not $isTransientConflict -or $attempt -eq $MaxAttempts) {
       throw "删除 Agent '$AgentId' 失败：$($deleted.Output)"
     }
 
     # OpenClaw mutates configuration optimistically.  Refresh its config view before
     # retrying so a preceding delete has time to become the new revision.
-    Write-Host "删除 $AgentId 时遇到配置版本冲突，正在重试 ($attempt/$MaxAttempts)..." -ForegroundColor Yellow
+    Write-Host "删除 $AgentId 时遇到配置写入冲突，正在重试 ($attempt/$MaxAttempts)..." -ForegroundColor Yellow
     $refresh = Invoke-OpenClaw @('config','get','agents.list','--json')
     if ($refresh.ExitCode -ne 0) {
       throw "删除 Agent '$AgentId' 后无法刷新 agents.list：$($refresh.Output)"
     }
-    try { $remaining = @($refresh.Output | ConvertFrom-Json) }
-    catch { throw "删除 Agent '$AgentId' 后 agents.list JSON 无法解析。" }
+    $remaining = @(ConvertFrom-OpenClawJsonOutput -Output $refresh.Output -Description "删除 Agent '$AgentId' 后 agents.list JSON")
     if (@($remaining | Where-Object { [string]$_.id -eq $AgentId }).Count -eq 0) {
       # Some OpenClaw versions persist the deletion but report the stale-revision
       # conflict to the caller.  Treat the observed desired state as success.
@@ -101,8 +100,7 @@ $configPath = $configFile.Output.Trim()
 
 $configList = Invoke-OpenClaw @('config','get','agents.list','--json')
 if ($configList.ExitCode -ne 0) { throw "无法读取 agents.list：$($configList.Output)" }
-try { $configuredAgents = @($configList.Output | ConvertFrom-Json) }
-catch { throw 'agents.list JSON 无法解析。' }
+$configuredAgents = @(ConvertFrom-OpenClawJsonOutput -Output $configList.Output -Description 'agents.list JSON')
 
 $packages = @(Get-AgentPackages -ProjectRoot $ProjectRoot -RuntimeRootAbs $RuntimeRootAbs -ModelConfig $ModelConfig | Where-Object register)
 $configuredById = @{}

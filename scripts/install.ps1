@@ -37,6 +37,21 @@ function Invoke-OpenClaw {
   return [pscustomobject]@{ ExitCode = $LASTEXITCODE; Output = ($out -join "`n") }
 }
 
+function Invoke-OpenClawMutation {
+  param(
+    [Parameter(Mandatory)][string[]]$OcArgs,
+    [int]$MaxAttempts = 8
+  )
+  for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
+    $result = Invoke-OpenClaw $OcArgs
+    if ($result.ExitCode -eq 0) { return $result }
+    $transient = $result.Output -match 'ConfigMutationConflictError|file lock timeout|configuration changed|stale revision'
+    if (-not $transient -or $attempt -eq $MaxAttempts) { return $result }
+    Write-Host "OpenClaw 配置写入冲突，正在重试 ($attempt/$MaxAttempts)..." -ForegroundColor Yellow
+    Start-Sleep -Milliseconds (500 * $attempt)
+  }
+}
+
 function Get-AgentIndex {
   param($List, [string]$Id)
   for ($i = 0; $i -lt @($List).Count; $i++) {
@@ -50,7 +65,7 @@ function Set-OpenClawJson {
   $json = $Value | ConvertTo-Json -Depth 10 -Compress
   $dry = Invoke-OpenClaw @('config','set',$Path,$json,'--strict-json','--dry-run')
   if ($dry.ExitCode -ne 0) { throw "config set dry-run 失败：$Path`n$($dry.Output)" }
-  $write = Invoke-OpenClaw @('config','set',$Path,$json,'--strict-json')
+  $write = Invoke-OpenClawMutation @('config','set',$Path,$json,'--strict-json')
   if ($write.ExitCode -ne 0) { throw "config set 写入失败：$Path`n$($write.Output)" }
   $Changes.Add("set $Path")
 }
@@ -95,7 +110,7 @@ $ManagerAllow = @(Get-ManagerAllowAgents $Packages)
 $existingResult = Invoke-OpenClaw @('agents','list','--json')
 $ExistingAgents = @()
 if ($existingResult.ExitCode -eq 0) {
-  try { $ExistingAgents = @($existingResult.Output | ConvertFrom-Json) } catch { throw 'openclaw agents list --json 输出不可解析。' }
+  $ExistingAgents = @(ConvertFrom-OpenClawJsonOutput -Output $existingResult.Output -Description 'openclaw agents list --json 输出')
 }
 $ExistingIds = @($ExistingAgents | ForEach-Object { [string]$_.id })
 
@@ -228,14 +243,14 @@ try {
     if ($ExistingIds -contains $p.id) { continue }
     $args = @('agents','add',$p.id,'--non-interactive','--workspace',$p.workspace,'--agent-dir',$p.agentDir,'--json')
     if ($p.model) { $args += @('--model',$p.model) }
-    $created = Invoke-OpenClaw $args
+    $created = Invoke-OpenClawMutation $args
     if ($created.ExitCode -ne 0) { throw "创建 Agent '$($p.id)' 失败：$($created.Output)" }
     $changes.Add("agents add $($p.id)")
   }
 
   $listNowResult = Invoke-OpenClaw @('config','get','agents.list','--json')
   if ($listNowResult.ExitCode -ne 0) { throw "无法读取 agents.list：$($listNowResult.Output)" }
-  $listNow = @($listNowResult.Output | ConvertFrom-Json)
+  $listNow = @(ConvertFrom-OpenClawJsonOutput -Output $listNowResult.Output -Description 'agents.list 输出')
   foreach ($p in $RegisteredPackages) {
     $idx = Get-AgentIndex -List $listNow -Id $p.id
     if ($idx -lt 0) { throw "配置中未找到 Agent '$($p.id)'。" }

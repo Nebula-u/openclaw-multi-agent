@@ -1,5 +1,21 @@
 # Changelog
 
+### Agent reinstall：兼容 OpenClaw 诊断输出、锁冲突与运行时同步
+
+#### 改动了什么
+
+- PowerShell 安装、重装和组件管理脚本现在能从 OpenClaw 混入诊断行的输出中提取合法 JSON。
+- 对配置版本冲突、文件锁超时和 stale revision 增加有限退避重试，避免删除/添加 Agent 的瞬时并发失败。
+- 验证器增加“诊断文本 + JSON”回归场景。
+- 已完成本机 7 个项目 Agent 的实际重装；运行时 Manager/Developer 规则与源码哈希一致，runtime bundle 校验通过。
+
+#### 验证
+
+- `pwsh -NoProfile -File scripts/validate-install.ps1 -SkipOpenClaw`：124 项通过。
+- `node scripts/runtime-bundle.mjs verify ...`：通过，105 entries 无 drift。
+- `openclaw agents list --json`：main + 7 个项目 Agent 均存在。
+- OpenClaw Gateway 已重新启动，`openclaw gateway status`：running / connectivity probe ok。
+
 ### Monitor Phase 9：固定本地配置与零输入连接
 
 #### 改动了什么

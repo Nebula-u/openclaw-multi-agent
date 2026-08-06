@@ -258,7 +258,8 @@ switch ($Command) {
       if ($package.register) { Invoke-CatalogSync }
       $listed = Invoke-OpenClaw @('agents','list','--json')
       if ($listed.ExitCode -eq 0) {
-        $ids = @($listed.Output | ConvertFrom-Json | ForEach-Object { [string]$_.id })
+        $ids = @(ConvertFrom-OpenClawJsonOutput -Output $listed.Output -Description 'openclaw agents list --json 输出' |
+          ForEach-Object { [string]$_.id })
         if ($ids -contains $Id) {
           $deleted = Invoke-OpenClaw @('agents','delete',$Id,'--force','--json')
           if ($deleted.ExitCode -ne 0) { throw "OpenClaw Agent 删除失败：$($deleted.Output)" }
