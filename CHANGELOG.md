@@ -6,6 +6,7 @@
 
 - Supervisor Core 自动读取项目根目录的 `.env`，本地默认 token 固定为 `openclaw-local-monitor`。
 - 新增 `/api/client-config`，静态 Dashboard 启动时自动取得本地 token 并连接，不再要求手工复制。
+- 看板每次启动优先探测当前默认地址，并自动替换浏览器中残留的旧端口或旧 token。
 - activity/checkpoint 上报脚本自动复用 Monitor 配置，不再要求当前终端预先设置 `MONITOR_TOKEN`。
 - 默认端口由 `4310` 调整为 `4319`；本机 `4310` 已被 `QQ.exe` 占用，是此前 `Failed to fetch` 的直接原因。
 - 增加受版本控制的 `.env.example`；实际 `.env` 继续被 Git 忽略。

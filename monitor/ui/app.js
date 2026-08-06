@@ -80,21 +80,19 @@
     try { const [health,workflows,supervision] = await Promise.all([request('/api/health'),request('/api/workflows'),request('/api/supervision')]); state.workflows = workflows.workflows || []; state.supervision = supervision.requests || []; if (!state.workflows.some((item) => item.workflow_id === state.selectedId)) state.selectedId = state.workflows[0]?.workflow_id || null; renderMetrics(health); renderSelected(); setConnection(health.ok ? 'online':'degraded',health.status); connectStream(); }
     catch (error) { setConnection('offline','OFFLINE'); $('metric-control').textContent = 'UNREACHABLE'; addFeed({type:'monitor-health',timestamp:new Date().toISOString(),payload:{error:error.message}}); } }
   async function bootstrap() {
-    if (!state.token) {
-      for (const apiUrl of [...new Set([state.apiUrl, defaultApiUrl])]) {
-        try {
-          const response = await fetch(`${apiUrl}/api/client-config`);
-          if (!response.ok) continue;
-          const config = await response.json();
-          state.apiUrl = apiUrl;
-          state.token = config.token || '';
-          $('api-url').value = state.apiUrl;
-          $('api-token').value = state.token;
-          localStorage.setItem('monitor.apiUrl', state.apiUrl);
-          sessionStorage.setItem('monitor.token', state.token);
-          break;
-        } catch (_) { /* try the configured fallback before showing offline */ }
-      }
+    for (const apiUrl of [...new Set([defaultApiUrl, state.apiUrl])]) {
+      try {
+        const response = await fetch(`${apiUrl}/api/client-config`);
+        if (!response.ok) continue;
+        const config = await response.json();
+        state.apiUrl = apiUrl;
+        state.token = config.token || '';
+        $('api-url').value = state.apiUrl;
+        $('api-token').value = state.token;
+        localStorage.setItem('monitor.apiUrl', state.apiUrl);
+        sessionStorage.setItem('monitor.token', state.token);
+        break;
+      } catch (_) { /* try the saved address after the configured default */ }
     }
     await connect();
   }
