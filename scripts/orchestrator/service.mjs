@@ -93,7 +93,7 @@ function taskMessage(task, intent) {
 export async function runOpenClawAgent({ agentId, sessionId, messagePath, timeoutSeconds = 900, onStarted }) {
   return new Promise((resolveRun, rejectRun) => {
     const child = spawn('openclaw', ['agent', '--agent', agentId, '--session-id', sessionId, '--message-file', messagePath,
-      '--thinking', 'off', '--timeout', String(timeoutSeconds), '--json'], { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+      '--thinking', 'off', '--timeout', String(timeoutSeconds), '--json'], { shell: true, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
     let stdout = ''; let stderr = ''; let started = false;
     child.stdout.setEncoding('utf8'); child.stderr.setEncoding('utf8');
     child.stdout.on('data', (chunk) => { stdout += chunk; });

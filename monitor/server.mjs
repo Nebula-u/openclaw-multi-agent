@@ -79,6 +79,7 @@ export function createMonitorServer(config, { database: providedDatabase = null,
       protocol_version: workflow.protocol_version, workflow_id: workflow.workflow_id, revision: workflow.revision,
       phase: workflow.phase, condition: workflow.condition, outcome: workflow.outcome, status_reason: workflow.status_reason ?? null,
       created_at: workflow.created_at, updated_at: workflow.updated_at, tasks: (workflow.tasks ?? []).map(publicTask),
+      history_tasks: (workflow.history_tasks ?? []).map(publicTask),
     })),
   });
   let internalSnapshot = createControlSnapshot(database);
@@ -132,8 +133,11 @@ export function createMonitorServer(config, { database: providedDatabase = null,
       }
       if (request.method === 'GET' && path === '/api/health') {
         const audit = auditControlDatabase(database);
-        return sendJson(response, audit.ok ? 200 : 503, { ok: audit.ok, status: audit.ok ? 'HEALTHY' : 'DEGRADED',
-          sequence: hub.sequence, audit, generated_at: new Date().toISOString() }, cors);
+        // A reachable read-only monitor must not appear disconnected solely
+        // because it detected a control-data inconsistency.  The body carries
+        // the authoritative health state; 5xx is reserved for an API failure.
+        return sendJson(response, 200, { ok: audit.ok, status: audit.ok ? 'HEALTHY' : 'DEGRADED',
+          api_reachable: true, sequence: hub.sequence, audit, generated_at: new Date().toISOString() }, cors);
       }
       if (request.method === 'GET' && path === '/api/workflows') {
         return sendJson(response, 200, { ok: true, workflows: snapshot.workflows, generated_at: snapshot.generated_at }, cors);

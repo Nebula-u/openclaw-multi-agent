@@ -7,6 +7,7 @@ import test from 'node:test';
 import { createControlRepository, openControlDatabase } from '../scripts/control-core/repository.mjs';
 import { createTaskRepository } from '../scripts/control-core/task-repository.mjs';
 import { auditControlDatabase } from '../scripts/control-core/audit.mjs';
+import { createControlSnapshot } from '../scripts/control-core/read-model.mjs';
 import { stagedOutputPath } from '../scripts/runtime-core/structured-output-ingestion.mjs';
 
 const ROOT = resolve(import.meta.dirname, '..');
@@ -208,6 +209,19 @@ test('database audit detects task snapshot and event status divergence', () => {
   } finally { value.close(); }
 });
 
+test('one workflow task type and assigned Agent has only one active task until it is superseded', () => {
+  const value = setup();
+  try {
+    value.tasks.register(value.task);
+    const replacement = { ...value.task, task_id: 'TASK-task-kernel-replacement', run_id: 'RUN-task-kernel-replacement' };
+    assert.throws(() => value.tasks.register(replacement), (error) => error.code === 'TASK_ACTIVE_DUPLICATE');
+    const superseded = value.tasks.supersede({ task_id: value.task.task_id, reason: 'replaced by corrected task', occurred_at: '2026-08-05T08:01:00.000Z' });
+    assert.equal(superseded.task.status, 'SUPERSEDED');
+    assert.equal(value.tasks.register(replacement).task.task_id, replacement.task_id);
+    assert.equal(auditControlDatabase(value.database).ok, true);
+  } finally { value.close(); }
+});
+
 test('controlled retry requires terminal failed dispatch and creates a new immutable run', () => {
   const value = setup();
   try {
@@ -227,6 +241,8 @@ test('controlled retry requires terminal failed dispatch and creates a new immut
     assert.equal(retried.task.attempt, 2);
     assert.equal(retried.event.from_status, 'FAILED');
     assert.equal(value.database.prepare('SELECT COUNT(*) AS count FROM task_runs WHERE task_id=?').get(value.task.task_id).count, 2);
+    const snapshot = createControlSnapshot(value.database);
+    assert.equal(snapshot.workflows[0].tasks[0].dispatches.length, 0, 'a retry snapshot must not include the prior run dispatch');
     assert.equal(auditControlDatabase(value.database).ok, true);
     assert.throws(() => value.tasks.retry({ ...nextTask, run_id: 'RUN-third', attempt: 3, artifact_root_abs: join(value.directory, 'third'),
       context_manifest_path_abs: join(value.directory, 'third', 'context.json') }), (error) => error.code === 'TASK_RETRY_SOURCE_INVALID');

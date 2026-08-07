@@ -534,7 +534,7 @@ function addSchemaErrors(errors, value, schema, source, options = {}) {
 
 function redactSensitiveExcerpt(content) {
   return content
-    .replaceAll(/((?:api[_-]?key|authorization|password|secret|token)\s*[=:]\s*)[^\s,;"']+/giu, '$1<REDACTED>')
+    .replaceAll(/((?:"?(?:api[_-]?key|authorization|password|secret|token)"?\s*[=:]\s*["']?))[^\s,;"']+/giu, '$1<REDACTED>')
     .replaceAll(/(bearer\s+)[A-Za-z0-9._~+\/-]+/giu, '$1<REDACTED>')
     .slice(0, LOG_EXCERPT_LIMIT);
 }

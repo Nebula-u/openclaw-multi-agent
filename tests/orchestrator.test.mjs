@@ -7,7 +7,11 @@ import test from 'node:test';
 import { createControlRepository, openControlDatabase } from '../scripts/control-core/repository.mjs';
 import { createTaskRepository } from '../scripts/control-core/task-repository.mjs';
 import { auditControlDatabase } from '../scripts/control-core/audit.mjs';
-import { stagedOutputPath } from '../scripts/runtime-core/structured-output-ingestion.mjs';
+import {
+  outputIngestionFailureReceiptPath,
+  stagedOutputPath,
+  validationFailureLogPath,
+} from '../scripts/runtime-core/structured-output-ingestion.mjs';
 import { dispatchReadyTask } from '../scripts/orchestrator/service.mjs';
 
 const ROOT = resolve(import.meta.dirname, '..');
@@ -92,5 +96,63 @@ test('unsupported Gateway response becomes a durable local failure rather than a
       assert.equal(tasks.dispatches(value.task.task_id)[0].status, 'FAILED');
       assert.equal(auditControlDatabase(database).ok, true, JSON.stringify(auditControlDatabase(database)));
     } finally { database.close(); }
+  } finally { value.close(); }
+});
+
+test('a local spawn ENOENT failure without an Agent receipt passes the control audit', async () => {
+  const value = setup();
+  try {
+    const result = await dispatchReadyTask({
+      projectRoot: ROOT,
+      databasePath: value.databasePath,
+      taskId: value.task.task_id,
+      runner: async () => {
+        const error = new Error('spawn openclaw ENOENT');
+        error.code = 'ENOENT';
+        throw error;
+      },
+    });
+    assert.equal(result.ok, false);
+    assert.equal(result.error.code, 'ENOENT');
+    const database = openControlDatabase(value.databasePath);
+    try {
+      const tasks = createTaskRepository(ROOT, database);
+      assert.equal(tasks.get(value.task.task_id).status, 'FAILED');
+      assert.equal(tasks.dispatches(value.task.task_id)[0].status, 'FAILED');
+      assert.equal(auditControlDatabase(database).ok, true, JSON.stringify(auditControlDatabase(database)));
+    } finally { database.close(); }
+  } finally { value.close(); }
+});
+
+test('invalid staged JSON is preserved and recorded by local ingestion before the task fails', async () => {
+  const value = setup();
+  try {
+    const resultOutput = value.task.structured_outputs.find((output) => output.path_abs === value.paths.result);
+    const rawPath = stagedOutputPath(value.task, resultOutput);
+    writeFileSync(rawPath, '{"schema_version": 1, "token": "secret-value",', 'utf8');
+    const result = await dispatchReadyTask({
+      projectRoot: ROOT,
+      databasePath: value.databasePath,
+      taskId: value.task.task_id,
+      runner: async (input) => {
+        input.onStarted();
+        return { started: true, exit_code: 0, stdout: '{"ok":true}', stderr: '' };
+      },
+    });
+    assert.equal(result.ok, false);
+    assert.equal(result.error.code, 'TASK_OUTPUT_INGESTION_INVALID');
+    assert.equal(readFileSync(rawPath, 'utf8'), '{"schema_version": 1, "token": "secret-value",');
+    const failure = JSON.parse(readFileSync(outputIngestionFailureReceiptPath(value.task, resultOutput), 'utf8'));
+    assert.equal(failure.record_type, 'STRUCTURED_OUTPUT_INGESTION_FAILURE');
+    assert.equal(failure.failure_code, 'TASK_OUTPUT_INGESTION_INVALID');
+    assert.equal(failure.validation_error.stage, 'local_output_ingestion');
+    assert.equal(failure.validation_error.invalid_content_excerpt.includes('secret-value'), false);
+    assert.equal(failure.validation_error.invalid_content_excerpt.includes('<REDACTED>'), true);
+    const lines = readFileSync(validationFailureLogPath(value.task), 'utf8').trim().split('\n').map((line) => JSON.parse(line));
+    assert.equal(lines.length, 1);
+    assert.equal(lines[0].validator_errors[0].code, 'JSON_PARSE_ERROR');
+    const database = openControlDatabase(value.databasePath);
+    try { assert.equal(auditControlDatabase(database).ok, true, JSON.stringify(auditControlDatabase(database))); }
+    finally { database.close(); }
   } finally { value.close(); }
 });

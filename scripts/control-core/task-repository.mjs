@@ -290,6 +290,12 @@ export function createTaskRepository(projectRootInput, database) {
         if (!workflow) fail('TASK_WORKFLOW_NOT_FOUND', `workflow does not exist: ${task.workflow_id}`);
         const workflowState = parseJson(workflow.state_json);
         if (workflowState.condition === 'TERMINAL') fail('TASK_WORKFLOW_TERMINAL', 'cannot register a task on a terminal workflow');
+        const conflicting = database.prepare(`SELECT task_id, status FROM tasks
+          WHERE workflow_id=? AND task_type=? AND assigned_agent=?
+            AND status NOT IN ('COMPLETED', 'FAILED', 'CANCELLED', 'SUPERSEDED', 'LOST')
+          ORDER BY created_at LIMIT 1`).get(task.workflow_id, task.task_type, task.assigned_agent);
+        if (conflicting) fail('TASK_ACTIVE_DUPLICATE', `active task already exists for ${task.workflow_id}/${task.task_type}/${task.assigned_agent}: ${conflicting.task_id}`,
+          { conflicting_task_id: conflicting.task_id, conflicting_status: conflicting.status });
         database.prepare(`INSERT INTO tasks(task_id, workflow_id, run_id, attempt, assigned_agent, task_type, status,
           contract_set_id, output_contract_version, task_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
           .run(task.task_id, task.workflow_id, task.run_id, task.attempt, task.assigned_agent, task.task_type, task.status,
@@ -313,7 +319,10 @@ export function createTaskRepository(projectRootInput, database) {
         if (!['CREATED', 'READY'].includes(current.status)) fail('TASK_PACKAGE_STATUS_INVALID', `cannot validate task in ${current.status}`);
         if (current.status === 'READY') return { ok: true, command: 'task-validate', task: current, validation: packageResult };
         const next = updateTask(database, current, 'READY', occurredAt);
-        const event = appendTaskEvent(database, next, `TEV-READY-${taskId}`, 'TASK_PACKAGE_VALIDATED', 'CREATED', 'READY', occurredAt, packageResult);
+        // A retry reuses task_id but has a distinct run_id.  Event ids must
+        // therefore include the run id; otherwise retry validation collides
+        // with the original TASK_PACKAGE_VALIDATED event.
+        const event = appendTaskEvent(database, next, `TEV-READY-${taskId}-${next.run_id}`, 'TASK_PACKAGE_VALIDATED', 'CREATED', 'READY', occurredAt, packageResult);
         return { ok: true, command: 'task-validate', task: next, validation: packageResult, event };
       });
     },
@@ -465,6 +474,19 @@ export function createTaskRepository(projectRootInput, database) {
         const event = appendTaskEvent(database, newTask, `TEV-RETRY-${newTask.run_id}`, 'TASK_RETRY_CREATED', current.status, 'CREATED',
           newTask.created_at, { prior_run_id: current.run_id, prior_attempt: current.attempt, new_run_id: newTask.run_id, new_attempt: newTask.attempt });
         return { ok: true, command: 'task-retry', task: newTask, event };
+      });
+    },
+    supersede({ task_id: taskId, reason, occurred_at: occurredAt = new Date().toISOString() } = {}) {
+      if (!taskId || !reason) fail('TASK_SUPERSEDE_INVALID', 'task_id and reason are required');
+      return transactional(database, `SUPERSEDE:${taskId}:${sha256(String(reason))}`, { task_id: taskId, reason, occurred_at: occurredAt }, () => {
+        const current = loadTask(database, taskId);
+        if (!current) fail('TASK_NOT_FOUND', `task does not exist: ${taskId}`);
+        if (['COMPLETED', 'FAILED', 'CANCELLED', 'SUPERSEDED', 'LOST'].includes(current.status)) {
+          fail('TASK_SUPERSEDE_STATUS_INVALID', `cannot supersede terminal task in ${current.status}`);
+        }
+        const next = updateTask(database, current, 'SUPERSEDED', occurredAt);
+        const event = appendTaskEvent(database, next, `TEV-SUPERSEDED-${taskId}`, 'TASK_SUPERSEDED', current.status, 'SUPERSEDED', occurredAt, { reason });
+        return { ok: true, command: 'task-supersede', task: next, event };
       });
     },
     get(taskId) { return loadTask(database, taskId); },

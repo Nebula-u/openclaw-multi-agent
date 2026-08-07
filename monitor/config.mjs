@@ -61,7 +61,6 @@ export function loadMonitorConfig(overrides = {}) {
       ?? join(process.env.USERPROFILE ?? process.env.HOME ?? projectRoot, '.openclaw', 'agents'))),
     host: overrides.host ?? environment('MONITOR_HOST') ?? fileConfig.host ?? '127.0.0.1',
     port: integer(overrides.port ?? environment('MONITOR_PORT') ?? fileConfig.port, 4319),
-    token: overrides.token ?? environment('MONITOR_TOKEN') ?? fileConfig.token ?? 'openclaw-local-monitor',
     allowedOrigins,
     reconcileIntervalMs: integer(overrides.reconcileIntervalMs ?? fileConfig.reconcile_interval_ms, 2000),
     sseRetention: integer(overrides.sseRetention ?? fileConfig.sse_retention, 2000),

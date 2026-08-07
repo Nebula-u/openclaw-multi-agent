@@ -43,6 +43,21 @@ test('monitor HTTP exposes health, workflows and workflow snapshot', async () =>
   } finally { await value.close(); }
 });
 
+test('monitor remains reachable while reporting a degraded control audit', async () => {
+  const value = await setup();
+  try {
+    const state = JSON.parse(value.database.prepare('SELECT state_json FROM workflows WHERE workflow_id=?').get(WORKFLOW_ID).state_json);
+    state.phase = 'TAMPERED';
+    value.database.prepare("UPDATE workflows SET phase='TAMPERED', state_json=? WHERE workflow_id=?").run(JSON.stringify(state), WORKFLOW_ID);
+    const health = await fetch(`${value.base}/api/health`);
+    const body = await health.json();
+    assert.equal(health.status, 200);
+    assert.equal(body.api_reachable, true);
+    assert.equal(body.ok, false);
+    assert.equal(body.status, 'DEGRADED');
+  } finally { await value.close(); }
+});
+
 test('monitor rejects unknown origins and exposes no public mutation endpoint', async () => {
   const value = await setup();
   try {

@@ -66,7 +66,12 @@ function auditTasks(database, errors) {
     const expectedStatus = completion?.status ?? receipt?.status ?? 'PREPARED';
     if (row.status !== expectedStatus) errors.push({ code: 'DISPATCH_STATUS_MISMATCH', dispatch_id: row.dispatch_id, status: row.status, expected: expectedStatus });
     const outbox = database.prepare('SELECT status FROM dispatch_outbox WHERE dispatch_id=?').get(row.dispatch_id);
-    const localExecutionFailure = completion?.status === 'FAILED' && String(completion.error_code ?? '').startsWith('ORCHESTRATOR_');
+    // A failed completion without a receipt means the local process did not
+    // establish an Agent session (for example, spawn openclaw -> ENOENT).
+    // failDispatch deliberately marks that outbox entry FAILED.  Error codes
+    // from the operating system are not necessarily ORCHESTRATOR_* codes.
+    const localExecutionFailure = completion?.status === 'FAILED'
+      && (!receipt || /^(?:ORCHESTRATOR_|TASK_OUTPUT_|TASK_OUTPUT_INGESTION_)/u.test(String(completion.error_code ?? '')));
     const expectedOutboxStatus = localExecutionFailure ? 'FAILED' : receipt ? 'DELIVERED' : 'PENDING';
     if (!outbox || outbox.status !== expectedOutboxStatus) {
       errors.push({ code: 'DISPATCH_OUTBOX_MISMATCH', dispatch_id: row.dispatch_id, outbox_status: outbox?.status ?? null });

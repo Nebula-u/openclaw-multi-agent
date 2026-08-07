@@ -93,6 +93,8 @@ function main() {
       emit(task ? { ok: true, command: 'task-get', task } : { ok: false, command: 'task-get', errors: [{ code: 'TASK_NOT_FOUND' }] }, task ? 0 : 1);
     } else if (command === 'task-retry') {
       emit(tasks.retry(JSON.parse(readFileSync(resolve(required(options, 'task-file')), 'utf8'))));
+    } else if (command === 'task-supersede') {
+      emit(tasks.supersede(JSON.parse(readFileSync(resolve(required(options, 'supersede-file')), 'utf8'))));
     } else if (command === 'dispatch-prepare') {
       emit(tasks.prepareDispatch(JSON.parse(readFileSync(resolve(required(options, 'intent-file')), 'utf8'))));
     } else if (command === 'dispatch-receipt') {
@@ -118,7 +120,7 @@ function main() {
     } else if (command === 'wake-record') {
       emit(supervision.recordWake(JSON.parse(readFileSync(resolve(required(options, 'record-file')), 'utf8'))));
     } else {
-      throw new Error('usage: control-kernel.mjs <init|apply|get|events|active|snapshot|project|audit|recover|task-register|task-validate|task-get|task-retry|dispatch-prepare|dispatch-receipt|dispatch-list|dispatch-outbox|result-ingest|supervision-request|supervision-list|supervision-claim|supervision-complete|supervision-events|wake-outbox|wake-record> [options]');
+      throw new Error('usage: control-kernel.mjs <init|apply|get|events|active|snapshot|project|audit|recover|task-register|task-validate|task-get|task-retry|task-supersede|dispatch-prepare|dispatch-receipt|dispatch-list|dispatch-outbox|result-ingest|supervision-request|supervision-list|supervision-claim|supervision-complete|supervision-events|wake-outbox|wake-record> [options]');
     }
   } catch (error) {
     const code = error.code ?? (error instanceof ControlTransitionError ? error.code : 'CONTROL_KERNEL_ERROR');

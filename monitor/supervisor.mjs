@@ -10,7 +10,7 @@ export async function runSupervisor(overrides = {}) {
   const monitor = createMonitorServer(config);
   const address = await monitor.start();
   process.stdout.write(`${JSON.stringify({ ok: true, service: 'supervisor-core', host: address.address, port: address.port,
-    dashboard: resolve(config.projectRoot, 'monitor', 'ui', 'index.html'), token: config.token })}\n`);
+    dashboard: resolve(config.projectRoot, 'monitor', 'ui', 'index.html') })}\n`);
   const shutdown = async () => { await monitor.close(); process.exitCode = 0; };
   process.once('SIGINT', shutdown);
   process.once('SIGTERM', shutdown);
@@ -20,4 +20,3 @@ export async function runSupervisor(overrides = {}) {
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
   runSupervisor().catch((error) => { process.stderr.write(`${error.stack ?? error.message}\n`); process.exitCode = 1; });
 }
-

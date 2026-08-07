@@ -40,3 +40,6 @@ secrets.json
 
 # ---- Logs ----
 *.log
+
+# ---- cmdline history ----
+*.cmd

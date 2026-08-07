@@ -10,13 +10,18 @@
 - 统一 Agent JSON/JSONL 结果路径为 `.agent-raw → 本地清洗 → Ajv 校验 → 原子发布 → ingestion receipt`；Control Kernel mutation 固定为本地 capability 身份。
 - Monitor 删除公共写入、监督和 Agent 交互入口，公共 API/UI 只保留任务阶段、状态、负责 Agent、健康状态及用户可见 assistant 对话；thinking、工具细节、session/path/receipt 等控制信息不再输出。
 - 重写 `scripts/reinstall-agents.ps1`：仅选择 package manifest 与现有 OpenClaw workspace/agentDir 精确匹配的已安装项目 Agent；执行时必须显式确认 Gateway 已停止。流程固定为备份、删除已验证 Agent、确认配置已移除、清理已验证旧 runtime、重装、bundle/config 校验，并在备份目录写入结果记录；失败时恢复配置和 runtime 备份。
+- 修复连续删除 Agent 后 OpenClaw 偶发返回“成功但无完整 JSON”的 `agents list --json`：安装器保持统一严格 JSON 校验，并以有界重读及严格校验的 `config get agents.list` 作为后备事实源，不再把短暂 CLI 输出当作有效数据。
 - README 更新为本地 Orchestrator 信息流、只读看板边界和新的 Agent 重装命令；未完成部署风险与实时看板为空的事实记录在 `docs/problem/2026-08-07-agent-boundary-runtime-and-information-flow.md`。
+- 本地结构化输出入库器现在会在解析、暂存文件安全检查、缺失输出或 Ajv Schema 校验失败时，自动写入 artifact 的 `.orchestrator-ingest/*.failure.json` 与追加式 `validation-errors.jsonl`；无效原文继续保留在 `.agent-raw`，日志仅保存 hash 和脱敏摘要。
+- README 收缩为当前功能、启动方式、Agent 角色、JSON 错误证据和 Agent 更新步骤，移除已过期的原生 manager 调度、可交互 Monitor 和 token 配置说明。
 
 #### 验证
 
 - `pwsh -NoProfile -File scripts/reinstall-agents.ps1 -RuntimeRoot runtime` dry-run：仅识别 7 个路径匹配的项目 Agent；未处理 `main` 或 `dialogue-agent`，未写入配置或 runtime。
+- Gateway 停止期间已实际重装并验证 7 个项目 Agent；`main` 未变。manager allowlist 为 6 个 worker，所有 worker allowlist 均为空。
 - `openclaw config validate --json`、`node scripts/runtime-bundle.mjs verify --project-root . --runtime-root runtime` 通过（105 entries）。
 - 自动测试分组共 171 通过、0 失败；Runtime Guard 有 2 个符号链接用例因当前 Windows 账户权限跳过。
+- 新增 Orchestrator 无效暂存 JSON 用例通过：验证原始文件、失败收据、错误 JSONL、脱敏摘要和任务失败状态均由本地代码生成。
 
 ### Agent reinstall：兼容 OpenClaw 诊断输出、锁冲突与运行时同步
 

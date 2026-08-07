@@ -52,6 +52,57 @@ function Invoke-OpenClawMutation {
   }
 }
 
+function Get-OpenClawJsonListWithRetry {
+  param(
+    [Parameter(Mandatory)][string[]]$OcArgs,
+    [Parameter(Mandatory)][string]$Description,
+    [int]$MaxAttempts = 6
+  )
+  $lastDiagnostic = ''
+  for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
+    $result = Invoke-OpenClaw $OcArgs
+    if ($result.ExitCode -eq 0) {
+      try {
+        return @(ConvertFrom-OpenClawJsonOutput -Output $result.Output -Description $Description)
+      } catch {
+        $lastDiagnostic = $_.Exception.Message
+      }
+    } else {
+      $lastDiagnostic = $result.Output
+    }
+    if ($attempt -lt $MaxAttempts) {
+      Write-Host "$Description 暂未返回完整 JSON，正在重读 ($attempt/$MaxAttempts)..." -ForegroundColor Yellow
+      Start-Sleep -Milliseconds (350 * $attempt)
+    }
+  }
+  throw "$Description 连续 $MaxAttempts 次未返回可验证 JSON：$lastDiagnostic"
+}
+
+function Get-OpenClawAgentsWithFallback {
+  param([int]$MaxAttempts = 6)
+  $lastDiagnostic = ''
+  for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
+    try {
+      return @(Get-OpenClawJsonListWithRetry -OcArgs @('agents','list','--json') -Description 'openclaw agents list --json 输出' -MaxAttempts 1)
+    } catch {
+      $lastDiagnostic = $_.Exception.Message
+    }
+    # A just-completed agents delete/add can make this presentation command emit
+    # a successful but empty diagnostic response.  The persisted config list is
+    # the authoritative fallback and is still parsed by the same strict ingester.
+    try {
+      return @(Get-OpenClawJsonListWithRetry -OcArgs @('config','get','agents.list','--json') -Description 'agents.list 后备配置输出' -MaxAttempts 1)
+    } catch {
+      $lastDiagnostic = "$lastDiagnostic；后备读取失败：$($_.Exception.Message)"
+    }
+    if ($attempt -lt $MaxAttempts) {
+      Write-Host "Agent 列表暂不可验证，正在重读 ($attempt/$MaxAttempts)..." -ForegroundColor Yellow
+      Start-Sleep -Milliseconds (350 * $attempt)
+    }
+  }
+  throw "无法取得可验证的 Agent 列表：$lastDiagnostic"
+}
+
 function Get-AgentIndex {
   param($List, [string]$Id)
   for ($i = 0; $i -lt @($List).Count; $i++) {
@@ -107,11 +158,7 @@ $Manager = Get-ManagerPackage $Packages
 if (-not $Manager.register -or -not $Manager.active) { throw 'manager package 必须 register=true 且 active=true。' }
 $ManagerAllow = @(Get-ManagerAllowAgents $Packages)
 
-$existingResult = Invoke-OpenClaw @('agents','list','--json')
-$ExistingAgents = @()
-if ($existingResult.ExitCode -eq 0) {
-  $ExistingAgents = @(ConvertFrom-OpenClawJsonOutput -Output $existingResult.Output -Description 'openclaw agents list --json 输出')
-}
+$ExistingAgents = @(Get-OpenClawAgentsWithFallback)
 $ExistingIds = @($ExistingAgents | ForEach-Object { [string]$_.id })
 
 $workspaceSeen = @($RegisteredPackages | ForEach-Object workspace | Sort-Object -Unique)
@@ -248,9 +295,7 @@ try {
     $changes.Add("agents add $($p.id)")
   }
 
-  $listNowResult = Invoke-OpenClaw @('config','get','agents.list','--json')
-  if ($listNowResult.ExitCode -ne 0) { throw "无法读取 agents.list：$($listNowResult.Output)" }
-  $listNow = @(ConvertFrom-OpenClawJsonOutput -Output $listNowResult.Output -Description 'agents.list 输出')
+  $listNow = @(Get-OpenClawJsonListWithRetry -OcArgs @('config','get','agents.list','--json') -Description 'agents.list 输出')
   foreach ($p in $RegisteredPackages) {
     $idx = Get-AgentIndex -List $listNow -Id $p.id
     if ($idx -lt 0) { throw "配置中未找到 Agent '$($p.id)'。" }

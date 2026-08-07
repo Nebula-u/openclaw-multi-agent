@@ -27,6 +27,8 @@ test('installers materialize an explicit empty worker delegation allowlist', () 
   const bash = readFileSync(join(ROOT, 'scripts', 'install.sh'), 'utf8');
   assert.match(powershell, /\$currentHasSubagents -and \$allowMatches/u);
   assert.match(powershell, /agents\.list\[\$idx\]\.subagents/u);
+  assert.match(powershell, /function Get-OpenClawAgentsWithFallback/u);
+  assert.match(powershell, /agents\.list 后备配置输出/u);
   assert.match(bash, /set_json "agents\.list\[\$idx\]\.subagents"/u);
   assert.match(bash, /ALLOW_JSON\[\$id\]/u);
 });
