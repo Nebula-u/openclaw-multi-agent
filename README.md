@@ -18,6 +18,19 @@
 - Node.js 22.5+、npm、Git。
 - Windows 使用 PowerShell 7；Bash 安装脚本还需要 `jq`。
 
+Linux 服务器（以下以 Ubuntu/Debian 为例）从零安装系统依赖、Node.js 22 和 OpenClaw：
+
+```bash
+# Linux（Ubuntu/Debian）
+sudo apt-get update
+sudo apt-get install -y curl git jq
+curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
+sudo apt-get install -y nodejs
+sudo npm install -g openclaw
+node --version
+openclaw --version
+```
+
 首次安装依赖：
 
 ```powershell
@@ -102,9 +115,11 @@ Agent 只可写 `.agent-raw` 暂存文件，不能写最终 `output/*.json`。�
 
 多条候选 JSON、截断、非 JSON、路径逃逸、软链接和 Schema 不匹配都会被拒绝；系统不会猜测、修复业务字段或把聊天内容当作结果。
 
-## 更新已安装 Agent（Windows）
+## 安装或更新 Agent
 
 源码规则变更后，需要重新同步 runtime Agent。该脚本只处理 workspace 与 agentDir 和本项目 manifest 精确匹配的 7 个项目 Agent；不会处理 `main`、其他项目 Agent 或未注册的 `dialogue-agent`。
+
+Windows（PowerShell，删除并重装已有项目 Agent）：
 
 ```powershell
 # 先停止 Gateway，并查看计划
@@ -120,7 +135,57 @@ openclaw gateway start
 openclaw gateway status
 ```
 
+Linux（Bash，首次安装或幂等同步；该脚本不会删除已有 Agent）：
+
+```bash
+# Linux：先在项目根目录安装 npm 依赖，再查看安装计划
+npm install
+bash scripts/install.sh --runtime-root runtime
+
+# Linux：写入 OpenClaw 配置并安装/同步项目 Agent
+bash scripts/install.sh --apply --yes --runtime-root runtime
+
+# Linux：验证安装、初始化控制面并启动 Gateway
+bash scripts/validate-install.sh
+node scripts/orchestrator.mjs init --project-root .
+openclaw gateway start
+openclaw gateway status
+```
+
 备份位于 `runtime/control/reinstall-backups/<timestamp>/`。普通 `install.ps1` 不会删除已有 Agent；重装脚本要求显式 `-GatewayStopped`，且路径不匹配即拒绝删除。
+
+## 将 Monitor 部署为 Linux 服务
+
+`npm run supervisor:start` 在 Windows 和 Linux 中相同；Linux 服务器需要常驻部署时，可使用 systemd：
+
+```bash
+# Linux：将 <project-root>、<linux-user>、<linux-group> 替换为实际值
+sudo tee /etc/systemd/system/openclaw-monitor.service >/dev/null <<'EOF'
+[Unit]
+Description=OpenClaw SDLC Monitor
+After=network.target
+
+[Service]
+Type=simple
+User=<linux-user>
+Group=<linux-group>
+WorkingDirectory=<project-root>
+Environment=OPENCLAW_PROJECT_ROOT=<project-root>
+Environment=OPENCLAW_RUNTIME_ROOT=<project-root>/runtime
+Environment=MONITOR_PORT=4319
+ExecStart=/usr/bin/env bash <project-root>/scripts/start-monitor.sh
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+sudo systemctl daemon-reload
+sudo systemctl enable --now openclaw-monitor
+sudo systemctl status openclaw-monitor --no-pager
+curl -fsS http://127.0.0.1:4319/api/health
+```
 
 ## 测试
 
