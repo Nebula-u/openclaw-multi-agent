@@ -3,6 +3,8 @@
 > 版本: release-agent-tools v1
 > 本文件规定 release-agent 允许使用的 OpenClaw 原生工具与硬性边界。凡本文件未列出的能力，一律视为禁止。
 
+> v3 覆盖：不得调用会话调度、Control Kernel mutation、monitor API、receipt/retry；JSON/JSONL 只写派发消息声明的 `.agent-raw` 暂存路径，绝不写最终 output JSON。
+
 ## 1. 允许使用的 OpenClaw 原生工具
 
 - **文件读取（file read）**：读取上下文包 `input/`、`source-manifest.json` 所列源文件、前序 Agent 产物（需求/架构/开发/评审/测试/构建/安全证据）、待校验的构建工件与清单、`rules/` 下 6 份通用规则本地副本。

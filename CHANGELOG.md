@@ -1,5 +1,23 @@
 # Changelog
 
+## [Unreleased] - 2026-08-07
+
+### P0/P1：本地编排边界、只读看板与安全重装
+
+#### 改动了什么
+
+- 新增本地 `orchestrator`：workflow、task、dispatch、Agent ID、session、receipt、completion 和 retry 均从 Control DB 的已验证 task 派生；Agent 不再决定派发或状态写入。
+- 统一 Agent JSON/JSONL 结果路径为 `.agent-raw → 本地清洗 → Ajv 校验 → 原子发布 → ingestion receipt`；Control Kernel mutation 固定为本地 capability 身份。
+- Monitor 删除公共写入、监督和 Agent 交互入口，公共 API/UI 只保留任务阶段、状态、负责 Agent、健康状态及用户可见 assistant 对话；thinking、工具细节、session/path/receipt 等控制信息不再输出。
+- 重写 `scripts/reinstall-agents.ps1`：仅选择 package manifest 与现有 OpenClaw workspace/agentDir 精确匹配的已安装项目 Agent；执行时必须显式确认 Gateway 已停止。流程固定为备份、删除已验证 Agent、确认配置已移除、清理已验证旧 runtime、重装、bundle/config 校验，并在备份目录写入结果记录；失败时恢复配置和 runtime 备份。
+- README 更新为本地 Orchestrator 信息流、只读看板边界和新的 Agent 重装命令；未完成部署风险与实时看板为空的事实记录在 `docs/problem/2026-08-07-agent-boundary-runtime-and-information-flow.md`。
+
+#### 验证
+
+- `pwsh -NoProfile -File scripts/reinstall-agents.ps1 -RuntimeRoot runtime` dry-run：仅识别 7 个路径匹配的项目 Agent；未处理 `main` 或 `dialogue-agent`，未写入配置或 runtime。
+- `openclaw config validate --json`、`node scripts/runtime-bundle.mjs verify --project-root . --runtime-root runtime` 通过（105 entries）。
+- 自动测试分组共 171 通过、0 失败；Runtime Guard 有 2 个符号链接用例因当前 Windows 账户权限跳过。
+
 ### Agent reinstall：兼容 OpenClaw 诊断输出、锁冲突与运行时同步
 
 #### 改动了什么

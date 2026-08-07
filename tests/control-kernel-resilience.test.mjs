@@ -12,6 +12,7 @@ import { createControlRepository, openControlDatabase } from '../scripts/control
 const ROOT = resolve(import.meta.dirname, '..');
 const KERNEL = join(ROOT, 'scripts', 'control-kernel.mjs');
 const BUNDLE = 'c'.repeat(64);
+const CAPABILITY = 'test-local-orchestrator-capability';
 
 function command(workflowId, type, revision, overrides = {}) {
   return {
@@ -28,9 +29,10 @@ function bootstrap(repository, workflowId) {
   }));
 }
 
-function runKernel(args) {
+function runKernel(args, { capability = CAPABILITY } = {}) {
   return new Promise((resolveRun) => {
-    const child = spawn(process.execPath, [KERNEL, ...args], { cwd: ROOT, windowsHide: true });
+    const child = spawn(process.execPath, [KERNEL, ...args], { cwd: ROOT, windowsHide: true,
+      env: capability ? { ...process.env, OPENCLAW_CONTROL_CAPABILITY: capability } : { ...process.env } });
     let stdout = ''; let stderr = '';
     child.stdout.on('data', (chunk) => { stdout += chunk; });
     child.stderr.on('data', (chunk) => { stderr += chunk; });
@@ -41,6 +43,28 @@ function runKernel(args) {
     });
   });
 }
+
+test('direct Control Kernel mutation rejects a missing local Orchestrator capability and does not trust actor text', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'control-authority-'));
+  const databasePath = join(directory, 'control.db');
+  const workflowId = 'WF-control-authority';
+  try {
+    const database = openControlDatabase(databasePath);
+    bootstrap(createControlRepository(ROOT, database), workflowId);
+    database.close();
+    const commandPath = join(directory, 'command.json');
+    writeFileSync(commandPath, `${JSON.stringify(command(workflowId, 'ADVANCE_PHASE', 1, { actor: 'manager-agent', target_phase: 'REQUIREMENTS' }))}\n`);
+    const capabilityPath = join(directory, 'orchestrator.capability');
+    writeFileSync(capabilityPath, `${CAPABILITY}\n`);
+    const result = await runKernel(['apply', '--project-root', ROOT, '--db', databasePath, '--command-file', commandPath,
+      '--capability-file', capabilityPath], { capability: null });
+    assert.equal(result.code, 1);
+    assert.equal(result.value.errors[0].code, 'CONTROL_CALLER_UNAUTHORIZED');
+    const reopened = openControlDatabase(databasePath);
+    try { assert.equal(createControlRepository(ROOT, reopened).get(workflowId).revision, 1); }
+    finally { reopened.close(); }
+  } finally { rmSync(directory, { recursive: true, force: true }); }
+});
 
 test('concurrent commands on one workflow enforce CAS with one winner', async () => {
   const directory = mkdtempSync(join(tmpdir(), 'control-cas-'));
@@ -55,7 +79,9 @@ test('concurrent commands on one workflow enforce CAS with one winner', async ()
       writeFileSync(path, `${JSON.stringify(command(workflowId, 'ADVANCE_PHASE', 1, { target_phase: 'REQUIREMENTS' }), null, 2)}\n`);
       return path;
     });
-    const results = await Promise.all(files.map((path) => runKernel(['apply', '--project-root', ROOT, '--db', databasePath, '--command-file', path])));
+    const capabilityPath = join(directory, 'orchestrator.capability');
+    writeFileSync(capabilityPath, `${CAPABILITY}\n`);
+    const results = await Promise.all(files.map((path) => runKernel(['apply', '--project-root', ROOT, '--db', databasePath, '--command-file', path, '--capability-file', capabilityPath])));
     assert.deepEqual(results.map((item) => item.code).sort(), [0, 1]);
     assert.equal(results.filter((item) => item.value?.ok).length, 1);
     assert.ok(results.some((item) => item.value?.errors?.[0]?.code === 'CONTROL_REVISION_CONFLICT'));
@@ -84,7 +110,9 @@ test('concurrent different workflows retain both active states', async () => {
       writeFileSync(path, `${JSON.stringify(command(id, 'ADVANCE_PHASE', 1, { target_phase: 'REQUIREMENTS' }), null, 2)}\n`);
       return path;
     });
-    const results = await Promise.all(files.map((path) => runKernel(['apply', '--project-root', ROOT, '--db', databasePath, '--command-file', path])));
+    const capabilityPath = join(directory, 'orchestrator.capability');
+    writeFileSync(capabilityPath, `${CAPABILITY}\n`);
+    const results = await Promise.all(files.map((path) => runKernel(['apply', '--project-root', ROOT, '--db', databasePath, '--command-file', path, '--capability-file', capabilityPath])));
     assert.ok(results.every((item) => item.code === 0 && item.value?.ok));
     const reopened = openControlDatabase(databasePath);
     try {

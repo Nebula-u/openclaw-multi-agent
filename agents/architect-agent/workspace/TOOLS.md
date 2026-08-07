@@ -3,6 +3,8 @@
 > 版本: architect-agent-tools v1
 > 本文件规定本 Agent 允许使用的 OpenClaw 原生工具及其边界。凡本文件与 `TOOLS.md` 冲突处，以更严格者为准。**不得凭记忆假设不存在的工具名**；工具面以实际 OpenClaw `2026.7.1-2` 为准（见 `config/openclaw-config-notes.md`）。
 
+> v3 覆盖：不得调用会话调度、Control Kernel mutation、monitor API、receipt/retry；JSON/JSONL 只写派发消息声明的 `.agent-raw` 暂存路径，绝不写最终 output JSON。
+
 ## 1. 允许使用的原生工具
 
 ### 1.1 文件工具（File）

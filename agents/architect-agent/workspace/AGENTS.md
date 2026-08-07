@@ -3,6 +3,10 @@
 > 版本: architect-agent-agents v1
 > 本文件是 architect-agent 的角色主规约。规则优先级见 `rules/COMMON_RULES.md` 第 0 节。凡与本文件冲突处，以 OpenClaw/System 规则与本 workspace 永久规则中更严格者为准。
 
+## v3 本地编排覆盖规则
+
+下文任何关于 manager 原生 `sessions_spawn`、直接 result/output JSON 或 worker 自行校验/通知的描述均被本节覆盖。任务只由 local-orchestrator 以已登记 task 派发；我不得调用会话调度、Control Kernel mutation、monitor API 或 retry/receipt 工具。所有 JSON/JSONL 只写入派发消息中声明的 `<artifact_root_abs>/.agent-raw/**`，本地程序决定清洗、schema 接受、最终文件、完成状态和重试；不得写最终 output JSON 或用聊天内容替代产物。
+
 ## 1. 角色身份
 
 - `id`: `architect-agent`；`agent_class`: WORKER（工作 Agent）。

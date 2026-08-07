@@ -3,16 +3,12 @@ import { URL } from 'node:url';
 import { auditControlDatabase } from '../scripts/control-core/audit.mjs';
 import { createControlSnapshot } from '../scripts/control-core/read-model.mjs';
 import { createControlRepository, openControlDatabase } from '../scripts/control-core/repository.mjs';
-import { createSupervisionRepository } from '../scripts/control-core/supervision-repository.mjs';
 import { createTaskRepository } from '../scripts/control-core/task-repository.mjs';
 import { MonitorEventHub, encodeSse } from './event-hub.mjs';
 import { openTelemetryDatabase, createTelemetryRepository } from './telemetry-repository.mjs';
-import { createActivityService } from './activity-api.mjs';
 import { createSessionTailer } from './session-tailer.mjs';
 import { createArtifactWatcher } from './artifact-watcher.mjs';
 import { createHealthClassifier } from './health-classifier.mjs';
-import { createWatchdog } from './watchdog.mjs';
-import { createWakeAdapter } from './wake-adapter.mjs';
 
 function isLoopback(address = '') {
   return address === '127.0.0.1' || address === '::1' || address === '::ffff:127.0.0.1';
@@ -40,14 +36,7 @@ async function readJsonBody(request, limit) {
 function originHeaders(request, config) {
   const origin = request.headers.origin;
   if (!origin || !config.allowedOrigins.includes(origin)) return {};
-  return { 'access-control-allow-origin': origin, vary: 'Origin', 'access-control-allow-headers': 'content-type,x-monitor-token',
-    'access-control-allow-methods': 'GET,POST,OPTIONS' };
-}
-
-function authorized(request, url, config) {
-  const header = request.headers['x-monitor-token'];
-  const query = url.searchParams.get('token');
-  return Boolean(config.token) && (header === config.token || query === config.token);
+  return { 'access-control-allow-origin': origin, vary: 'Origin', 'access-control-allow-methods': 'GET,OPTIONS' };
 }
 
 function integerQuery(url, name, fallback) {
@@ -61,13 +50,11 @@ export function createMonitorServer(config, { database: providedDatabase = null,
   const database = providedDatabase ?? openControlDatabase(config.databasePath);
   createControlRepository(config.projectRoot, database);
   const tasks = createTaskRepository(config.projectRoot, database);
-  const supervision = createSupervisionRepository(config.projectRoot, database);
   const telemetryDatabase = providedTelemetryDatabase ?? openTelemetryDatabase(config.monitorDatabasePath ?? ':memory:');
   const telemetry = createTelemetryRepository(config.projectRoot, telemetryDatabase);
   telemetry.prune({ maxEvents: config.telemetryMaxEvents, activityRetentionDays: config.activityRetentionDays });
   const hub = eventHub ?? new MonitorEventHub({ retention: config.sseRetention });
   const publish = (type, payload, meta) => hub.publish(type, payload, meta);
-  const activity = createActivityService({ controlDatabase: database, telemetry, publish });
   const sessionTailer = createSessionTailer({ controlDatabase: database, telemetry,
     sessionRoot: config.sessionRoot ?? config.projectRoot, publish });
   const artifactWatcher = createArtifactWatcher({ controlDatabase: database, telemetry, publish });
@@ -75,20 +62,30 @@ export function createMonitorServer(config, { database: providedDatabase = null,
     heartbeatStaleSeconds: config.heartbeatStaleSeconds, possiblyStalledSeconds: config.possiblyStalledSeconds,
     startingTimeoutSeconds: config.startingTimeoutSeconds, toolRunningGraceSeconds: config.toolRunningGraceSeconds,
   } });
-  const watchdog = createWatchdog({ telemetry, supervision, publish, enabled: config.watchdogEnabled,
-    shadowMode: config.watchdogShadowMode, cooldownSeconds: config.supervisionCooldownSeconds });
-  const wakeAdapter = createWakeAdapter({ controlDatabase: database, supervision, publish,
-    enabled: config.managerWakeEnabled, managerSessionKey: config.managerSessionKey,
-    timeoutSeconds: config.managerWakeTimeoutSeconds });
   const attachHealth = (value) => {
     for (const workflow of value.workflows) for (const task of workflow.tasks ?? []) task.health = telemetry.health(task.task_id);
     return value;
   };
-  let snapshot = createControlSnapshot(database);
-  const initialHealth = healthClassifier.scan(snapshot);
-  watchdog.scan(initialHealth);
-  snapshot = attachHealth(snapshot);
-  let fingerprint = JSON.stringify({ workflows: snapshot.workflows, supervision: snapshot.supervision });
+  const publicTask = (task) => ({
+    task_id: task.task_id, run_id: task.run_id, task_type: task.task_type, title: task.title, status: task.status,
+    attempt: task.attempt, max_attempts: task.max_attempts, assigned_agent: task.assigned_agent, updated_at: task.updated_at,
+    health: task.health ?? null,
+    dispatches: (task.dispatches ?? []).map((dispatch) => ({ dispatch_id: dispatch.dispatch_id, status: dispatch.status,
+      attempt: dispatch.attempt, agent_id: dispatch.agent_id, created_at: dispatch.created_at, updated_at: dispatch.updated_at })),
+  });
+  const publicSnapshot = (value) => ({
+    schema_version: value.schema_version, generated_at: value.generated_at, workflow_id: value.workflow_id,
+    workflows: value.workflows.map((workflow) => ({
+      protocol_version: workflow.protocol_version, workflow_id: workflow.workflow_id, revision: workflow.revision,
+      phase: workflow.phase, condition: workflow.condition, outcome: workflow.outcome, status_reason: workflow.status_reason ?? null,
+      created_at: workflow.created_at, updated_at: workflow.updated_at, tasks: (workflow.tasks ?? []).map(publicTask),
+    })),
+  });
+  let internalSnapshot = createControlSnapshot(database);
+  healthClassifier.scan(internalSnapshot);
+  internalSnapshot = attachHealth(internalSnapshot);
+  let snapshot = publicSnapshot(internalSnapshot);
+  let fingerprint = JSON.stringify(snapshot.workflows);
   hub.publish('snapshot', snapshot, { source: 'CONTROL_DB' });
 
   const reconcile = () => {
@@ -96,13 +93,13 @@ export function createMonitorServer(config, { database: providedDatabase = null,
       sessionTailer.scan();
       artifactWatcher.scan();
       const next = createControlSnapshot(database);
-      const health = healthClassifier.scan(next);
-      watchdog.scan(health);
-      void wakeAdapter.scan().catch((error) => hub.publish('monitor-health', { status: 'DEGRADED', error: error.message }, { source: 'MANAGER_WAKE_ADAPTER' }));
+      healthClassifier.scan(next);
       attachHealth(next);
-      const nextFingerprint = JSON.stringify({ workflows: next.workflows, supervision: next.supervision });
+      const nextPublicSnapshot = publicSnapshot(next);
+      const nextFingerprint = JSON.stringify(nextPublicSnapshot.workflows);
       if (nextFingerprint !== fingerprint) {
-        snapshot = next;
+        internalSnapshot = next;
+        snapshot = nextPublicSnapshot;
         fingerprint = nextFingerprint;
         hub.publish('snapshot', snapshot, { source: 'CONTROL_DB' });
       }
@@ -131,8 +128,7 @@ export function createMonitorServer(config, { database: providedDatabase = null,
       const url = new URL(request.url, `http://${config.host}:${config.port}`);
       const path = url.pathname;
       if (request.method === 'GET' && path === '/api/client-config') {
-        return sendJson(response, 200, { ok: true, api_url: `http://${config.host}:${config.port}`, token: config.token,
-          local_only: true }, cors);
+        return sendJson(response, 200, { ok: true, api_url: `http://${config.host}:${config.port}`, local_only: true, read_only: true }, cors);
       }
       if (request.method === 'GET' && path === '/api/health') {
         const audit = auditControlDatabase(database);
@@ -144,25 +140,16 @@ export function createMonitorServer(config, { database: providedDatabase = null,
       }
       const workflowSnapshot = path.match(/^\/api\/workflows\/([^/]+)\/snapshot$/u);
       if (request.method === 'GET' && workflowSnapshot) {
-        const value = createControlSnapshot(database, { workflowId: decodeURIComponent(workflowSnapshot[1]) });
+        const value = publicSnapshot(attachHealth(createControlSnapshot(database, { workflowId: decodeURIComponent(workflowSnapshot[1]) })));
         return sendJson(response, value.workflows.length ? 200 : 404, { ok: value.workflows.length > 0, snapshot: value }, cors);
-      }
-      const workflowEvents = path.match(/^\/api\/workflows\/([^/]+)\/events$/u);
-      if (request.method === 'GET' && workflowEvents) {
-        const repository = createControlRepository(config.projectRoot, database);
-        const after = integerQuery(url, 'after', 0);
-        const limit = Math.min(integerQuery(url, 'limit', 500), 5000);
-        const events = repository.events(decodeURIComponent(workflowEvents[1])).filter((event) => event.seq > after).slice(0, limit);
-        return sendJson(response, 200, { ok: true, events }, cors);
       }
       const workflowStream = path.match(/^\/api\/workflows\/([^/]+)\/stream$/u);
       if (request.method === 'GET' && workflowStream) {
-        if (!authorized(request, url, config)) return sendJson(response, 401, { ok: false, error: 'TOKEN_REQUIRED' }, cors);
         const workflowId = decodeURIComponent(workflowStream[1]);
         const after = integerQuery(url, 'after', Number.parseInt(request.headers['last-event-id'] ?? '0', 10) || 0);
         response.writeHead(200, { 'content-type': 'text/event-stream; charset=utf-8', 'cache-control': 'no-cache, no-transform',
           connection: 'keep-alive', 'x-accel-buffering': 'no', ...cors });
-        const initial = createControlSnapshot(database, { workflowId });
+        const initial = publicSnapshot(attachHealth(createControlSnapshot(database, { workflowId })));
         response.write(encodeSse({ sequence: hub.sequence, type: 'snapshot', timestamp: new Date().toISOString(), payload: initial, meta: { initial: true } }));
         for (const event of hub.after(after)) response.write(encodeSse(event));
         const unsubscribe = hub.subscribe((event) => response.write(encodeSse(event)));
@@ -174,11 +161,14 @@ export function createMonitorServer(config, { database: providedDatabase = null,
       const taskMatch = path.match(/^\/api\/tasks\/([^/]+)$/u);
       if (request.method === 'GET' && taskMatch) {
         const task = tasks.get(decodeURIComponent(taskMatch[1]));
-        return sendJson(response, task ? 200 : 404, task ? { ok: true, task } : { ok: false, error: 'TASK_NOT_FOUND' }, cors);
+        return sendJson(response, task ? 200 : 404, task ? { ok: true, task: publicTask({ ...task, health: telemetry.health(task.task_id), dispatches: tasks.dispatches(task.task_id).map((item) => ({ ...item.intent, status: item.status, updated_at: item.receipt?.recorded_at ?? item.completion?.completed_at ?? item.intent.created_at })) }) } : { ok: false, error: 'TASK_NOT_FOUND' }, cors);
       }
       const taskActivity = path.match(/^\/api\/tasks\/([^/]+)\/activity$/u);
       if (request.method === 'GET' && taskActivity) {
-        return sendJson(response, 200, { ok: true, activities: telemetry.activities({ taskId: decodeURIComponent(taskActivity[1]) }) }, cors);
+        const taskId = decodeURIComponent(taskActivity[1]);
+        const dialogue = telemetry.events({ limit: 500 }).filter((event) => event.task_id === taskId && event.event_type === 'session.assistant_output')
+          .map((event) => ({ agent_id: event.payload.agent_id, summary: event.payload.summary, timestamp: event.timestamp }));
+        return sendJson(response, 200, { ok: true, dialogue }, cors);
       }
       const taskHealth = path.match(/^\/api\/tasks\/([^/]+)\/health$/u);
       if (request.method === 'GET' && taskHealth) {
@@ -187,22 +177,10 @@ export function createMonitorServer(config, { database: providedDatabase = null,
       }
       const agentActivity = path.match(/^\/api\/agents\/([^/]+)\/activity$/u);
       if (request.method === 'GET' && agentActivity) {
-        return sendJson(response, 200, { ok: true, activities: telemetry.activities({ agentId: decodeURIComponent(agentActivity[1]) }) }, cors);
-      }
-      if (request.method === 'GET' && path === '/api/supervision') {
-        return sendJson(response, 200, { ok: true, requests: supervision.list({ status: url.searchParams.get('status') }) }, cors);
-      }
-      if (request.method === 'POST' && path === '/api/supervision/request') {
-        if (!authorized(request, url, config)) return sendJson(response, 401, { ok: false, error: 'TOKEN_REQUIRED' }, cors);
-        const value = supervision.request(await readJsonBody(request, config.requestBodyLimit));
-        reconcile();
-        hub.publish('supervision', value, { source: 'LOCAL_API' });
-        return sendJson(response, 201, value, cors);
-      }
-      if (request.method === 'POST' && path === '/api/activity') {
-        if (!authorized(request, url, config)) return sendJson(response, 401, { ok: false, error: 'TOKEN_REQUIRED' }, cors);
-        const value = activity.emit(await readJsonBody(request, config.requestBodyLimit));
-        return sendJson(response, value.idempotent_replay ? 200 : 201, value, cors);
+        const agentId = decodeURIComponent(agentActivity[1]);
+        const dialogue = telemetry.events({ limit: 500 }).filter((event) => event.payload.agent_id === agentId && event.event_type === 'session.assistant_output')
+          .map((event) => ({ task_id: event.task_id, summary: event.payload.summary, timestamp: event.timestamp }));
+        return sendJson(response, 200, { ok: true, dialogue }, cors);
       }
       return sendJson(response, 404, { ok: false, error: 'NOT_FOUND' }, cors);
     } catch (error) {
@@ -216,8 +194,6 @@ export function createMonitorServer(config, { database: providedDatabase = null,
     database,
     hub,
     telemetry,
-    activity,
-    wakeAdapter,
     config,
     snapshot: () => snapshot,
     async start() {

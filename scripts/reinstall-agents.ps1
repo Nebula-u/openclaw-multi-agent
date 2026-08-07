@@ -1,12 +1,13 @@
 #requires -Version 7.0
 <#
 .SYNOPSIS
-  安全地卸载本项目已安装的 Agent，然后重新安装并同步 runtime。
+  安全地删除本项目已安装的 Agent 和其受管理 runtime，然后重新安装。
 .DESCRIPTION
   默认只输出计划。Apply 前会验证每个待删除 Agent 的 workspace 和 agentDir
   均与当前 package manifest 计算出的本项目 runtime 路径完全一致；不匹配时
-  失败退出，绝不删除同名的用户 Agent。Apply 会备份 OpenClaw 配置与受管理的
-  workspace/state，再执行 `openclaw agents delete --force` 和 install.ps1。
+  失败退出，绝不删除同名的用户 Agent。Apply 必须显式确认 Gateway 已停止；脚本
+  会备份 OpenClaw 配置与受管理的 workspace/state，删除 Agent 配置和旧 runtime，
+  再执行 install.ps1、bundle 校验和 OpenClaw 配置校验。
 #>
 [CmdletBinding()]
 param(
@@ -15,6 +16,7 @@ param(
   [string]$ModelConfig,
   [switch]$SetManagerAsDefault,
   [string]$ManagerBinding,
+  [switch]$GatewayStopped,
   [switch]$Yes
 )
 
@@ -93,14 +95,34 @@ function Assert-ManagedAgentIdentity {
   }
 }
 
+function Remove-ManagedRuntimeDirectory {
+  param(
+    [Parameter(Mandatory)][string]$Path,
+    [Parameter(Mandatory)][string]$Label
+  )
+  $pathAbs = Get-NormalizedPath $Path
+  if (-not (Test-PathWithin -Path $pathAbs -Root $RuntimeRootAbs) -or
+      $pathAbs.Equals($RuntimeRootAbs, [System.StringComparison]::OrdinalIgnoreCase)) {
+    throw "拒绝删除 $Label：目标不在受管理 runtime 内：$pathAbs"
+  }
+  if (Test-Path -LiteralPath $pathAbs) {
+    Remove-Item -LiteralPath $pathAbs -Recurse -Force
+    Write-Host "已清理旧 runtime：$Label" -ForegroundColor DarkYellow
+  }
+}
+
+function Get-ConfiguredAgents {
+  $list = Invoke-OpenClaw @('config','get','agents.list','--json')
+  if ($list.ExitCode -ne 0) { throw "无法读取 agents.list：$($list.Output)" }
+  return @(ConvertFrom-OpenClawJsonOutput -Output $list.Output -Description 'agents.list JSON')
+}
+
 if (-not (Get-Command openclaw -ErrorAction SilentlyContinue)) { throw '未找到 openclaw CLI。' }
 $configFile = (Invoke-OpenClaw @('config','file'))
 if ($configFile.ExitCode -ne 0) { throw "无法读取 OpenClaw 配置路径：$($configFile.Output)" }
 $configPath = $configFile.Output.Trim()
 
-$configList = Invoke-OpenClaw @('config','get','agents.list','--json')
-if ($configList.ExitCode -ne 0) { throw "无法读取 agents.list：$($configList.Output)" }
-$configuredAgents = @(ConvertFrom-OpenClawJsonOutput -Output $configList.Output -Description 'agents.list JSON')
+$configuredAgents = @(Get-ConfiguredAgents)
 
 $packages = @(Get-AgentPackages -ProjectRoot $ProjectRoot -RuntimeRootAbs $RuntimeRootAbs -ModelConfig $ModelConfig | Where-Object register)
 $configuredById = @{}
@@ -126,8 +148,12 @@ foreach ($target in $targets) {
 }
 
 if (-not $Apply) {
-  Write-Host "`n[DRYRUN] 未删除 Agent，未修改 OpenClaw 配置或 runtime。使用 -Apply -Yes 执行。" -ForegroundColor Yellow
+  Write-Host "`n[DRYRUN] 未删除 Agent，未修改 OpenClaw 配置或 runtime。执行时还必须传入 -GatewayStopped -Apply -Yes。" -ForegroundColor Yellow
   return
+}
+
+if (-not $GatewayStopped) {
+  throw '拒绝执行：请先停止 OpenClaw Gateway，并以 -GatewayStopped 显式确认。脚本不会自行停止或启动 Gateway。'
 }
 
 if (-not $Yes) {
@@ -176,6 +202,17 @@ try {
     Write-Host "已卸载：$($target.Package.id)" -ForegroundColor Yellow
   }
 
+  $remainingIds = @(Get-ConfiguredAgents | ForEach-Object { [string]$_.id })
+  $stillConfigured = @($targets | Where-Object { $remainingIds -contains $_.Package.id })
+  if ($stillConfigured.Count -gt 0) {
+    throw "删除后仍在 OpenClaw 配置中的 Agent：$($stillConfigured.Package.id -join ', ')"
+  }
+
+  foreach ($target in @($targets | Where-Object Installed)) {
+    Remove-ManagedRuntimeDirectory -Path $target.Package.workspace -Label "$($target.Package.id) workspace"
+    Remove-ManagedRuntimeDirectory -Path $target.Package.agentDir -Label "$($target.Package.id) state"
+  }
+
   $installArgs = @('-NoProfile','-File',(Join-Path $ScriptDir 'install.ps1'),'-Apply','-RuntimeRoot',$RuntimeRootAbs,'-Yes','-AgentIds')
   # A child PowerShell script accepts the string[] parameter as one comma-delimited
   # argument here; passing trailing values separately makes later IDs positional.
@@ -186,10 +223,26 @@ try {
   & pwsh @installArgs
   if ($LASTEXITCODE -ne 0) { throw "install.ps1 重新安装失败，退出码：$LASTEXITCODE" }
 
+  $reinstalledById = @{}
+  foreach ($agent in @(Get-ConfiguredAgents)) { $reinstalledById[[string]$agent.id] = $agent }
+  foreach ($target in $targets) {
+    if (-not $reinstalledById.ContainsKey($target.Package.id)) { throw "重新安装后缺少 Agent：$($target.Package.id)" }
+    Assert-ManagedAgentIdentity -ConfiguredAgent $reinstalledById[$target.Package.id] -Package $target.Package
+  }
+
   $bundle = & node (Join-Path $ScriptDir 'runtime-bundle.mjs') verify --project-root $ProjectRoot --runtime-root $RuntimeRootAbs
   if ($LASTEXITCODE -ne 0) { throw "runtime bundle 校验失败：$bundle" }
   $validate = Invoke-OpenClaw @('config','validate','--json')
   if ($validate.ExitCode -ne 0) { throw "OpenClaw 配置校验失败：$($validate.Output)" }
+  Write-JsonAtomic -Value ([ordered]@{
+    schema_version = 1
+    completed_at = (Get-Date).ToUniversalTime().ToString('o')
+    project_root = $ProjectRoot
+    runtime_root = $RuntimeRootAbs
+    agents = @($targets | ForEach-Object { $_.Package.id })
+    config_backup = $configBackup
+    model_config_used = $installModelConfig
+  }) -Path (Join-Path $backupRoot 'reinstall-result.json') -Depth 6
   Write-Host "`n重新安装完成；配置和 runtime bundle 已验证。" -ForegroundColor Green
   Write-Host "恢复备份：$backupRoot"
 } catch {
@@ -200,6 +253,8 @@ try {
     $targetBackup = Join-Path $backupAgents $target.Package.id
     $workspaceBackup = Join-Path $targetBackup 'workspace'
     $stateBackup = Join-Path $targetBackup 'state'
+    Remove-ManagedRuntimeDirectory -Path $target.Package.workspace -Label "$($target.Package.id) partial workspace"
+    Remove-ManagedRuntimeDirectory -Path $target.Package.agentDir -Label "$($target.Package.id) partial state"
     if (Test-Path -LiteralPath $workspaceBackup) { Copy-Item -LiteralPath $workspaceBackup -Destination $target.Package.workspace -Recurse -Force }
     if (Test-Path -LiteralPath $stateBackup) { Copy-Item -LiteralPath $stateBackup -Destination $target.Package.agentDir -Recurse -Force }
   }

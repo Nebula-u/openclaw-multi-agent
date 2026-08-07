@@ -34,26 +34,14 @@ function ConvertFrom-OpenClawJsonOutput {
     [string]$Description = 'OpenClaw JSON output'
   )
 
-  $ansiPattern = [char]27 + '\[[0-9;?]*[ -/]*[@-~]'
-  $clean = [regex]::Replace($Output, $ansiPattern, '')
-  try {
-    return $clean | ConvertFrom-Json -ErrorAction Stop
-  } catch {
-    $lines = @($clean -split "\r?\n")
-    for ($start = 0; $start -lt $lines.Count; $start++) {
-      $first = $lines[$start].TrimStart()
-      if (-not ($first.StartsWith('[') -or $first.StartsWith('{'))) { continue }
-      for ($end = $lines.Count - 1; $end -ge $start; $end--) {
-        $candidate = ($lines[$start..$end] -join [Environment]::NewLine).Trim()
-        try {
-          return $candidate | ConvertFrom-Json -ErrorAction Stop
-        } catch {
-          continue
-        }
-      }
-    }
-  }
-  throw "$Description 不可解析；OpenClaw 可能没有返回完整 JSON。"
+  $ingestionCli = Join-Path $PSScriptRoot 'runtime-core\json-ingestion-cli.mjs'
+  if (-not (Test-Path -LiteralPath $ingestionCli)) { throw "$Description 无法调用统一 JSON 入库器：$ingestionCli" }
+  $rawResult = $Output | & node $ingestionCli 2>&1
+  if ($LASTEXITCODE -ne 0) { throw "$Description 不可解析；统一 JSON 入库器拒绝了输出：$($rawResult -join "`n")" }
+  try { $result = ($rawResult -join "`n") | ConvertFrom-Json -ErrorAction Stop }
+  catch { throw "$Description 的统一 JSON 入库器返回无效：$($_.Exception.Message)" }
+  if (-not $result.ok) { throw "$Description 不可解析；诊断=$($result.diagnostic)" }
+  return $result.value
 }
 
 function Write-JsonAtomic {

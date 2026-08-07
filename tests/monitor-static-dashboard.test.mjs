@@ -15,6 +15,7 @@ test('static dashboard opens without a build step and contains no external runti
   assert.doesNotMatch(`${html}${script}`, /React|Vite|node_modules/u);
   assert.match(script, /EventSource/u);
   assert.match(script, /api\/client-config/u);
-  assert.match(script, /api\/supervision\/request/u);
+  assert.match(script, /api\/tasks\/\$\{encodeURIComponent\(task\.task_id\)\}\/activity/u);
+  assert.doesNotMatch(`${html}${script}`, /api\/supervision|api\/activity|nudge|request-type|api-token/u);
   assert.match(css, /prefers-reduced-motion/u);
 });

@@ -32,8 +32,8 @@ test('monitor HTTP exposes health, workflows and workflow snapshot', async () =>
     assert.equal(health.status, 200);
     assert.equal((await health.json()).status, 'HEALTHY');
     const clientConfig = await (await fetch(`${value.base}/api/client-config`, { headers: { origin: 'null' } })).json();
-    assert.equal(clientConfig.token, 'test-token');
     assert.equal(clientConfig.local_only, true);
+    assert.equal(clientConfig.read_only, true);
     const workflows = await (await fetch(`${value.base}/api/workflows`)).json();
     assert.equal(workflows.workflows[0].workflow_id, WORKFLOW_ID);
     const snapshot = await (await fetch(`${value.base}/api/workflows/${WORKFLOW_ID}/snapshot`)).json();
@@ -43,7 +43,7 @@ test('monitor HTTP exposes health, workflows and workflow snapshot', async () =>
   } finally { await value.close(); }
 });
 
-test('monitor rejects unknown origins and requires token for supervision writes', async () => {
+test('monitor rejects unknown origins and exposes no public mutation endpoint', async () => {
   const value = await setup();
   try {
     const rejectedOrigin = await fetch(`${value.base}/api/workflows`, { headers: { origin: 'https://example.invalid' } });
@@ -53,35 +53,27 @@ test('monitor rejects unknown origins and requires token for supervision writes'
       workflow_id: WORKFLOW_ID, request_type: 'NUDGE', source: 'LOCAL_USER', reason: 'Please report progress',
       evidence: { source: 'dashboard' }, requested_at: '2026-08-06T10:00:01.000Z',
     };
-    const unauthorized = await fetch(`${value.base}/api/supervision/request`, {
+    const supervisionWrite = await fetch(`${value.base}/api/supervision/request`, {
       method: 'POST', headers: { 'content-type': 'application/json', origin: 'null' }, body: JSON.stringify(body),
     });
-    assert.equal(unauthorized.status, 401);
-    const created = await fetch(`${value.base}/api/supervision/request`, {
-      method: 'POST', headers: { 'content-type': 'application/json', 'x-monitor-token': 'test-token', origin: 'null' },
-      body: JSON.stringify(body),
+    assert.equal(supervisionWrite.status, 404);
+    const activityWrite = await fetch(`${value.base}/api/activity`, {
+      method: 'POST', headers: { 'content-type': 'application/json', origin: 'null' }, body: JSON.stringify({}),
     });
-    assert.equal(created.status, 201);
-    assert.equal((await created.json()).request.status, 'REQUESTED');
-    const listed = await (await fetch(`${value.base}/api/supervision`)).json();
-    assert.equal(listed.requests.length, 1);
+    assert.equal(activityWrite.status, 404);
   } finally { await value.close(); }
 });
 
-test('monitor accepts explicit activity and exposes agent activity history', async () => {
+test('monitor exposes only user-safe dialogue sourced by local collectors', async () => {
   const value = await setup();
   try {
-    const activity = {
-      schema_version: 1, activity_id: 'ACT-monitor-http', workflow_id: WORKFLOW_ID, agent_id: 'manager-agent',
-      kind: 'HEARTBEAT', status: 'RUNNING', current_action: 'Monitoring workflow', summary: 'Control state is healthy',
-      checkpoint: null, progress: null, tool: null, visibility: 'USER_SAFE', timestamp: '2026-08-06T10:00:02.000Z',
-    };
-    const response = await fetch(`${value.base}/api/activity`, {
-      method: 'POST', headers: { 'content-type': 'application/json', 'x-monitor-token': 'test-token', origin: 'null' },
-      body: JSON.stringify(activity),
+    value.monitor.telemetry.addEvent({
+      schema_version: 1, event_id: 'MEVT-monitor-dialogue', workflow_id: WORKFLOW_ID, task_id: null, run_id: null, session_id: 'session-1',
+      topic: 'agent.activity', event_type: 'session.assistant_output', producer: 'session-tailer', source: 'SESSION_TAILER',
+      timestamp: '2026-08-06T10:00:02.000Z', payload: { agent_id: 'manager-agent', summary: 'Control state is healthy' },
+      meta: { redacted: true, inferred: true, confidence: 'MEDIUM' },
     });
-    assert.equal(response.status, 201);
     const history = await (await fetch(`${value.base}/api/agents/manager-agent/activity`)).json();
-    assert.equal(history.activities[0].activity_id, activity.activity_id);
+    assert.equal(history.dialogue[0].summary, 'Control state is healthy');
   } finally { await value.close(); }
 });

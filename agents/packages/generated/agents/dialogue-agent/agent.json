@@ -25,8 +25,8 @@
   },
   "skills": [],
   "lifecycle": {
-    "register": true,
-    "active": true
+    "register": false,
+    "active": false
   },
   "created_by": "manager-agent",
   "created_from_workflow": null,

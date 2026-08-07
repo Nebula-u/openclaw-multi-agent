@@ -22,6 +22,26 @@ const PWSH_AVAILABLE = spawnSync('pwsh', ['-NoProfile', '-Command', 'exit 0'], {
   encoding: 'utf8',
 }).status === 0;
 
+test('installers materialize an explicit empty worker delegation allowlist', () => {
+  const powershell = readFileSync(join(ROOT, 'scripts', 'install.ps1'), 'utf8');
+  const bash = readFileSync(join(ROOT, 'scripts', 'install.sh'), 'utf8');
+  assert.match(powershell, /\$currentHasSubagents -and \$allowMatches/u);
+  assert.match(powershell, /agents\.list\[\$idx\]\.subagents/u);
+  assert.match(bash, /set_json "agents\.list\[\$idx\]\.subagents"/u);
+  assert.match(bash, /ALLOW_JSON\[\$id\]/u);
+});
+
+test('project Agent reinstall requires an explicit stopped-Gateway acknowledgement and deletes only verified runtime paths', () => {
+  const reinstall = readFileSync(join(ROOT, 'scripts', 'reinstall-agents.ps1'), 'utf8');
+  assert.match(reinstall, /\[switch\]\$GatewayStopped/u);
+  assert.match(reinstall, /if \(-not \$GatewayStopped\)/u);
+  assert.match(reinstall, /Assert-ManagedAgentIdentity/u);
+  assert.match(reinstall, /function Remove-ManagedRuntimeDirectory/u);
+  assert.match(reinstall, /Test-PathWithin -Path \$pathAbs -Root \$RuntimeRootAbs/u);
+  assert.match(reinstall, /'agents','delete',\$AgentId,'--force','--json'/u);
+  assert.match(reinstall, /reinstall-result\.json/u);
+});
+
 test('Bash validator isolates its installer dry-run from conflicting outer openclaw agents', () => {
   const bin = mkdtempSync(join(tmpdir(), 'openclaw-validator-fake-bin-'));
   const fakeOpenClaw = join(bin, 'openclaw');

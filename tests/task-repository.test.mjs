@@ -7,6 +7,7 @@ import test from 'node:test';
 import { createControlRepository, openControlDatabase } from '../scripts/control-core/repository.mjs';
 import { createTaskRepository } from '../scripts/control-core/task-repository.mjs';
 import { auditControlDatabase } from '../scripts/control-core/audit.mjs';
+import { stagedOutputPath } from '../scripts/runtime-core/structured-output-ingestion.mjs';
 
 const ROOT = resolve(import.meta.dirname, '..');
 const NOW = '2026-08-05T08:00:00.000Z';
@@ -20,6 +21,7 @@ function setup() {
   const output = join(artifact, 'output');
   const worktree = join(directory, 'worktree');
   mkdirSync(output, { recursive: true });
+  mkdirSync(join(artifact, '.agent-raw', 'output'), { recursive: true });
   mkdirSync(worktree, { recursive: true });
   const database = openControlDatabase(join(directory, 'control.db'));
   const controls = createControlRepository(ROOT, database);
@@ -35,7 +37,7 @@ function setup() {
     result: join(output, 'result.json'), evidence: join(output, 'evidence.jsonl'), commands: join(output, 'command-records.jsonl'),
   };
   const task = {
-    schema_version: 1, output_contract_version: 1, workflow_id: WORKFLOW_ID,
+    schema_version: 1, output_contract_version: 1, output_ingestion_mode: 'LOCAL_STAGED', workflow_id: WORKFLOW_ID,
     task_id: 'TASK-task-kernel-test', run_id: 'RUN-task-kernel-test', parent_task_id: null,
     task_type: 'DEVELOPMENT', assigned_agent: AGENT, title: 'Implement feature', status: 'CREATED',
     dependencies: [], acceptance_criteria_ids: [], attempt: 1, max_attempts: 2,
@@ -92,9 +94,10 @@ function writeValidOutputs(value, resultStatus = 'COMPLETED') {
     worktree_path_abs: value.task.worktree_path_abs, artifact_root_abs: value.task.artifact_root_abs,
     isolation_mode: 'UNSANDBOXED_LOCAL', self_validation: { preflight_passed: true, checks: [{ name: 'test', status: 'PASS' }] },
   };
-  writeFileSync(value.paths.result, `${JSON.stringify(result, null, 2)}\n`);
-  writeFileSync(value.paths.evidence, `${JSON.stringify({ evidence_id: 'EVD-1', source_type: 'file', collected_at: NOW, collector: AGENT })}\n`);
-  writeFileSync(value.paths.commands, `${JSON.stringify({ command_record_id: 'CR-1', executable: 'node', cwd_abs: value.task.worktree_path_abs,
+  const outputFor = (path) => value.task.structured_outputs.find((output) => output.path_abs === path);
+  writeFileSync(stagedOutputPath(value.task, outputFor(value.paths.result)), `${JSON.stringify(result, null, 2)}\n`);
+  writeFileSync(stagedOutputPath(value.task, outputFor(value.paths.evidence)), `${JSON.stringify({ evidence_id: 'EVD-1', source_type: 'file', collected_at: NOW, collector: AGENT })}\n`);
+  writeFileSync(stagedOutputPath(value.task, outputFor(value.paths.commands)), `${JSON.stringify({ command_record_id: 'CR-1', executable: 'node', cwd_abs: value.task.worktree_path_abs,
     started_at: NOW, finished_at: NOW, exit_code: 0, timed_out: false, stdout_path_abs: join(value.directory, 'stdout'),
     stderr_path_abs: join(value.directory, 'stderr'), attempt: 1, invoked_by_agent: AGENT, task_id: value.task.task_id,
     run_id: value.task.run_id, isolation_mode: 'UNSANDBOXED_LOCAL' })}\n`);
@@ -108,7 +111,7 @@ function complete(value, dispatch, overrides = {}) {
     workflow_id: dispatch.workflow_id, task_id: dispatch.task_id, run_id: dispatch.run_id,
     agent_id: dispatch.agent_id, attempt: dispatch.attempt, status: 'SUCCEEDED',
     session_key: dispatch.session_key, session_id: 'session-123', result_path_abs: value.paths.result,
-    result_sha256: hex(value.paths.result), error_code: null, error_message: null,
+    result_sha256: hex(stagedOutputPath(value.task, value.task.structured_outputs.find((output) => output.path_abs === value.paths.result))), error_code: null, error_message: null,
     completed_at: '2026-08-05T08:11:00.000Z', ...overrides,
   };
 }
@@ -150,9 +153,9 @@ test('task cannot become COMPLETED when a required structured output is missing'
   try {
     const dispatch = readyAndRunning(value);
     writeValidOutputs(value);
-    rmSync(value.paths.evidence);
+    rmSync(stagedOutputPath(value.task, value.task.structured_outputs.find((output) => output.path_abs === value.paths.evidence)));
     assert.throws(() => value.tasks.ingestCompletion(complete(value, dispatch)),
-      (error) => error.code === 'TASK_REQUIRED_OUTPUT_MISSING');
+      (error) => error.code === 'TASK_REQUIRED_OUTPUT_RAW_MISSING');
     assert.equal(value.tasks.get(value.task.task_id).status, 'RUNNING');
     assert.equal(value.tasks.dispatches(value.task.task_id)[0].status, 'RUNNING');
   } finally { value.close(); }

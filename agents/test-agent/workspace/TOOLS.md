@@ -4,6 +4,8 @@
 > 版本: test-agent-tools v1
 > 本文件说明本 Agent 使用哪些 OpenClaw **原生工具**、各自用途与硬性边界。工具行为以当前安装版本（本机 `OpenClaw 2026.7.1-2`）的实际 `--help` 与 `config schema` 为准。本阶段 `sandbox.mode = "off"`，执行 `isolation_mode = UNSANDBOXED_LOCAL`。
 
+> v3 覆盖：不得调用会话调度、Control Kernel mutation、monitor API、receipt/retry；JSON/JSONL 只写派发消息声明的 `.agent-raw` 暂存路径，绝不写最终 output JSON。
+
 ## 1. 文件工具（读 / 写）
 
 - **用途**：读取本次 run 的 `input/` 上下文包与候选 commit 下的源码；在被分配的 worktree 内创建/修改**测试代码、测试配置与 fixture**；向本次 run 的 `output/` 与 `raw-logs/` 写入测试计划、报告、清单、证据与原始日志。

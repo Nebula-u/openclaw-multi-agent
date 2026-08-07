@@ -79,33 +79,21 @@
 
 ## 9. JSON 强校验、保守清洗、两次重试与错误日志
 
-所有由 LLM 生成或改写的 JSON / JSONL 运行时产物，写入后必须立即用 Runtime Guard 调用官方 JSON Schema validator（Ajv）本地强校验。不得只靠“看起来是 JSON”、编辑器高亮、手工检查或模型自述来判定合法。
+所有由 LLM 生成或改写的 JSON / JSONL 运行时产物只能写入任务派发消息指定的 `<artifact_root_abs>/.agent-raw/**`。Agent 不得写最终 output JSON、不得自行调用 validator、不得解析/修复 JSON，也不得决定重试或完成状态。
 
-每个 JSON / JSONL 产物必须使用对应 `contracts/*.schema.json` 校验；JSONL 需加 `--jsonl`。校验命令必须传入 `--log-file <artifact_root_abs>/raw-logs/json-validation-errors.jsonl`，并带上 `--stage agent_self_validation`、`--agent-id`、`--workflow-id`、`--task-id`、`--run-id`、`--attempt`，以便记录错误主体和错误内容。失败日志记录格式以 `contracts/json-validation-error.schema.json` 为准。
+local-orchestrator 是唯一入库器：它通过 `ingestJsonText()` 统一保存原始 SHA-256、去 UTF-8 BOM、去唯一 fence、提取唯一候选、schema 校验、写入 ingestion receipt，并原子发布最终 JSON/JSONL。多个候选、截断、parse error、enum/type/schema 不符一律失败关闭；不得猜测或改写业务字段。
 
-收到 LLM JSON/JSONL 回复后，先保存原始文本与 SHA-256；只可做确定性、保守的包装清洗：去 UTF-8 BOM、去唯一 JSON/JSONL Markdown fence、或从解释性前后缀中提取唯一完整 JSON 值/JSONL 连续块。多个候选、业务字段、ID、日期、数字、类型和枚举均不得猜测或自动改写。清洗后仍须立即执行 Runtime Guard + Ajv。
-
-空 content、输出截断、JSON parse error、enum/type 不符和 schema drift 共用同一重写预算：首次调用之外最多重试 **2 次**，且必须在同一会话中完成。enum 或 type 错误必须明确指出字段路径、期望类型/允许枚举和收到值，要求模型重写；schema drift、截断和空输出分别使用对应固定模板。不得把正常纯工具调用误判为空输出，也不得因最终文本为空而重复已验证的工具副作用或 artifact。
-
-每次重试后必须再次运行同一个 schema 校验，并保存重写提示、原始回复、清洗后的回复（如有）、转换记录与错误日志。两次重试后仍失败，不得报告 `COMPLETED`；按性质返回 `FAILED`、`BLOCKED` 或 `NEEDS_REWORK`。任何情况下不得覆盖或删除失败日志。
+重试预算、错误记录和 task 状态由本地 workflow 代码决定。Agent 只报告可审计事实和限制；不得因 JSON 格式错误重新执行已完成副作用，亦不得以聊天 JSON 作为产物。
 
 ## 9.1 Dispatch 身份确认与完成通知
 
-若派发消息包含 `dispatch_id` 与 input manifest SHA-256，工作 Agent 必须在 Preflight 中核对它们与上下文包、当前 workflow/task/run/agent 身份一致。成功后仅向 manager-agent 发送简短 ACK；不得直接写 `dispatch/`、receipt、completion 或 dead-letter 文件。
+若派发消息包含 `dispatch_id` 与 input manifest SHA-256，工作 Agent 必须在 Preflight 中核对它们与上下文包、当前 workflow/task/run/agent 身份一致。不得直接写 dispatch、receipt、completion 或 dead-letter 文件，也不向 manager 发送会改变状态的 ACK/完成命令。
 
-完成前先落盘、校验并保留所有本次 run 的产物。完成通知必须给出 `dispatch_id`、`result.json` 的绝对路径和 SHA-256、真实 `result_status`；它只是通知，manager-agent 独立校验后才会把 completion 作为事实持久化。收到 manager-agent 的 supersede/cancel/终结通知后，停止新增写入并如实报告。
+完成前只落盘 staged raw 产物和真实代码/日志证据；local-orchestrator 会决定是否接收并持久化 completion。收到终结通知后停止新增写入并如实报告。
 
-## 9.2 可观测性 Activity（启用时）
+## 9.2 可观测性
 
-若运行环境提供 `MONITOR_URL` 和 `MONITOR_TOKEN`，工作 Agent 应使用
-`scripts/monitor-core/emit-activity.mjs` 上报结构化活动：preflight 后 `STARTED`、重要阶段
-`PROGRESS`、checkpoint 更新、长工具调用前后、等待、阻塞及完成前摘要。Activity 只包含当前
-动作、已完成事实、下一步、阻塞和产物定位，不包含 thinking、完整 prompt、凭据或未截断日志。
-
-Activity 是遥测，不是 workflow/task 状态事实。上报暂时失败不得伪造成功，也不得直接改变
-任务状态；保存本地错误摘要后继续按原任务契约执行。收到 NUDGE 时只上报现状，不重新执行已
-完成步骤或外部副作用。`MONITOR_TOKEN` 只能从进程环境读取，禁止写入 artifact、日志、上下文包
-或 Git。
+Agent 不调用任何 monitor API 或活动上报脚本。session tailer、artifact watcher 和 health classifier 在本地读取已登记 dispatch 的会话与已发布产物；它们只向看板提供脱敏的自然语言输出、状态和健康事实，不采集 thinking、工具参数、凭据或完整 prompt。
 
 ## 10. 用户验收后的项目状态同步（长期规则）
 

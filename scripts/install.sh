@@ -202,8 +202,14 @@ if [ -n "$MODEL_CONFIG" ]; then
 fi
 
 # 校验 workspace / agentDir 彼此不同
-uniq_ws="$(printf '%s\n' "${WS[@]}" | sort -u | wc -l | tr -d ' ')"
-uniq_dir="$(printf '%s\n' "${DIR[@]}" | sort -u | wc -l | tr -d ' ')"
+registered_workspaces=()
+registered_agent_dirs=()
+for id in "${AGENT_IDS[@]}"; do
+  registered_workspaces+=("${WS[$id]}")
+  registered_agent_dirs+=("${DIR[$id]}")
+done
+uniq_ws="$(printf '%s\n' "${registered_workspaces[@]}" | sort -u | wc -l | tr -d ' ')"
+uniq_dir="$(printf '%s\n' "${registered_agent_dirs[@]}" | sort -u | wc -l | tr -d ' ')"
 [ "$uniq_ws" -eq "${#AGENT_IDS[@]}" ] || { echo "workspace 路径存在重复" >&2; exit 1; }
 [ "$uniq_dir" -eq "${#AGENT_IDS[@]}" ] || { echo "agentDir 路径存在重复" >&2; exit 1; }
 

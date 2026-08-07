@@ -144,7 +144,7 @@ foreach ($p in $RegisteredPackages) {
 }
 
 Write-Host "`n== 发现的 Agent packages ==" -ForegroundColor Cyan
-foreach ($p in $Packages) {
+foreach ($p in $RegisteredPackages) {
   $state = if (-not $p.register) { 'DRAFT' } elseif (-not $p.active) { 'REGISTERED_INACTIVE' } else { 'ACTIVE' }
   Write-Host ("  {0,-24} {1,-9} {2,-20} {3}" -f $p.id, $p.origin, $state, ($p.capabilities -join ','))
 }
@@ -164,7 +164,7 @@ $Manifest = [ordered]@{
   config_changes = @()
   validation = $null
 }
-foreach ($p in $Packages) {
+foreach ($p in $RegisteredPackages) {
   $Manifest.agents += [ordered]@{
     id = $p.id
     origin = $p.origin
@@ -269,7 +269,9 @@ try {
     $currentAllow = @()
     $currentDelegationMode = ''
     $currentRequireAgentId = $false
+    $currentHasSubagents = $false
     if ($currentAgent.PSObject.Properties.Name -contains 'subagents' -and $currentAgent.subagents) {
+      $currentHasSubagents = $true
       if ($currentAgent.subagents.PSObject.Properties.Name -contains 'allowAgents') { $currentAllow = @($currentAgent.subagents.allowAgents | ForEach-Object { [string]$_ }) }
       if ($currentAgent.subagents.PSObject.Properties.Name -contains 'delegationMode') { $currentDelegationMode = [string]$currentAgent.subagents.delegationMode }
       if ($currentAgent.subagents.PSObject.Properties.Name -contains 'requireAgentId') { $currentRequireAgentId = [bool]$currentAgent.subagents.requireAgentId }
@@ -279,7 +281,10 @@ try {
     $subagentsMatch = if ($p.role -eq 'manager') {
       $allowMatches -and $currentDelegationMode -eq 'prefer' -and $currentRequireAgentId
     } else {
-      $allowMatches
+      # An omitted block currently inherits OpenClaw defaults.  Materialize an
+      # explicit empty allowlist so a worker cannot acquire delegation through
+      # a later global-default change.
+      $currentHasSubagents -and $allowMatches
     }
     if (-not $subagentsMatch) {
       Set-OpenClawJson -Path "agents.list[$idx].subagents" -Value $subagents -Changes $changes

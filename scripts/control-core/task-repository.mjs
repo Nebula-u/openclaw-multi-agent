@@ -1,10 +1,11 @@
 import { createHash } from 'node:crypto';
-import { existsSync, lstatSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import Ajv from 'ajv';
 import Ajv2020 from 'ajv/dist/2020.js';
 import addFormats from 'ajv-formats';
 import { canonicalJson } from '../runtime-core/atomic-store.mjs';
+import { ingestStructuredOutputs, isPublishedOutput, StructuredOutputIngestionError } from '../runtime-core/structured-output-ingestion.mjs';
 import { ControlTransitionError } from './reducer.mjs';
 
 const ZERO_HASH = '0'.repeat(64);
@@ -234,25 +235,23 @@ function validatePackage(projectRoot, database, task, validators, outputContract
   return { manifest_sha256: sha256(readFileSync(task.context_manifest_path_abs)), checks: 8 + (manifest?.input_files?.length ?? 0) + task.structured_outputs.length };
 }
 
-function validateOutputs(task, resultPath, resultHash) {
-  if (!existsSync(resultPath) || lstatSync(resultPath).isSymbolicLink()) fail('TASK_RESULT_UNSAFE', 'result file is missing or is a symbolic link');
-  if (sha256(readFileSync(resultPath)) !== resultHash) fail('TASK_RESULT_HASH_MISMATCH', 'completion result hash does not match file');
+function validateOutputs(task, resultPath, resultHash, validateSchema, occurredAt) {
+  let accepted;
+  try {
+    accepted = ingestStructuredOutputs(task, { validateSchema, occurredAt });
+  } catch (error) {
+    if (error instanceof StructuredOutputIngestionError) fail(error.code, error.message, error.details);
+    throw error;
+  }
+  if (!existsSync(resultPath) || sha256(readFileSync(resultPath)) !== resultHash) {
+    fail('TASK_RESULT_HASH_MISMATCH', 'completion result hash does not match the locally published file');
+  }
   let result = null;
   const validations = [];
-  for (const output of task.structured_outputs) {
-    if (!existsSync(output.path_abs)) {
-      if (output.required) fail('TASK_REQUIRED_OUTPUT_MISSING', `required output is missing: ${output.path_abs}`);
-      continue;
-    }
-    if (lstatSync(output.path_abs).isSymbolicLink()) fail('TASK_OUTPUT_SYMLINK', `output must not be a symbolic link: ${output.path_abs}`);
-    const validate = compile(readJson(output.schema_path_abs));
-    const values = output.format === 'json'
-      ? [readJson(output.path_abs)]
-      : readFileSync(output.path_abs, 'utf8').split(/\r?\n/u).filter((line) => line.trim()).map(JSON.parse);
-    if (output.required && values.length === 0) fail('TASK_REQUIRED_OUTPUT_EMPTY', `required output is empty: ${output.path_abs}`);
-    for (const value of values) assertValid(validate, value, 'TASK_OUTPUT_SCHEMA_INVALID');
-    validations.push({ path_abs: output.path_abs, records: values.length });
-    if (normalized(output.path_abs) === normalized(resultPath)) result = values[0];
+  for (const acceptedOutput of accepted) {
+    const { output, values, receipt_path_abs: receiptPath } = acceptedOutput;
+    validations.push({ path_abs: output.path_abs, records: values.length, ingestion_receipt_path_abs: receiptPath });
+    if (isPublishedOutput(task, output, resultPath)) result = values[0];
   }
   if (!result) fail('TASK_RESULT_NOT_DECLARED', 'completion result path is not a declared structured output');
   for (const key of ['workflow_id', 'task_id', 'run_id']) if (result[key] !== task[key]) fail('TASK_RESULT_IDENTITY_MISMATCH', `result ${key} does not match task`);
@@ -274,11 +273,18 @@ export function createTaskRepository(projectRootInput, database) {
     completion: compile(schemas('completion-receipt.schema.json')),
   };
   const outputContracts = readJson(join(projectRoot, 'config', 'task-output-contracts.json'));
+  const outputSchemaValidators = new Map();
+  const validateOutputSchema = (path) => {
+    const key = normalized(path);
+    if (!outputSchemaValidators.has(key)) outputSchemaValidators.set(key, compile(readJson(path)));
+    return outputSchemaValidators.get(key);
+  };
 
   return {
     register(task) {
       assertValid(validators.task, task, 'TASK_SCHEMA_INVALID');
       if (task.status !== 'CREATED') fail('TASK_INITIAL_STATUS_INVALID', 'new tasks must start in CREATED');
+      if (task.output_ingestion_mode !== 'LOCAL_STAGED') fail('TASK_OUTPUT_INGESTION_MODE', 'new tasks must use LOCAL_STAGED output ingestion');
       return transactional(database, `REGISTER:${task.task_id}`, task, () => {
         const workflow = database.prepare('SELECT state_json FROM workflows WHERE workflow_id = ?').get(task.workflow_id);
         if (!workflow) fail('TASK_WORKFLOW_NOT_FOUND', `workflow does not exist: ${task.workflow_id}`);
@@ -360,6 +366,37 @@ export function createTaskRepository(projectRootInput, database) {
         return { ok: true, command: 'dispatch-receipt', task, receipt, event };
       });
     },
+    failDispatch({ dispatch_id: dispatchId, error_code: errorCode, error_message: errorMessage, completed_at: completedAt, session_id: sessionId = null }) {
+      if (!dispatchId || !errorCode || !completedAt) fail('ORCHESTRATOR_FAILURE_INVALID', 'dispatch_id, error_code and completed_at are required');
+      return transactional(database, `ORCHESTRATOR_FAILURE:${dispatchId}:${errorCode}`, {
+        dispatch_id: dispatchId, error_code: errorCode, error_message: errorMessage ?? null, completed_at: completedAt, session_id: sessionId,
+      }, () => {
+        const dispatch = database.prepare('SELECT * FROM dispatches WHERE dispatch_id = ?').get(dispatchId);
+        if (!dispatch) fail('DISPATCH_NOT_FOUND', `dispatch does not exist: ${dispatchId}`);
+        if (['SUCCEEDED', 'FAILED', 'LOST'].includes(dispatch.status)) {
+          return { ok: true, command: 'orchestrator-fail-dispatch', dispatch_id: dispatchId, terminal: dispatch.status };
+        }
+        const intent = parseJson(dispatch.intent_json);
+        const completion = {
+          schema_version: 1, record_type: 'COMPLETION_RECEIPT', completion_id: `CMP-ORCHESTRATOR-${dispatchId.slice(4)}`,
+          dispatch_id: intent.dispatch_id, idempotency_key: intent.idempotency_key,
+          workflow_id: intent.workflow_id, task_id: intent.task_id, run_id: intent.run_id,
+          agent_id: intent.agent_id, attempt: intent.attempt, status: 'FAILED', session_key: intent.session_key,
+          session_id: sessionId ?? dispatch.session_id ?? `orchestrator-failed-${dispatchId}`,
+          result_path_abs: null, result_sha256: null, error_code: errorCode, error_message: errorMessage ?? null,
+          completed_at: completedAt,
+        };
+        database.prepare('UPDATE dispatches SET status = ?, completion_json = ?, updated_at = ? WHERE dispatch_id = ?')
+          .run('FAILED', json(completion), completedAt, dispatchId);
+        database.prepare("UPDATE dispatch_outbox SET status = 'FAILED', attempts = attempts + 1, last_error = ? WHERE dispatch_id = ?")
+          .run(`${errorCode}: ${errorMessage ?? ''}`.slice(0, 2000), dispatchId);
+        const task = loadTask(database, intent.task_id);
+        const next = updateTask(database, task, 'FAILED', completedAt);
+        const event = appendTaskEvent(database, next, `TEV-ORCHESTRATOR-FAILED-${dispatchId}`, 'TASK_ORCHESTRATOR_FAILED', task.status,
+          'FAILED', completedAt, { dispatch_id: dispatchId, error_code: errorCode, error_message: errorMessage ?? null });
+        return { ok: true, command: 'orchestrator-fail-dispatch', task: next, completion, event };
+      });
+    },
     ingestCompletion(completion) {
       assertValid(validators.completion, completion, 'COMPLETION_RECEIPT_SCHEMA_INVALID');
       const replay = replayedOperation(database, `COMPLETION:${completion.completion_id}`, completion);
@@ -367,7 +404,9 @@ export function createTaskRepository(projectRootInput, database) {
       let validated = null;
       const task = loadTask(database, completion.task_id);
       if (!task) fail('TASK_NOT_FOUND', `task does not exist: ${completion.task_id}`);
-      if (completion.status === 'SUCCEEDED') validated = validateOutputs(task, completion.result_path_abs, completion.result_sha256);
+      if (completion.status === 'SUCCEEDED') {
+        validated = validateOutputs(task, completion.result_path_abs, completion.result_sha256, validateOutputSchema, completion.completed_at);
+      }
       return transactional(database, `COMPLETION:${completion.completion_id}`, completion, () => {
         const dispatch = database.prepare('SELECT * FROM dispatches WHERE dispatch_id = ?').get(completion.dispatch_id);
         if (!dispatch) fail('DISPATCH_NOT_FOUND', `dispatch does not exist: ${completion.dispatch_id}`);

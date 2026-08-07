@@ -8,7 +8,7 @@ import { createSessionTailer } from '../monitor/session-tailer.mjs';
 
 const ROOT = resolve(import.meta.dirname, '..');
 
-test('session tailer skips thinking, handles tool records and waits for a complete JSONL line', () => {
+test('session tailer exposes only user-visible assistant dialogue and waits for a complete JSONL line', () => {
   const directory = mkdtempSync(join(tmpdir(), 'monitor-session-tailer-'));
   const sessionDirectory = join(directory, 'developer-agent', 'sessions');
   mkdirSync(sessionDirectory, { recursive: true });
@@ -24,12 +24,12 @@ test('session tailer skips thinking, handles tool records and waits for a comple
     const controlDatabase = { prepare: () => ({ all: () => [{ dispatch_id: 'DSP-1', workflow_id: 'WF-1', task_id: 'TASK-1', run_id: 'RUN-1', agent_id: 'developer-agent', session_id: 'session-1' }] }) };
     const tailer = createSessionTailer({ controlDatabase, telemetry, sessionRoot: directory });
     const first = tailer.scan();
-    assert.equal(first.length, 3);
+    assert.equal(first.length, 1);
     assert.ok(first.every((event) => !JSON.stringify(event).includes('private')));
     assert.ok(first.every((event) => !JSON.stringify(event).includes('secret-value')));
+    assert.equal(first[0].event_type, 'session.assistant_output');
     assert.equal(tailer.scan().length, 0);
     appendFileSync(path, '}\n');
     assert.equal(tailer.scan().length, 0);
   } finally { database.close(); rmSync(directory, { recursive: true, force: true }); }
 });
-

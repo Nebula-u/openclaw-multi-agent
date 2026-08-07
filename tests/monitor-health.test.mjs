@@ -14,11 +14,11 @@ function task(overrides = {}) {
       intent: { lease_deadline: '2026-08-06T13:05:00.000Z' } }], ...overrides };
 }
 
-test('health classifier distinguishes waiting, active tool work and possible stall', () => {
+test('health classifier distinguishes waiting, recent dialogue and possible stall', () => {
   const telemetry = { latestActivity: () => null, latestEvent: () => null };
   assert.equal(classifyTaskHealth(task({ status: 'WAITING_HUMAN' }), { telemetry, now: NOW }).health, 'WAITING_HUMAN');
-  const toolTelemetry = { latestActivity: () => ({ kind: 'TOOL_STARTED', status: 'RUNNING', timestamp: '2026-08-06T13:01:00.000Z', summary: 'long test' }), latestEvent: () => null };
-  assert.equal(classifyTaskHealth(task(), { telemetry: toolTelemetry, now: NOW, thresholds: { toolRunningGraceSeconds: 900 } }).health, 'RUNNING');
+  const dialogueTelemetry = { latestActivity: () => null, latestEvent: () => ({ timestamp: '2026-08-06T13:09:00.000Z', source: 'SESSION_TAILER', event_type: 'session.assistant_output' }) };
+  assert.equal(classifyTaskHealth(task(), { telemetry: dialogueTelemetry, now: NOW }).health, 'RUNNING');
   const stalled = classifyTaskHealth(task(), { telemetry, now: NOW, thresholds: { heartbeatStaleSeconds: 180, possiblyStalledSeconds: 300 } });
   assert.equal(stalled.health, 'POSSIBLY_STALLED');
   assert.equal(stalled.confidence, 'MEDIUM');

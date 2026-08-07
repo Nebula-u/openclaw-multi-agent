@@ -1,8 +1,8 @@
 # openclaw-sdlc-multi-agent
 
-在**已部署的 OpenClaw**（本机验证版本 `2026.7.1-2`）之上，使用 OpenClaw **原生多 Agent、独立 workspace、原生跨 Agent 会话调度、文件工具、Shell 工具和本地 Git 工具**，实现从需求到"运维前交付"的软件开发生命周期（SDLC）流程。
+在**已部署的 OpenClaw**（本机验证版本 `2026.7.1-2`）之上，使用独立 Agent workspace、受控本地工作流/编排器、文件工具、Shell 工具和本地 Git 工具，实现从需求到“运维前交付”的软件开发生命周期（SDLC）流程。
 
-> **本项目没有 Python 控制平面，也没有常驻编排服务。** `manager-agent` 仍通过 OpenClaw 原生工具编排；按需运行的 Node.js Control Kernel 使用内置 SQLite 原子保存状态，但不调用模型、不调度 Agent。安装脚本（PowerShell / Bash）仅在安装与配置阶段使用。
+> **状态和派发不由 Agent 决定。** 按需运行的 Node.js `orchestrator` 是唯一的本地 mutation/派发入口：它从已验证 task 固定派生 Agent、会话、回执和重试；Control Kernel 以 SQLite 原子保存唯一状态。Agent 只执行分配的工作并产出用户可见文本、代码和 staged raw 结果，不能调用原生派发、改写控制状态或决定 JSON 清洗路径。
 
 ## 这是什么
 
@@ -10,7 +10,7 @@
 
 | Agent | 角色 |
 |-------|------|
-| `manager-agent` | 唯一工作流总控；管理状态、上下文、规则、Gate、审批、Git 合并；按 package capability 调度已激活 Agent |
+| `manager-agent` | 用户沟通与工作流意图协调；只能解释已验证事实并提交意图，不能直接派发、改状态或写回执 |
 | `requirement-agent` | 需求分析、验收标准、追踪关系 |
 | `architect-agent` | 架构、接口、数据模型、威胁模型、测试策略、开发任务 |
 | `developer-agent` | 生产代码实现（真实本地 Git commit） |
@@ -21,7 +21,7 @@
 ## 关键边界（务必先读）
 
 - **单一状态权威。** v2 workflow/task/dispatch 当前状态只存在于 `<runtime>/control/control.db`；`runtime/control/v2/**` 是只读派生投影。见 [docs/architecture.md](docs/architecture.md)。
-- **外部副作用可对账。** `sessions_spawn` 仍由 manager 调用；SQLite 先保存 intent/outbox，真实 session 返回后再写 receipt，不伪装跨系统原子事务。
+- **外部副作用可对账。** 本地 Orchestrator 先写 intent/receipt，再以固定 Agent 和 session 调用 OpenClaw；Agent 不能使用 `sessions_spawn` 或伪造 receipt。
 - **测试阶段无 sandbox。** 本阶段 `test-agent` 在其被分配的本地 Git worktree 中**直接**执行测试，记录 `isolation_mode=UNSANDBOXED_LOCAL`。这是**当前阶段已知的安全限制**，不是"完全隔离"。见 [docs/unsandboxed-test-policy.md](docs/unsandboxed-test-policy.md) 与 [docs/threat-model.md](docs/threat-model.md)。
 - **仅到"运维前交付"。** 不做真实部署、远程发布、CI/CD 接入、服务启停、生产迁移执行、生产凭证配置、监控告警。`release-agent` 的 `GO` 仅表示"具备移交后续运维/部署阶段的条件"。
 - **仅本地 Git。** 不连接任何远程仓库；不 push/pull/fetch。
@@ -38,16 +38,16 @@
 - PowerShell 7（Windows 主目标，本机验证：`7.6.4`）**或** Bash（本机验证：GNU bash 5.2.37）。
 - Bash 实现需要现成的 `jq` 读取 package JSON；脚本不会自动安装它。
 
-安装脚本**不会**自动安装任何依赖、不联网、不修改系统服务、不删除你已有的 OpenClaw Agent 或配置。
+普通安装脚本**不会**自动安装任何依赖、不联网、不修改系统服务，也不会删除已有 OpenClaw Agent 或配置。仅 `reinstall-agents.ps1` 会删除路径已验证为本项目 runtime 的既有 Agent，且需显式 `-GatewayStopped -Apply -Yes`。
 
 ## Control Kernel v2 与 Runtime Guard
 
-新 workflow 默认使用 `scripts/control-kernel.mjs`。SQLite 是唯一当前状态源；workflow state、不可变哈希事件、幂等 command result 与 projection outbox 同事务提交。`phase + condition + outcome` 分离流程阶段、暂停和终态，`active_workflows` SQL view 自动排除终态。
+新 workflow 默认使用 `scripts/orchestrator.mjs`；它是本地唯一 mutation/派发入口，并把状态 actor 固定为 `local-orchestrator`。SQLite 是唯一当前状态源；workflow state、不可变哈希事件、幂等 command result 与 projection outbox 同事务提交。`phase + condition + outcome` 分离流程阶段、暂停和终态，`active_workflows` SQL view 自动排除终态。
 
 ```bash
-# 初始化数据库；提交一个版本化动作命令
-node scripts/control-kernel.mjs init --project-root /abs/project --db /abs/runtime/control/control.db
-node scripts/control-kernel.mjs apply --project-root /abs/project --db /abs/runtime/control/control.db --command-file /abs/command.json
+# 初始化 local Orchestrator；提交一个版本化动作命令
+node scripts/orchestrator.mjs init --project-root /abs/project
+node scripts/orchestrator.mjs apply --project-root /abs/project --db /abs/runtime/control/control.db --command-file /abs/command.json
 
 # 生成只读投影、审计、确定性恢复
 node scripts/control-kernel.mjs project --project-root /abs/project --db /abs/runtime/control/control.db --runtime-root /abs/runtime
@@ -55,7 +55,7 @@ node scripts/control-kernel.mjs audit --project-root /abs/project --db /abs/runt
 node scripts/control-kernel.mjs recover --project-root /abs/project --db /abs/runtime/control/control.db --runtime-root /abs/runtime
 ```
 
-Task/dispatch/result 依次使用 `task-register`、`task-validate`、`dispatch-prepare`、OpenClaw `sessions_spawn`、`dispatch-receipt` 和 `result-ingest`。`dispatch-outbox` 的 PENDING 项必须先按 session key 查询原 session；不得直接重复 spawn。只有 result 与 task 固定的全部必需 JSON/JSONL 验证通过，task 才能进入 `COMPLETED`。完整命令见 [Control Kernel v2](docs/control-kernel-v2.md)。
+Task/dispatch/result 由本地 Orchestrator 按 `task-register`、`task-validate`、`dispatch --task-id` 闭环处理；它从 task 固定派生 Agent/session/receipt，并调用 OpenClaw Agent。Agent JSON/JSONL 仅能写 `.agent-raw`，本地程序使用统一入库器校验并原子发布；所有必需产物通过后 task 才能进入 `COMPLETED`。直接调用 Control Kernel mutation 需要 local capability，不能伪造 JSON `actor`。完整命令见 [Control Kernel v2](docs/control-kernel-v2.md)。
 
 Control Kernel 不取代 Runtime Guard：Guard 继续校验 artifact、Gate、审批、Git candidate 与遗留 v1。旧 `commit-transition` / 可写 `active-workflows.json` 流程只保留给遗留 v1，不得用于新 workflow。
 
@@ -70,7 +70,7 @@ npm install
 当源码 workspace 规则更新、或现有 runtime 缺少 bundle manifest 时，使用受限重装脚本同步**当前已安装**的项目 Agent。它仅处理 workspace/agentDir 与本项目 manifest 完全匹配的 Agent；未安装的 package（例如 `dialogue-agent`）不会被顺带注册。脚本会先备份 OpenClaw 配置及这些 Agent 的 runtime workspace/state，保留已有的每 Agent 模型路由，随后删除、重建、更新 `agents.list` 并校验 runtime bundle。
 
 本仓库修改 `agents/*/workspace/` 下的规则后，也必须执行该同步流程；否则运行中的 Agent 仍使用旧 workspace 规则。
-重装前请先暂停 OpenClaw Gateway，避免 Gateway 内存中的 Agent catalog 与配置文件产生冲突；完成后再启动：
+重装前请先暂停 OpenClaw Gateway，避免 Gateway 内存中的 Agent catalog 与配置文件产生冲突；脚本不会自行停止或启动 Gateway，执行时必须用 `-GatewayStopped` 显式确认：
 
 ```powershell
 # 先只查看将处理哪些 Agent
@@ -79,15 +79,15 @@ pwsh -NoProfile -File scripts/reinstall-agents.ps1 -RuntimeRoot runtime
 # 重装前停止 Gateway
 openclaw gateway stop
 
-# 执行卸载、重新安装、配置与 runtime 同步
-pwsh -NoProfile -File scripts/reinstall-agents.ps1 -Apply -Yes -RuntimeRoot runtime
+# 执行：备份 → 删除已验证的项目 Agent/config → 清理旧 runtime → 重装 → 校验
+pwsh -NoProfile -File scripts/reinstall-agents.ps1 `
+  -GatewayStopped -Apply -Yes -RuntimeRoot runtime
 
 # 重装完成后启动 Gateway
 openclaw gateway start
 ```
 
-脚本会备份到 `runtime/control/reinstall-backups/<timestamp>/`；如果 OpenClaw CLI 输出诊断
-文本再跟随 JSON，安装器会提取并校验 JSON，而不是把诊断文本误判为配置内容。
+脚本仅处理 workspace 和 agentDir 与 package manifest 精确匹配的 Agent：当前为 7 个项目 Agent；不会处理 `main`、其他项目同名但路径不同的 Agent，或 `register=false` 的 `dialogue-agent`。它会备份到 `runtime/control/reinstall-backups/<timestamp>/`，完成后写入 `reinstall-result.json`。如果 OpenClaw CLI 输出诊断文本再跟随 JSON，脚本会经统一 JSON 入库器提取并校验 JSON，而不是把诊断文本误判为配置内容。
 
 ### Runtime Guard（artifact/Gate 与遗留 v1）
 
@@ -165,11 +165,11 @@ Manager 保持 `deepseek/deepseek-v4-pro` 和 `thinking=high`。其模型窗口�
 
 7 个 Agent 统一使用 DeepSeek V4 Pro + Chat Completions API，模型引用为 `deepseek/deepseek-v4-pro`。配置样例见 `config/agent-models.deepseek-routing.example.json`。
 
-### 可观测性与监督计划状态
+### 只读可观测性看板
 
-核心实现已完成，运行在宿主机原生 Node.js Supervisor Core 中；图形界面是可直接打开的静态
-`monitor/ui/index.html`，不需要 Docker、前端安装或构建。关闭或未打开 HTML 页面不会停止
-监督核心。
+Monitor 运行在宿主机原生 Node.js Supervisor 中；图形界面是可直接打开的静态
+`monitor/ui/index.html`，不需要 Docker、前端安装或构建。看板只从 Control DB、已登记 session
+和已发布 artifact 的本地采集器读取状态；不会调用 Agent、改变 workflow 或触发重试。
 
 启动与查看：
 
@@ -179,24 +179,10 @@ npm run supervisor:start
 ```
 
 然后直接打开 `monitor/ui/index.html`。Supervisor API 默认监听
-`http://127.0.0.1:4319`。看板会从本机 Supervisor 自动取得 token 并连接，不需要手工填写。
-固定本地 token 配置在项目根目录的 `.env`：
+`http://127.0.0.1:4319`。本地页面直接连接只读 API，不需要 token 或任何表单配置；不要将该
+服务暴露到局域网或公网。
 
-```dotenv
-MONITOR_TOKEN=openclaw-local-monitor
-MONITOR_PORT=4319
-MONITOR_URL=http://127.0.0.1:4319
-```
-
-实际 `.env` 不提交到 Git；新 checkout 可复制 `.env.example`。固定 token 只适用于当前
-`127.0.0.1` 本机监听边界，不应在局域网或公网监听时继续使用。
-
-当前安全默认值是 `watchdog_shadow_mode=true`、`manager_wake_enabled=false`：健康判定和
-影子动作会记录遥测，但不会自动唤醒 Manager 或改变 workflow。受控 retry 仅接受已确认
-`FAILED/LOST` 且创建新 run 的请求。Dashboard 只提交监督请求，不直接写 workflow/task。
-Agent 活动可通过 `node scripts/monitor-core/emit-activity.mjs --file <activity.json>` 上报。
-
-真实 OpenClaw manager session 唤醒尚未开启，需完成 Manager 编排加固和实机验收后再启用。
+当前安全默认值是只读 Monitor：健康判定来自 Control DB、已登记 session 与已发布 artifact；不会自动唤醒 Manager 或改变 workflow。受控 retry 仅能由 local Orchestrator 在已确认失败且创建新 run 时执行。Dashboard 不提供任何写入或 Agent 交互入口。
 完整节点职责、交互信息、阶段门槛与验收标准见
 [可观测性与监督实施计划](docs/plan/2026-08-04-agent-observability-monitor.md)。
 
@@ -571,7 +557,7 @@ Manager 只有在用户批准后才能调用 `NewAgent`；构建完成后还需�
 - [docs/control-kernel-v2.md](docs/control-kernel-v2.md) — v2 命令、状态与恢复
 - [docs/legacy-v1-migration.md](docs/legacy-v1-migration.md) — 遗留 v1 取证隔离
 - [docs/native-openclaw-integration.md](docs/native-openclaw-integration.md) — 使用了哪些原生 CLI 与工具
-- [docs/manager-orchestration.md](docs/manager-orchestration.md) — 原生调度算法
+- [docs/manager-orchestration.md](docs/manager-orchestration.md) — 历史原生调度背景（新 v2 workflow 以本地 Orchestrator 为准）
 - [docs/context-and-rule-passing.md](docs/context-and-rule-passing.md) — 上下文包与规则快照
 - [docs/workflow.md](docs/workflow.md) — SDLC 阶段
 - [docs/agent-contracts.md](docs/agent-contracts.md) — 输入输出契约

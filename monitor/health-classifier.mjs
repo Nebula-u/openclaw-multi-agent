@@ -11,7 +11,6 @@ export function classifyTaskHealth(task, { telemetry, now = new Date(), threshol
   const stale = thresholds.heartbeatStaleSeconds ?? 180;
   const stalled = thresholds.possiblyStalledSeconds ?? 300;
   const starting = thresholds.startingTimeoutSeconds ?? 120;
-  const toolGrace = thresholds.toolRunningGraceSeconds ?? 900;
   const dispatch = task.dispatches?.at(-1) ?? null;
   const activity = telemetry.latestActivity(task.task_id);
   const event = telemetry.latestEvent(task.task_id);
@@ -31,7 +30,6 @@ export function classifyTaskHealth(task, { telemetry, now = new Date(), threshol
   const signalAge = ageSeconds(now, lastSignal);
   if (['SENT', 'ACKNOWLEDGED'].includes(dispatch.status) && signalAge > starting) return { health: 'STALE', confidence: 'HIGH', evidence: items };
   if (['SENT', 'ACKNOWLEDGED'].includes(dispatch.status)) return { health: 'STARTING', confidence: 'HIGH', evidence: items };
-  if (activity?.kind === 'TOOL_STARTED' && ageSeconds(now, activity.timestamp) <= toolGrace) return { health: 'RUNNING', confidence: 'HIGH', evidence: items };
   if (signalAge <= stale) return { health: 'RUNNING', confidence: activity ? 'HIGH' : event ? 'MEDIUM' : 'LOW', evidence: items };
   if (signalAge <= stalled) return { health: 'STALE', confidence: activity ? 'HIGH' : event ? 'MEDIUM' : 'LOW', evidence: items };
   const leaseExpired = dispatch.intent?.lease_deadline ? Date.parse(dispatch.intent.lease_deadline) < now.valueOf() : false;

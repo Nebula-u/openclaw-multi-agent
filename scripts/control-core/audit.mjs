@@ -66,7 +66,9 @@ function auditTasks(database, errors) {
     const expectedStatus = completion?.status ?? receipt?.status ?? 'PREPARED';
     if (row.status !== expectedStatus) errors.push({ code: 'DISPATCH_STATUS_MISMATCH', dispatch_id: row.dispatch_id, status: row.status, expected: expectedStatus });
     const outbox = database.prepare('SELECT status FROM dispatch_outbox WHERE dispatch_id=?').get(row.dispatch_id);
-    if (!outbox || (receipt && outbox.status !== 'DELIVERED') || (!receipt && outbox.status === 'DELIVERED')) {
+    const localExecutionFailure = completion?.status === 'FAILED' && String(completion.error_code ?? '').startsWith('ORCHESTRATOR_');
+    const expectedOutboxStatus = localExecutionFailure ? 'FAILED' : receipt ? 'DELIVERED' : 'PENDING';
+    if (!outbox || outbox.status !== expectedOutboxStatus) {
       errors.push({ code: 'DISPATCH_OUTBOX_MISMATCH', dispatch_id: row.dispatch_id, outbox_status: outbox?.status ?? null });
     }
   }

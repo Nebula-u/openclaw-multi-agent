@@ -10,6 +10,7 @@ import { auditControlDatabase } from './control-core/audit.mjs';
 import { exportControlProjections } from './control-core/projections.mjs';
 import { createSupervisionRepository } from './control-core/supervision-repository.mjs';
 import { createControlSnapshot } from './control-core/read-model.mjs';
+import { authorizeLocalOrchestrator, defaultCapabilityPath } from './control-core/local-authority.mjs';
 
 function parseArgs(argv) {
   const [command, ...tokens] = argv;
@@ -41,11 +42,19 @@ function main() {
     const repository = createControlRepository(projectRoot, database);
     const tasks = createTaskRepository(projectRoot, database);
     const supervision = createSupervisionRepository(projectRoot, database);
+    const mutatingCommands = new Set(['apply', 'project', 'recover', 'task-register', 'task-validate', 'task-retry', 'dispatch-prepare',
+      'dispatch-receipt', 'result-ingest', 'supervision-request', 'supervision-claim', 'supervision-complete', 'wake-record']);
+    const authority = mutatingCommands.has(command)
+      ? authorizeLocalOrchestrator({
+        capabilityPath: resolve(options['capability-file'] ?? defaultCapabilityPath(projectRoot)),
+        presentedCapability: process.env.OPENCLAW_CONTROL_CAPABILITY,
+      })
+      : null;
     if (command === 'init') {
       emit({ ok: true, command: 'init', database: databasePath, schema_version: 2 });
     } else if (command === 'apply') {
       const input = JSON.parse(readFileSync(resolve(required(options, 'command-file')), 'utf8'));
-      emit(repository.apply(input));
+      emit(repository.apply({ ...input, actor: authority.actor }));
     } else if (command === 'get') {
       const workflowId = required(options, 'workflow-id');
       const state = repository.get(workflowId);
@@ -112,7 +121,7 @@ function main() {
       throw new Error('usage: control-kernel.mjs <init|apply|get|events|active|snapshot|project|audit|recover|task-register|task-validate|task-get|task-retry|dispatch-prepare|dispatch-receipt|dispatch-list|dispatch-outbox|result-ingest|supervision-request|supervision-list|supervision-claim|supervision-complete|supervision-events|wake-outbox|wake-record> [options]');
     }
   } catch (error) {
-    const code = error instanceof ControlTransitionError ? error.code : 'CONTROL_KERNEL_ERROR';
+    const code = error.code ?? (error instanceof ControlTransitionError ? error.code : 'CONTROL_KERNEL_ERROR');
     emit({ ok: false, command, errors: [{ code, message: error.message, ...error.details }] }, 1);
   } finally {
     database.close();
