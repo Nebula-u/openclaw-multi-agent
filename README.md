@@ -187,6 +187,38 @@ sudo systemctl status openclaw-monitor --no-pager
 curl -fsS http://127.0.0.1:4319/api/health
 ```
 
+### 将实时 Monitor 发布到 Tomcat HTTPS
+
+适用于 Tomcat 10 直接承载 HTTPS 的 Linux 服务器。该方案把静态看板部署到 `/monitor/`，并在同一 Tomcat context 内部代理 `/monitor/api/*` 到本机 Monitor；端口 `4319` 继续只监听 `127.0.0.1`，不应配置防火墙公网放行。
+
+```bash
+# 1. 从模板生成与当前 Linux 用户、项目路径和 Node 路径匹配的 systemd 单元
+project_root="$(pwd -P)"
+run_user="$(id -un)"
+run_group="$(id -gn)"
+node_bin="$(dirname "$(command -v node)")"
+unit_file="$(mktemp)"
+sed -e "s|__RUN_USER__|$run_user|g" \
+    -e "s|__RUN_GROUP__|$run_group|g" \
+    -e "s|__PROJECT_ROOT__|$project_root|g" \
+    -e "s|__NODE_BIN__|$node_bin|g" \
+    deploy/openclaw-monitor.service > "$unit_file"
+sudo install -o root -g root -m 0644 "$unit_file" /etc/systemd/system/openclaw-monitor.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now openclaw-monitor.service
+
+# 2. 编译 Servlet 并部署到 Tomcat 的 /monitor context
+bash scripts/deploy-monitor-tomcat.sh
+
+# 3. 验证本机 API 与 HTTPS 同源代理
+curl -fsS http://127.0.0.1:4319/api/health
+curl -fsS https://<domain>/monitor/api/health
+```
+
+页面地址为 `https://<domain>/monitor/`。上述 HTTPS 验证要求域名证书已被客户端信任；仅在排查证书问题时才临时使用 `curl -k`。Tomcat 自动发现 exploded webapp 可能需要数秒；若首次请求返回 404，等待部署日志完成后重试。页面会显示工作流、任务和 Agent 状态，应在 Tomcat 前增加访问认证或 IP 白名单。
+
+回滚时，停止 `openclaw-monitor.service`，恢复或移除 `/var/lib/tomcat10/webapps/monitor/`；该目录与 Tomcat `ROOT` 应用独立。
+
 ## 测试
 
 ```powershell

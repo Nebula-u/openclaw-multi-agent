@@ -2,7 +2,8 @@
   'use strict';
   const PHASES = ['INTAKE','REQUIREMENTS','REQUIREMENT_GATE','ARCHITECTURE','ARCHITECTURE_GATE','DEVELOPMENT','CODE_REVIEW','DEVELOPER_REWORK','TESTING','TEST_CODE_REVIEW','FAILURE_TRIAGE','RELEASE_VERIFICATION','FINAL_REPORT'];
   const defaultApiUrl = window.MONITOR_CONFIG?.apiUrl || 'http://127.0.0.1:4319';
-  const state = { apiUrl: localStorage.getItem('monitor.apiUrl') || defaultApiUrl, workflows: [], selectedId: null, source: null, feed: [] };
+  const fixedSameOriginApi = defaultApiUrl.startsWith('/');
+  const state = { apiUrl: fixedSameOriginApi ? defaultApiUrl : (localStorage.getItem('monitor.apiUrl') || defaultApiUrl), workflows: [], selectedId: null, source: null, feed: [] };
   const $ = (id) => document.getElementById(id);
   const escapeHtml = (value) => String(value ?? '').replace(/[&<>'"]/gu, (char) => ({ '&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;' }[char]));
   const formatTime = (value) => { const date = new Date(value); return Number.isNaN(date.valueOf()) ? '—' : date.toLocaleTimeString('zh-CN',{hour12:false}); };
@@ -64,6 +65,6 @@
   async function connect() { state.apiUrl = $('api-url').value.trim().replace(/\/$/u,''); localStorage.setItem('monitor.apiUrl',state.apiUrl); setConnection('degraded','CONNECTING');
     try { const [health,workflows] = await Promise.all([request('/api/health'),request('/api/workflows')]); state.workflows = workflows.workflows || []; if (!state.workflows.some((item) => item.workflow_id === state.selectedId)) state.selectedId = state.workflows[0]?.workflow_id || null; renderMetrics(health); renderSelected(); setConnection(health.ok ? 'online':'degraded',health.status); connectStream(); }
     catch (error) { setConnection('offline','OFFLINE'); $('metric-control').textContent = 'UNREACHABLE'; addFeed({type:'monitor-health',timestamp:new Date().toISOString(),payload:{error:error.message}}); } }
-  async function bootstrap() { for (const apiUrl of [...new Set([defaultApiUrl, state.apiUrl])]) { try { const response = await fetch(`${apiUrl}/api/client-config`); if (!response.ok) continue; const config = await response.json(); state.apiUrl = config.api_url || apiUrl; $('api-url').value = state.apiUrl; localStorage.setItem('monitor.apiUrl',state.apiUrl); break; } catch (_) { /* try the saved address after the configured default */ } } await connect(); }
+  async function bootstrap() { if (!fixedSameOriginApi) { for (const apiUrl of [...new Set([defaultApiUrl, state.apiUrl])]) { try { const response = await fetch(`${apiUrl}/api/client-config`); if (!response.ok) continue; const config = await response.json(); state.apiUrl = config.api_url || apiUrl; $('api-url').value = state.apiUrl; localStorage.setItem('monitor.apiUrl',state.apiUrl); break; } catch (_) { /* try the saved address after the configured default */ } } } await connect(); }
   $('api-url').value = state.apiUrl; $('connect-button').addEventListener('click',connect); $('feed-filter').addEventListener('change',renderFeed); $('clear-feed').addEventListener('click',() => { state.feed=[]; renderFeed(); }); window.addEventListener('beforeunload',() => state.source?.close()); void bootstrap();
 }());

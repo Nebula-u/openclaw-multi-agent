@@ -2,6 +2,26 @@
 
 ## [Unreleased] - 2026-08-07
 
+### Linux：Tomcat HTTPS 实时 Monitor 部署
+
+#### 改动了什么
+
+- Monitor Dashboard 支持部署在 Tomcat 的 `/monitor/` context：部署脚本仅在 Tomcat staging 中注入同源 `/monitor/api/*`，源码继续支持直接打开本地页面并使用 `127.0.0.1:4319`。
+- 新增 Tomcat GET-only Proxy Servlet；它只允许代理到服务器回环地址 `127.0.0.1:4319/api`，不转发浏览器的 Origin、Cookie 或 Authorization，Monitor API 继续保持不对公网监听。
+- 新增 `scripts/deploy-monitor-tomcat.sh`、Tomcat Servlet 5 描述符与参数化 Linux `openclaw-monitor.service` 模板，可重复编译、部署页面和代理 Servlet，并将 Monitor 作为开机自启服务运行。
+- `package-lock.json` 将间接依赖 `fast-uri` 升级到 3.1.5，消除此前审计报告中的高危漏洞。
+
+#### 部署与回滚
+
+- 部署顺序：安装/重启 `openclaw-monitor.service`，然后运行 `bash scripts/deploy-monitor-tomcat.sh`；验证 HTTPS 页面、`/monitor/api/health` 与 SSE 后再对外使用。
+- 回滚：停止 `openclaw-monitor.service`，将 `/var/lib/tomcat10/webapps/monitor/` 替换为此前备份内容或删除该独立 context；不会影响 Tomcat 的 `ROOT` 应用。代码回滚使用本分支提交的父提交。
+
+#### 验证
+
+- `node --test tests/monitor-static-dashboard.test.mjs tests/monitor-tomcat-proxy.test.mjs`：3 项通过。
+- Java 17 使用 Tomcat Servlet API 编译 Proxy Servlet 通过；替换运行用户、项目路径和 Node 路径后的 systemd 单元验证通过。
+- 实际部署后，HTTPS 页面、同源 `/monitor/api/health` 与 SSE snapshot 均通过；4319 保持仅监听 `127.0.0.1`。
+
 ### P0/P1：本地编排边界、只读看板与安全重装
 
 #### 改动了什么
