@@ -18,6 +18,7 @@
 - 每次调用使用独立 session key；prompt 必须要求 Agent 不调用工具、不读写文件、回复后立即结束。
 - 每次回复必须经过既有 ingestion 和 `runtime-guard.mjs validate-file` + Ajv 校验。
 - 真实 Agent 运行默认串行，避免并发引起额外会话行为。
+- Gateway 客户端必须能在当前主机上发现已安装的 OpenClaw 包；不得因非 Windows 平台直接拒绝真实 smoke test。
 - 运行结果写入 `artifacts/agent-json-schema-matrix/`，不把真实回复加入版本控制。
 
 ---

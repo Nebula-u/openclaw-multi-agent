@@ -14,6 +14,8 @@
 
 默认串行执行。脚本支持按场景筛选、超时、输出目录和运行 ID 参数，但不提供会改变单个 prompt 20 次语义的隐式重试。Gateway 传输失败记录为该次调用的通信失败，不自动补发。
 
+Gateway 客户端按当前主机平台发现本地 OpenClaw 包：Windows 保留 `APPDATA` 路径，Linux/macOS 使用 `OPENCLAW_PACKAGE_ROOT`、pnpm/npm 全局根目录等候选路径。这样矩阵脚本可以复用同一 Gateway 通信实现，不把测试绑定到某一种安装方式。
+
 ## 场景与 Prompt
 
 场景清单从 `CONTRACT_SCENARIOS` 读取，并与 `contracts/` 下的 Schema 文件交叉校验：
@@ -55,4 +57,3 @@ CONTRACT_SCENARIOS + contracts/*.schema.json
 ## 测试策略
 
 离线测试覆盖：23 场景完整映射、每场景 5 个不同 prompt、默认 20 次/ prompt、总计划数 2300、同一 prompt 文本重复 20 次、独立 session、结果逐次落盘、JSON/JSONL 校验路径和运行中失败继续执行。真实运行只做一次轻量 smoke test，验证某个选定场景的 Agent 能返回文本并经过脚本校验；完整 2300 次由用户按需运行。
-
