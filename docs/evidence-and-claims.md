@@ -114,7 +114,7 @@
 ## 8. 校验和与事件链
 
 - 每个 run 的关键产物写入 `checksums.sha256`，用系统原生工具计算（如 PowerShell `Get-FileHash`、`sha256sum`、`shasum -a 256`），**不用** Python 脚本。
-- `events.jsonl` 使用 SHA-256 哈希链（`previous_event_hash` → `event_hash`），保证事件不可篡改、可复原。
+- Control Kernel v2 的事件使用 SHA-256 哈希链（`previous_event_hash` → `event_hash`）；`runtime/control/v2/**/events.jsonl` 是可重建的只读投影，不能作为控制状态写入源。
 
 ## 9. 相关文件
 

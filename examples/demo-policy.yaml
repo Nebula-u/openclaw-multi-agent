@@ -63,3 +63,14 @@ git:
 approval:
   auto_timeout_approve: false             # 无自动超时同意
   silence_means_approval: false           # 用户沉默 != 批准
+
+# ---- Demo 快速流程（必须先出现真实人工审批）----
+demo:
+  fast_path:
+    requires_human_approval: true         # 未收到用户 response 前不得启用
+    approval_trigger: IMPLEMENTATION_TRADEOFF
+    start_phase: INTAKE
+    skip_agents: [requirement-agent, architect-agent, review-agent, test-agent, release-agent]
+    retain_agents: [developer-agent]
+    verification: local_tests             # 使用本地测试，不派发 test-agent
+    rejection: STANDARD_FLOW              # 拒绝后回到完整标准流程

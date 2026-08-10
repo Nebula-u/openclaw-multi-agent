@@ -36,9 +36,9 @@
 - `checksums.sha256`
 - 需改代码的角色（developer / test）还需**真实本地 Git commit**
 
-所有 JSON / JSONL 产物都必须用 Runtime Guard + Ajv 按对应 `contracts/*.schema.json` 本地强校验。空输出、截断、JSON parse error、enum/type 违规和 schema drift 共用首次调用之外最多两次的 JSON-only 重写预算；重写只生成失败 JSON / JSONL，不重新完整分析。校验错误写入 `raw-logs/json-validation-errors.jsonl`，记录格式见 `contracts/json-validation-error.schema.json`。
+所有 JSON / JSONL 产物都必须用 `scripts/runtime-guard.mjs validate-file` + Ajv 按对应 `contracts/*.schema.json` 本地强校验。空输出、截断、JSON parse error、enum/type 违规和 schema drift 共用首次调用之外最多两次的 JSON-only 重写预算；重写只生成失败 JSON / JSONL，不重新完整分析。校验错误写入 `raw-logs/json-validation-errors.jsonl`，记录格式见 `contracts/json-validation-error.schema.json`。
 
-新建任务**必须**设置 `output_contract_version=1`，并按 `config/task-output-contracts.json` 声明且要求 `result.json`、`evidence.jsonl`、`command-records.jsonl`。`check-task-package` 与 `prepare-dispatch` 会拒绝缺失版本、版本不匹配或漏声明默认产物的新任务。为兼容历史 run，已归档且缺少该字段的旧 task 仅按其已声明契约读取；不得回写或伪造旧 run 的声明。
+新建任务**必须**设置 `output_contract_version=1`，并按 `config/task-output-contracts.json` 声明且要求 `result.json`、`evidence.jsonl`、`command-records.jsonl`。`task-validate` 与 `dispatch-prepare` 会拒绝缺失版本、版本不匹配或漏声明默认产物的新任务。历史 task 只作为数据库中的不可变记录读取，不回写或伪造旧 run 的声明。
 
 JSON ingestion 保留原文/清洗后 SHA-256。只允许确定性转换：移除 UTF-8 BOM、解包唯一 JSON Markdown fence，或从解释性前后缀提取唯一完整 JSON 值/JSONL 连续块；多个候选一律 fail-closed。不会自动补字段、修 enum、修改 ID 或篡改业务结论。JSONL 受 5 MiB 总量、1 MiB 单行限制；空 JSONL 与 evidence/command record 重复 ID 均 fail-closed。
 
@@ -70,13 +70,13 @@ JSON ingestion 保留原文/清洗后 SHA-256。只允许确定性转换：移�
 
 工作 Agent **不擅自决定**审批节点；遇到时返回 `HUMAN_DECISION_REQUIRED` 并在 `decisions_required[]` 列出选项与影响，交由 `manager-agent` 发起审批。
 
-`HOLD` 不属于 `result_status`，不得写入 `result.json`。它是 workflow 的状态；任务等待人工决定用 `task.status=WAITING_HUMAN`，环境或权限阻塞用 `task.status=BLOCKED`。manager 将 Agent 结果、任务状态和 workflow 状态分别按 contracts 与 `config/workflow-state-machine.json` 处理。
+`HOLD` 不属于 `result_status`，不得写入 `result.json`。它是 Control Kernel 的控制条件；任务等待人工决定用 `task.status=WAITING_HUMAN`，环境或权限阻塞用 `task.status=BLOCKED`。Manager 将 Agent 结果交给 `result-ingest`，workflow 状态由 `control-state-machine-v2.json` 的 reducer 计算。
 
 ## 6. 各角色产物清单（引用重构 Prompt §16）
 
 ### 6.0 manager-agent
 
-`manager-agent` 不产出 `result.json`，而是维护**控制层文件**（唯一逻辑写入者）：`workflow.json`、`events.jsonl`、`active-workflows.json`、`context-summary.md`、`rules-snapshot.md`、`tasks/`、`task-runs/`、`transactions/`、`dispatch/`、`decisions`（approval-request/response）、`gates/`（gate-result），以及工作流结束时的 `final-report.md`。它对每个工作 Agent 结果执行 §2/§4 校验与 Gate（见 `manager-orchestration.md`），并对工作 Agent 声明的 JSON / JSONL 输出再次执行 Ajv schema 校验。Runtime Guard 不调度工作 Agent；它按 manager 的显式请求执行 fail-closed 校验，用 `commit-transition` 原子持久化关键控制快照，并记录 manager 调用原生 session 工具前后的 dispatch 事实。终态 workflow 必须有非空 `final-report.md` 且已从 `active-workflows.json` 移除。
+`manager-agent` 不产出 `result.json`，也不直接维护控制状态文件；它提交 Control Kernel 命令、审批请求、task/dispatch 事实和 Gate 输入。SQLite `control.db` 保存 workflow/task/run/dispatch/approval 的当前状态，不可变事件和幂等记录；`runtime/control/v2/**` 只是只读投影。Manager 对每个工作 Agent 结果执行 §2/§4 校验与 Gate（见 `manager-orchestration.md`），并由 `result-ingest` 对所有声明的 JSON / JSONL 输出再次执行 Ajv schema 校验。Runtime Guard 不调度 Agent，只负责 Agent 自检和当前契约自检；Orchestrator 才负责真实 session、receipt、completion 和重试事实。
 
 ### 6.A requirement-agent（§16.A）
 
@@ -121,4 +121,4 @@ JSON ingestion 保留原文/清洗后 SHA-256。只允许确定性转换：移�
 
 ## 8. 相关文档
 
-`context-and-rule-passing.md`（上下文包与输入）、`manager-orchestration.md`（校验与 Gate）、`workflow.md`（各阶段产物时序）、`git-worktree-strategy.md`（commit 与 worktree）、`evidence-and-claims.md`（证据分类）。
+`context-and-rule-passing.md`（上下文包与输入）、`manager-orchestration.md`（校验与 Gate）、`control-kernel-v2.md`（状态、审批与恢复）、`git-worktree-strategy.md`（commit 与 worktree）、`evidence-and-claims.md`（证据分类）。

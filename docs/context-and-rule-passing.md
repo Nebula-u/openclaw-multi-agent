@@ -101,11 +101,11 @@
 
 - 已派发任务的 `input/` 视为**不可变**；已完成 run 目录视为**不可变**。
 - 需要修改规则或补充上下文时：**新建 attempt**、生成**新 `run_id`** 与**新 run 目录**、生成**新 `rules-snapshot` 引用**，重新组装 `input/`；**不覆盖**旧报告/日志/结果。
-- 旧任务按状态机置为 `SUPERSEDED`（见 `workflow.md`）。
+- 旧任务按 Control Kernel v2 的任务状态机置为 `SUPERSEDED`（见 `control-kernel-v2.md`）。
 
 ## 10. 与其他文档的关系
 
 - 规则四级证据分类与命令日志：`EVIDENCE_RULES.md`（另见 `docs/evidence-and-claims.md`）。
 - 派发/校验/Gate 全流程：`manager-orchestration.md`。
 - 上下文包字段对应的产物：`agent-contracts.md`。
-- 状态与恢复：`state-and-recovery.md`。
+- 状态与恢复：`control-kernel-v2.md`。

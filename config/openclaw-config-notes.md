@@ -85,3 +85,7 @@ pwsh -NoProfile -File scripts/reinstall-agents.ps1 -Apply -Yes -RuntimeRoot runt
 - 不执行 `openclaw doctor --fix`。
 - 不安装 Docker、不启用 sandbox 作为测试前置。
 - 不删除/重置用户既有 Agent、认证、会话或 workspace。
+
+## 7. 本轮工具结果预算
+
+当前配置已设置 `agents.defaults.contextLimits.toolResultMaxChars = 12000`，限制单次 live tool result 注入上下文的字符数；工具本身仍可正常调用。需要完整内容时，Agent 必须使用目标查询、`offset/limit` 或分段读取，不得通过重复请求同一大结果来“补全”上下文。该设置不改变模型路由：当前默认仍为 `mydeep/deepseek-v4-pro`，fallback 仍为 `mydeep/deepseek-v4-flash`。

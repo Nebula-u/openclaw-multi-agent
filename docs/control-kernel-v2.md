@@ -22,7 +22,24 @@ v2 将阶段和暂停/终结条件分离：
 
 ## 当前命令
 
-`BOOTSTRAP`、`ADVANCE_PHASE`、`WAIT_HUMAN`、`HOLD`、`RESUME`、`SET_CANDIDATE`、`COMPLETE`、`FAIL`、`CANCEL`、`QUARANTINE`。
+`BOOTSTRAP`、`ADVANCE_PHASE`、`WAIT_HUMAN`、`RESOLVE_HUMAN`、`HOLD`、`RESUME`、`SET_CANDIDATE`、`COMPLETE`、`FAIL`、`CANCEL`、`QUARANTINE`。
+
+### 人工审批
+
+`WAIT_HUMAN` 携带 `approval_request` 时，会在同一事务内将 workflow 置为
+`condition=WAITING_HUMAN`，并写入 `approval_requests.status=PENDING`。审批请求绑定
+`workflow_id/task_id/run_id`；它的 `PENDING` 不是第二套 workflow 状态。
+
+只有 `RESOLVE_HUMAN` 携带通过 Schema 和绑定校验的真实 `approval_response` 才能将 workflow 恢复。
+只要存在 PENDING request，直接 `RESUME` 就会返回 `CONTROL_APPROVAL_RESPONSE_REQUIRED`。有 task 绑定时，
+`approval-resolve` 同时把 task 从 `WAITING_HUMAN` 恢复为 `READY`，之后才允许再次派发。
+
+新 workflow 不使用旧文件协议中的
+`WAITING_REQUIREMENT_APPROVAL`、`WAITING_ARCHITECTURE_APPROVAL`、`WAITING_RELEASE_APPROVAL` 等专用等待名称；
+界面需要显示专用文案时，从 v2 `phase` 和审批 `trigger` 派生。
+
+Demo 快速流程是 v2 的受控例外：只有已解决且选择 `DEMO_FAST` 的 `IMPLEMENTATION_TRADEOFF` 审批，
+才允许 `INTAKE → DEVELOPMENT`；否则仍只能进入 `REQUIREMENTS` 标准路径。
 
 ## 只读投影与恢复
 
@@ -70,6 +87,9 @@ Task 当前快照、run 固定信息、不可变哈希事件、dispatch、outbox
 - `dispatch-receipt --receipt-file <abs>`
 - `dispatch-list --task-id <id>` / `dispatch-outbox`
 - `result-ingest --completion-file <abs>`
+- `demo-fast-request --workflow-id <id>`
+- `approval-request --request-file <abs>` / `approval-list [--workflow-id <id>]`
+- `approval-resolve --response-file <abs>`
 
 `task-retry` 只接受当前状态为 FAILED/LOST 且原 dispatch 有同状态 completion 的 task。它要求
 attempt 递增、新 run ID、新 artifact root 和新 context manifest，保留 workflow/task/type/Agent/

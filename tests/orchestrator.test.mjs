@@ -50,7 +50,8 @@ function setup() {
 
 function writeWorkerRaw(value) {
   const result = { schema_version: 1, workflow_id: WORKFLOW_ID, task_id: value.task.task_id, run_id: value.task.run_id, agent_id: AGENT,
-    role: 'developer', attempt: 1, started_at: NOW, finished_at: NOW, result_status: 'COMPLETED', summary_for_user: 'done', summary_for_manager: 'done',
+    role: 'developer', attempt: 1, started_at: NOW, finished_at: NOW, result_status: value.resultStatus ?? 'COMPLETED', summary_for_user: 'done', summary_for_manager: 'done',
+    ...(value.resultStatus === 'HUMAN_DECISION_REQUIRED' ? { decisions_required: [{ trigger: 'IMPLEMENTATION_TRADEOFF', summary: '是否继续演示路径', options: [{ option_id: 'PROCEED', description: '继续', impact: '继续执行', reversibility: 'reversible' }] }] } : {}),
     worktree_path_abs: value.task.worktree_path_abs, artifact_root_abs: value.task.artifact_root_abs, isolation_mode: 'UNSANDBOXED_LOCAL',
     self_validation: { preflight_passed: true, checks: [{ name: 'test', status: 'PASS' }] } };
   const output = (path) => value.task.structured_outputs.find((item) => item.path_abs === path);
@@ -79,6 +80,25 @@ test('local Orchestrator derives worker, session, receipts and completion from o
       assert.equal(auditControlDatabase(database).ok, true, JSON.stringify(auditControlDatabase(database)));
     } finally { database.close(); }
     assert.equal(readFileSync(value.paths.result, 'utf8').includes('"result_status": "COMPLETED"'), true);
+  } finally { value.close(); }
+});
+
+test('HUMAN_DECISION_REQUIRED creates a v2 PENDING approval and pauses both task and workflow', async () => {
+  const value = setup();
+  try {
+    const result = await dispatchReadyTask({ projectRoot: ROOT, databasePath: value.databasePath, taskId: value.task.task_id,
+      runner: async (input) => { input.onStarted(); writeWorkerRaw({ ...value, resultStatus: 'HUMAN_DECISION_REQUIRED' }); return { started: true, exit_code: 0, stdout: '{"ok":true}', stderr: '' }; } });
+    assert.equal(result.ok, true, JSON.stringify(result));
+    assert.equal(result.requires_human_approval, true);
+    const database = openControlDatabase(value.databasePath);
+    try {
+      const controls = createControlRepository(ROOT, database);
+      const tasks = createTaskRepository(ROOT, database);
+      assert.equal(controls.get(WORKFLOW_ID).condition, 'WAITING_HUMAN');
+      assert.equal(controls.approvals({ status: 'PENDING' }).length, 1);
+      assert.equal(tasks.get(value.task.task_id).status, 'WAITING_HUMAN');
+      assert.equal(auditControlDatabase(database).ok, true, JSON.stringify(auditControlDatabase(database)));
+    } finally { database.close(); }
   } finally { value.close(); }
 });
 

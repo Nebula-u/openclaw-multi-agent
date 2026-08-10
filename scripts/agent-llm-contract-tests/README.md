@@ -6,7 +6,7 @@
 
 ```powershell
 node scripts/agent-llm-contract-tests/run-contract.mjs --schema result.schema.json
-node scripts/agent-llm-contract-tests/run-contract.mjs --schema workflow.schema.json
+node scripts/agent-llm-contract-tests/run-contract.mjs --schema result.schema.json
 node scripts/agent-llm-contract-tests/run-result.mjs
 ```
 

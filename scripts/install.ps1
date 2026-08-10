@@ -181,7 +181,7 @@ foreach ($p in $RegisteredPackages) {
 if ($conflicts.Count -gt 0) { throw "发现同名 Agent 冲突，不会覆盖用户 Agent：`n$($conflicts -join "`n")" }
 
 $RuntimeDirs = [System.Collections.Generic.List[string]]::new()
-foreach ($relative in @('control\workflows','control\config-snapshots','control\component-requests','control\component-builds','worktrees','artifacts')) {
+foreach ($relative in @('control\v2','control\config-snapshots','control\component-requests','control\component-builds','worktrees','artifacts')) {
   $RuntimeDirs.Add((Join-Path $RuntimeRootAbs $relative))
 }
 foreach ($p in $RegisteredPackages) {

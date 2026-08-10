@@ -44,7 +44,7 @@
 | 控制状态 | 仍为 4 个 `TERMINAL/QUARANTINED` 历史 workflow，尚无 v2 task/dispatch；未把旧会话伪造为新工作流。 | `node scripts/control-kernel.mjs snapshot --project-root .` |
 | OpenClaw 配置 | 配置有效；manager 的 allowlist 恰为 6 个已注册 worker，6 个 worker 的 allowlist 均为空。`test-agent` sandbox 仍为 `off`，已保留为未完成部署风险。 | `openclaw config validate --json`、`openclaw config get agents.list --json` |
 | Runtime bundle | 105 个受管条目完整且校验通过。 | `node scripts/runtime-bundle.mjs verify --project-root . --runtime-root runtime` |
-| 自动测试 | 171 通过、0 失败；2 个 runtime-guard 符号链接用例因当前 Windows 账户没有创建符号链接权限而跳过。 | `test:runtime-guard`、`test:agent-json`、`test:runtime-bundle`、`test:control-kernel`、`test:monitor`、`test:legacy-migration`、`validate-install` |
+| 自动测试 | 当前测试入口覆盖 Runtime Guard 产物校验、Agent JSON、runtime bundle、Control Kernel、Monitor 和安装验证；历史迁移测试已随迁移代码移除。 | `test:runtime-guard`、`test:agent-json`、`test:runtime-bundle`、`test:control-kernel`、`test:monitor`、`validate-install` |
 
 ## 目标信息流（整改后）
 

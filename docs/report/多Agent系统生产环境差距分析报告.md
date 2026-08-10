@@ -185,7 +185,7 @@
 
 - `README.md`
 - `docs/architecture.md`
-- `docs/workflow.md`
+- `docs/control-kernel-v2.md`
 - `docs/manager-orchestration.md`
 - `docs/agent-contracts.md`
 - `docs/gate-checklists.md`
@@ -193,5 +193,5 @@
 - `docs/current-progress-assessment.md`
 - `docs/component-management.md`
 - `docs/unsandboxed-test-policy.md`
-- `docs/threat-model.md`
+- `docs/architecture.md`
 

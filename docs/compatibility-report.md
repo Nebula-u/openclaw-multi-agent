@@ -121,4 +121,4 @@
 
 - 原始证据目录：`artifacts\preflight\`（`index.tsv` + 各命令的 `.stdout.txt` / `.stderr.txt` / `.meta.txt`）
 - 探测脚本：`scripts/preflight-probe.sh`
-- 关联文档：`docs/troubleshooting.md`（doctor lint 处理）、`docs/evidence-and-claims.md`
+- 关联文档：`README.md`（安装/校验入口）、`docs/evidence-and-claims.md`
