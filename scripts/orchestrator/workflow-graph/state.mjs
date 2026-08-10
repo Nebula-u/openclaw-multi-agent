@@ -17,6 +17,8 @@ export const WorkflowGraphState = Annotation.Root({
   action: Annotation(replace),
   nextPhase: Annotation(replace),
   command: Annotation(replace),
+  routeFacts: Annotation(replace),
+  routeDecision: Annotation(replace),
   stopReason: Annotation(replace),
   beforeRevision: Annotation(replace),
   afterRevision: Annotation(replace),

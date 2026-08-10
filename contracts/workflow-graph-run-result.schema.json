@@ -15,7 +15,10 @@
     "action",
     "phase",
     "next_phase",
-    "stop_reason"
+    "stop_reason",
+    "route_kind",
+    "route_reason",
+    "route_facts"
   ],
   "properties": {
     "schema_version": { "type": "integer", "const": 1 },
@@ -32,6 +35,9 @@
     "next_phase": { "type": ["string", "null"] },
     "task_id": { "type": ["string", "null"], "pattern": "^TASK-[A-Za-z0-9][A-Za-z0-9-]*$" },
     "stop_reason": { "type": ["string", "null"] },
+    "route_kind": { "type": ["string", "null"] },
+    "route_reason": { "type": ["string", "null"] },
+    "route_facts": { "type": ["object", "null"], "additionalProperties": true },
     "errors": {
       "type": "array",
       "items": {

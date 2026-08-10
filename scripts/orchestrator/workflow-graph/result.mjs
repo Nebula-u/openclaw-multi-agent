@@ -22,6 +22,9 @@ export function graphRunResult(state) {
     next_phase: state.nextPhase ?? null,
     task_id: state.currentTask?.task_id ?? null,
     stop_reason: state.stopReason ?? null,
+    route_kind: state.routeDecision?.kind ?? null,
+    route_reason: state.routeDecision?.reason ?? null,
+    route_facts: state.routeFacts ?? null,
     errors: state.errors ?? [],
   };
 }
