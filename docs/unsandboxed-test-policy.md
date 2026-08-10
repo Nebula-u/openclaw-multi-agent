@@ -71,4 +71,4 @@
 - 规则来源：`agents/common/SECURITY_RULES.md`（第 6 节）、`agents/test-agent/workspace/AGENTS.md`（第 5、6 节）
 - Policy：`config/default-policy.yaml`（`testing.*`、`command_boundaries.*`）
 - Schema：`contracts/command-record.schema.json`（`isolation_mode` 枚举 `UNSANDBOXED_LOCAL`）
-- 关联文档：`docs/gate-checklists.md`（TestGate / SecurityGate）、`docs/human-approval.md`、`docs/threat-model.md`
+- 关联文档：`docs/gate-checklists.md`（TestGate / SecurityGate）、`docs/human-approval.md`、`docs/architecture.md`

@@ -74,7 +74,7 @@ test('control kernel rejects stale revisions and illegal phase edges without mut
     assert.throws(() => value.repository.apply(command('ADVANCE_PHASE', 0, { target_phase: 'REQUIREMENTS' })),
       (error) => error.code === 'CONTROL_REVISION_CONFLICT');
     assert.throws(() => value.repository.apply(command('ADVANCE_PHASE', 1, { target_phase: 'DEVELOPMENT' })),
-      (error) => error.code === 'CONTROL_PHASE_TRANSITION_INVALID');
+      (error) => error.code === 'CONTROL_DEMO_FAST_APPROVAL_REQUIRED');
     assert.equal(value.repository.get(WORKFLOW_ID).revision, 1);
     assert.equal(value.repository.events(WORKFLOW_ID).length, 1);
   } finally { value.close(); }
@@ -93,6 +93,70 @@ test('control kernel preserves pause and resume semantics', () => {
     const active = value.repository.apply(command('RESUME', 4));
     assert.equal(active.state.condition, 'ACTIVE');
     assert.equal(active.state.phase, 'INTAKE');
+  } finally { value.close(); }
+});
+
+test('v2 approval requests are persisted and cannot be bypassed by RESUME', () => {
+  const value = fixture();
+  try {
+    bootstrap(value.repository);
+    const request = {
+      schema_version: 1,
+      decision_id: 'DEC-control-kernel-test',
+      workflow_id: WORKFLOW_ID,
+      task_id: null,
+      run_id: null,
+      trigger: 'IMPLEMENTATION_TRADEOFF',
+      summary: '选择是否继续当前演示路径',
+      options: [{ option_id: 'PROCEED', description: '继续', impact: '继续后续任务', reversibility: 'reversible' }],
+      recommended_option: { option_id: 'PROCEED', rationale: '演示路径可回退' },
+      evidence_refs: [],
+      created_at: '2026-08-07T03:00:00.000Z',
+      status: 'PENDING',
+    };
+    const waiting = value.repository.requestApproval(request, { occurred_at: '2026-08-07T03:00:00.000Z' });
+    assert.equal(waiting.state.condition, 'WAITING_HUMAN');
+    assert.equal(value.repository.approvals({ status: 'PENDING' }).length, 1);
+    assert.throws(() => value.repository.apply(command('RESUME', 2)),
+      (error) => error.code === 'CONTROL_APPROVAL_RESPONSE_REQUIRED');
+    const response = {
+      schema_version: 1,
+      decision_id: request.decision_id,
+      workflow_id: WORKFLOW_ID,
+      task_id: null,
+      run_id: null,
+      outcome: 'APPROVED',
+      chosen_option_id: 'PROCEED',
+      raw_user_reply_summary: '用户明确批准继续。',
+      decided_by: 'human:user',
+      decided_at: '2026-08-07T03:00:01.000Z',
+      notes: '',
+    };
+    const resumed = value.repository.resolveApproval(response);
+    assert.equal(resumed.state.condition, 'ACTIVE');
+    assert.equal(value.repository.approvals({ status: 'RESOLVED' })[0].response.outcome, 'APPROVED');
+    assert.equal(auditControlDatabase(value.database).ok, true, JSON.stringify(auditControlDatabase(value.database)));
+  } finally { value.close(); }
+});
+
+test('Demo fast path cannot skip from INTAKE to DEVELOPMENT without DEMO_FAST approval', () => {
+  const value = fixture();
+  try {
+    bootstrap(value.repository);
+    const requested = value.repository.requestDemoFastApproval(WORKFLOW_ID, { occurred_at: '2026-08-07T03:00:00.000Z' });
+    const request = requested.event.payload.approval_request;
+    const response = {
+      schema_version: 1, decision_id: request.decision_id, workflow_id: WORKFLOW_ID, task_id: null, run_id: null,
+      outcome: 'APPROVED', chosen_option_id: 'DEMO_FAST', raw_user_reply_summary: '用户明确选择 DEMO_FAST。',
+      decided_by: 'human:user', decided_at: '2026-08-07T03:00:01.000Z', notes: '',
+    };
+    const resumed = value.repository.resolveApproval(response);
+    const advanced = value.repository.apply(command('ADVANCE_PHASE', resumed.state.revision, {
+      target_phase: 'DEVELOPMENT', payload: { approval_decision_id: request.decision_id },
+    }));
+    assert.equal(advanced.state.phase, 'DEVELOPMENT');
+    assert.throws(() => value.repository.apply(command('ADVANCE_PHASE', advanced.state.revision, { target_phase: 'REQUIREMENTS' })),
+      (error) => error.code === 'CONTROL_PHASE_TRANSITION_INVALID');
   } finally { value.close(); }
 });
 

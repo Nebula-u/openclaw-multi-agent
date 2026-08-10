@@ -107,7 +107,7 @@
 
 ### 建议的执行顺序
 
-1. 按 `docs/plan/2026-08-05-manager-orchestration-hardening.md` 先记录第 0 轮失败基线，再依次完成计划持久化、Intake 初始化、Agent 身份校验、不可绕过派发和 JSON 原子写入。
+1. 原 `docs/plan/2026-08-05-manager-orchestration-hardening.md` 已作为历史计划归档；当前实现和后续验收以 `docs/manager-orchestration.md`、`docs/control-kernel-v2.md` 为准。
 2. 用一个受控小程序完成新的真实 v2 workflow：Requirement → Architect → Developer → Review → Test → Release，保存 commit、receipt、产物、Gate、audit 和 final report。
 3. 在该真实 workflow 中注入一次 Manager/Gateway 中断，验证按 PENDING dispatch intent 查询 session 后恢复，验证状态机设计而不是仅验证夹具。
 4. 为 Test Agent 建立受限 runner/sandbox；在此之前，以审批和 Gate 严格限制联网、安装依赖和破坏性命令。
@@ -119,7 +119,7 @@
 - `CHANGELOG.md`：记录 P0–P5 的改动、原因、效果与验证；其中 P5 记录 Control Kernel 20 项测试，以及 Runtime Guard 105 项通过、Agent JSON 12 项通过、runtime bundle、迁移和安装测试通过的历史结果。
 - `scripts/control-kernel.mjs`、`scripts/control-core/` 与 `tests/control-kernel*.test.mjs`：事务、状态迁移、投影、审计、并发、崩溃和恢复实现/测试。
 - `scripts/runtime-guard.mjs`、`scripts/agent-json-harness/`、`scripts/runtime-core/json-ingestion.mjs`：Guard、真实 LLM JSON Harness、保守清洗、重试和失败证据。
-- `docs/plan/2026-08-05-manager-orchestration-hardening.md`：当前待实施的 Manager 编排、原子 JSON 与 Windows 恢复计划。
+- `docs/archive/legacy/plan/2026-08-05-manager-orchestration-hardening.md`：历史 Manager 编排、原子 JSON 与 Windows 恢复计划。
 
 ## 九、最终判断
 

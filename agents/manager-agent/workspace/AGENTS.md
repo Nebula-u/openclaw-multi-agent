@@ -6,11 +6,14 @@
 ## 不可绕过的边界
 
 1. `runtime/control/control.db` 是 workflow、task、run、dispatch 与结果状态的唯一事实源。聊天记录、Agent 自述、文件投影和看板都不是状态源。
-2. 只可请求本地 `scripts/orchestrator.mjs` 执行受支持的 workflow 操作：`apply`、`task-register`、`task-validate`、`dispatch`。不得直接调用 `control-kernel.mjs` 的 mutation 命令。
-3. **不得调用** `sessions_spawn`、`sessions_send`、`sessions_list`、`sessions_history`、monitor HTTP 写接口、`dispatch-prepare`、`dispatch-receipt`、`result-ingest`、`commit-transition` 或直接写 SQLite/控制投影。local-orchestrator 才能生成 Agent ID、session、intent、receipt、completion 和重试结果。
+2. 只可请求本地 `scripts/orchestrator.mjs` 执行受支持的 workflow 操作：`apply`、`task-register`、`task-validate`、`dispatch`、`approval-request`、`approval-list`、`approval-resolve`。不得直接调用 `control-kernel.mjs` 的 mutation 命令。
+3. **不得调用** `sessions_spawn`、`sessions_send`、`sessions_list`、`sessions_history`、monitor HTTP 写接口、`dispatch-prepare`、`dispatch-receipt`、`result-ingest` 或直接写 SQLite/控制投影。local-orchestrator 才能生成 Agent ID、session、intent、receipt、completion 和重试结果。
 4. 创建 task 时只能声明 `task_type`、已批准的上下文、绝对 worktree/artifact 路径和验收条件；`task_type → assigned_agent` 由 `task-output-contracts.json` 和 Task Repository 校验。不得从聊天内容自由指定或替换 worker Agent。
 5. Agent 的 JSON/JSONL 只能写 `<artifact_root_abs>/.agent-raw/**`。local-orchestrator 统一执行唯一 JSON 清洗规则、schema 校验、哈希收据和原子发布到最终 output。不得接受聊天中的 JSON 作为结果，也不得自行决定 retry/完成状态。
 6. 生产代码、测试代码和业务前端只能由相应 worker 在 `runtime/worktrees/<workflow>/<task>/<run>/repo` 中提交真实 Git commit。不得在 `runtime/agents/*/workspace`、`runtime/control` 或 `runtime/artifacts` 临时开发后复制到业务项目。
+
+7. 新 workflow 的状态模型固定为 v2 `phase + condition`；人工等待只写 `condition=WAITING_HUMAN`。历史 v1 的专用等待名称不再由运行时代码产生，也不能写入新 workflow。
+8. Agent 返回 `HUMAN_DECISION_REQUIRED` 后，必须通过 local-orchestrator 创建绑定的 `approval-request` 并向用户展示问题；未收到真实且绑定校验通过的 response，不得恢复 task、派发依赖 task 或通过 Gate。
 
 ## 工作方式
 
@@ -31,4 +34,4 @@
 
 - 不替 developer/test/review/release 产出其职责内容；不伪造代码、测试、评审、Git commit、命令日志或审批。
 - 不联网、不读取凭证、不改 OpenClaw 配置、不启动后台服务、不执行破坏性 Git/文件命令，除非另有明确人工授权和本地 policy。
-- 旧 v1 `workflow.json`、`events.jsonl`、`active-workflows.json` 只可用于只读迁移/隔离审计，绝不能作为新 workflow 的写入路径或恢复依据。
+- 历史 v1 文件只属于人工取证归档，不能作为新 workflow 的输入、写入路径或恢复依据；新流程只读取 Control Kernel 和经验证的 v2 投影。

@@ -476,6 +476,19 @@ export function createTaskRepository(projectRootInput, database) {
         return { ok: true, command: 'task-retry', task: newTask, event };
       });
     },
+    resumeHumanTask({ task_id: taskId, decision_id: decisionId, occurred_at: occurredAt = new Date().toISOString() } = {}) {
+      if (!taskId || !decisionId) fail('TASK_APPROVAL_RESUME_INVALID', 'task_id and decision_id are required');
+      return transactional(database, `RESUME-HUMAN:${taskId}:${decisionId}`, { task_id: taskId, decision_id: decisionId, occurred_at: occurredAt }, () => {
+        const current = loadTask(database, taskId);
+        if (!current) fail('TASK_NOT_FOUND', `task does not exist: ${taskId}`);
+        if (current.status === 'READY') return { ok: true, command: 'task-resume-human', task: current, idempotent_replay: true };
+        if (current.status !== 'WAITING_HUMAN') fail('TASK_APPROVAL_RESUME_STATUS_INVALID', `task must be WAITING_HUMAN, received ${current.status}`);
+        const next = updateTask(database, current, 'READY', occurredAt);
+        const event = appendTaskEvent(database, next, `TEV-APPROVAL-RESUME-${taskId}-${decisionId}`, 'TASK_HUMAN_APPROVAL_RESOLVED', current.status, 'READY', occurredAt,
+          { decision_id: decisionId });
+        return { ok: true, command: 'task-resume-human', task: next, event };
+      });
+    },
     supersede({ task_id: taskId, reason, occurred_at: occurredAt = new Date().toISOString() } = {}) {
       if (!taskId || !reason) fail('TASK_SUPERSEDE_INVALID', 'task_id and reason are required');
       return transactional(database, `SUPERSEDE:${taskId}:${sha256(String(reason))}`, { task_id: taskId, reason, occurred_at: occurredAt }, () => {

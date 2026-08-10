@@ -1,11 +1,12 @@
 # APPROVAL_RULES.md — 人工审批规则
 
 > 版本: approval-rules v1
-> 审批的发起、记录与放行由 manager-agent 负责；工作 Agent 通过返回 `HUMAN_DECISION_REQUIRED` 触发。
+> 审批的发起、记录与放行由 manager-agent / local-orchestrator 负责；工作 Agent 通过返回 `HUMAN_DECISION_REQUIRED` 触发。
+> 新 workflow 只使用 Control Kernel v2：workflow 的待人工状态是 `condition=WAITING_HUMAN`，审批对象自身才使用 `status=PENDING`。历史专用等待名称只存在于归档资料，运行时代码不会产生。
 
 ## 1. 必须人工审批的节点
 
-出现以下任一情况，manager-agent 生成 `approval-request.json`。需求、架构、发布专用节点分别进入 `WAITING_REQUIREMENT_APPROVAL`、`WAITING_ARCHITECTURE_APPROVAL`、`WAITING_RELEASE_APPROVAL`；其他节点进入通用 `WAITING_HUMAN`：
+出现以下任一情况，manager-agent 生成审批请求。新 workflow 统一执行 v2 `WAIT_HUMAN`，并将当前业务阶段保留在 `phase` 字段中；需求、架构、发布的“专用等待”只由 `phase + trigger` 展示派生，不写入历史专用等待名称：
 
 1. 需求存在影响范围或验收方式的关键歧义。
 2. 实现存在明显不同取舍的方向（成本/风险/兼容性/维护差异大）。
@@ -31,6 +32,7 @@
 - 审批粒度绑定到具体 `decision_id` / `task_id` / `run_id`；一次审批不自动延伸到其他上下文。
 - request/response 必须同时记录并逐字段匹配 `workflow_id`、可空 `task_id` 和可空 `run_id`；Runtime Guard 校验失败即有效 HOLD。
 - `HOLD` 是 workflow / Gate 的合法阻塞状态，不是工作 Agent 的 `result_status`；不得重写历史 `result.json` 为 `HOLD`。保留原 result，由 manager 在控制层记录 `HOLD`、差异和后续人工决策。
+- 真实回复必须通过 `approval-resolve` / 等价的受控交互入口提交；它必须绑定相同的 `decision_id`、`workflow_id`、`task_id`、`run_id`，并由 v2 原子执行 `RESOLVE_HUMAN`。存在 `PENDING` request 时，直接 `RESUME` 一律拒绝。
 
 ## 3. approval-request.json（见 contracts/approval-request.schema.json）
 

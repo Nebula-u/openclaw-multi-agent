@@ -13,12 +13,12 @@ import { MAX_REPAIR_RETRIES, buildJsonRepairPrompt, classifyLlmFailure } from '.
 import { CONTRACT_SCENARIOS, INTERNAL_CONTRACTS, getContractScenario } from '../scripts/agent-llm-contract-tests/contract-scenarios.mjs';
 
 const EXPECTED_SCHEMAS = [
-  'acceptance-criteria.schema.json', 'active-workflows.schema.json', 'agent-package.schema.json',
+  'acceptance-criteria.schema.json', 'agent-package.schema.json',
   'approval-assessment.schema.json', 'approval-request.schema.json', 'approval-response.schema.json', 'command-record.schema.json',
   'component-build-result.schema.json', 'component-request.schema.json', 'context-manifest.schema.json',
   'evidence.schema.json', 'gate-result.schema.json', 'json-validation-error.schema.json',
   'release-decision.schema.json', 'result.schema.json', 'review-findings.schema.json', 'skill-package.schema.json',
-  'task.schema.json', 'workflow-event.schema.json', 'workflow.schema.json',
+  'task.schema.json',
 ];
 
 test('LLM 场景矩阵覆盖每份契约的 5 个不同需求', () => {

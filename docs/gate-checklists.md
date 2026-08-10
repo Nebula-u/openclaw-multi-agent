@@ -27,7 +27,7 @@
 
 manager 每次写入或接受 `gate-result.json` 前必须从 `items[]` 重新聚合，不能沿用先前的 `overall`：任一 item 为 `FAIL` → `FAIL`；否则任一 item 为 `HOLD` 或任一 `blocking=true` 的 item 为 `UNKNOWN` → `HOLD`；否则 → `PASS`。`NOT_APPLICABLE` 不阻断，但必须说明原因。
 
-此外，下列任一情况都禁止 `overall=PASS`：任何 `FAIL`/`HOLD` item、未决审批；对于 `ReviewGate`、`SecurityGate` 和 `ReleaseReadinessGate`，还包括任何开放的 `BLOCKER`/`CRITICAL`/`HIGH` finding（不依赖 finding 的 `blocking` 标记）。`ReviewGate` / `SecurityGate` 的 PASS 还必须至少引用一条 current candidate 的合法 `review-agent` task/run 证据，旧 candidate 证据不能单独支撑 PASS。`overall` 非 `PASS` **不得**进入下一阶段；`overall_reason` 必须写明依据。Runtime Guard 在 `check-workflow` 中按此范围重新计算并 fail-closed。
+此外，下列任一情况都禁止 `overall=PASS`：任何 `FAIL`/`HOLD` item、未决审批；对于 `ReviewGate`、`SecurityGate` 和 `ReleaseReadinessGate`，还包括任何开放的 `BLOCKER`/`CRITICAL`/`HIGH` finding（不依赖 finding 的 `blocking` 标记）。`ReviewGate` / `SecurityGate` 的 PASS 还必须至少引用一条 current candidate 的合法 `review-agent` task/run 证据，旧 candidate 证据不能单独支撑 PASS。`overall` 非 `PASS` **不得**进入下一阶段；`overall_reason` 必须写明依据。Gate 结果提交前由 Control Kernel / result-ingest 重新校验相关产物并 fail-closed。
 
 Finding 的阻断权威只来自 `reviewed_commit == workflow.current_candidate_commit` 的 review artifact。该 artifact 必须位于当前 review task/run 的精确 artifact root，绑定同一 `workflow_id` / `task_id`，由 `CODE_REVIEW` 或 `TEST_CODE_REVIEW` 的 `review-agent` 任务产生，且 `reviewed_commit == task.input_commit`；finding 的 `evidence` 也只能引用该 task/run 的证据。同一 current candidate 上重复出现的 `finding_id`，按各 review task 已验证的最后 task event `seq` 选择唯一最新状态，因此后续 `RESOLVED` 可关闭旧 `OPEN`；同 seq、缺失 seq 或同 task/run 重复记录一律 fail-closed。旧 candidate 的 finding 保留为历史，但不阻断当前 Gate。
 
@@ -149,4 +149,4 @@ Finding 的阻断权威只来自 `reviewed_commit == workflow.current_candidate_
 - Schema：`contracts/gate-result.schema.json`、`contracts/release-decision.schema.json`
 - Policy：`config/default-policy.yaml`（`gates.*`、`command_boundaries.*`、`testing.*`）
 - 规则来源：`agents/common/EVIDENCE_RULES.md`、`agents/common/APPROVAL_RULES.md`、`agents/common/SECURITY_RULES.md`、`agents/common/GIT_RULES.md`
-- 关联文档：`docs/evidence-and-claims.md`、`docs/human-approval.md`、`docs/unsandboxed-test-policy.md`、`docs/threat-model.md`
+- 关联文档：`docs/evidence-and-claims.md`、`docs/human-approval.md`、`docs/unsandboxed-test-policy.md`、`docs/architecture.md`

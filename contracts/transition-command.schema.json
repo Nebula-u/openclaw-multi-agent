@@ -26,6 +26,7 @@
         "BOOTSTRAP",
         "ADVANCE_PHASE",
         "WAIT_HUMAN",
+        "RESOLVE_HUMAN",
         "HOLD",
         "RESUME",
         "SET_CANDIDATE",

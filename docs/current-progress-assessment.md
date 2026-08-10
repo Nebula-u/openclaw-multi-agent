@@ -63,7 +63,7 @@
 - 纯 reducer 按 `transition-command` 与版本化 `control-state-machine-v2.json` 计算下一状态；Manager 不再手算 revision 或分别覆盖状态文件。CAS 让同 workflow 并发只产生一个胜者。
 - `active_workflows` 是数据库 view；workflow/events/active JSON/JSONL 经 projection outbox 生成，属于只读投影。投影被删或滞后时可在审计后重建，不能反向改写权威状态。
 - 外部 `sessions_spawn` 无法与数据库同事务，因此先事务化记录 PENDING dispatch intent、task 状态和 outbox，再以 `SENT → ACKNOWLEDGED → RUNNING` receipt 对账。崩溃后查询 intent/session 恢复，而不是猜测是否已派发。
-- v1 只做取证归档和 v2 tombstone；不补造缺失 revision，也不把不可信旧 candidate 带回 active view。
+- v1 历史数据只保留取证归档和既有 v2 tombstone；本轮移除了迁移执行代码，不补造缺失 revision，也不把不可信旧 candidate 带回 active view。
 
 提交记录中的 P5 测试覆盖同 workflow CAS、跨 workflow active、提交前回滚、提交后响应丢失、投影失败恢复、spawn 前重启、completion exactly-once、数据库重启和删除投影后的确定性恢复。这是解决“状态机不匹配”的核心：从事后对齐多个文件，改为只允许一个事务权威源产生状态。
 
@@ -106,14 +106,14 @@
 
 ## 当前计划同步
 
-`docs/plan/2026-08-05-manager-orchestration-hardening.md` 已同步标注为“待实施的下一轮整改计划”：截至 8 月 6 日，该计划之后没有对应功能提交。P0–P5 提供了它所需的 Control Kernel、task/run/dispatch 和 Schema 基础，但不自动满足其关于计划回执、Intake、pre-spawn 身份、不可绕过派发、原子 JSON 写入及 Windows 恢复的验收条件。
+原 `docs/plan/2026-08-05-manager-orchestration-hardening.md` 已归档为历史计划；当前 Orchestrator、Control Kernel、审批和结果摄取实现已经覆盖其主要控制边界，剩余验收以 `docs/manager-orchestration.md` 和 `docs/control-kernel-v2.md` 为准。
 
 ## 证据位置
 
 - `CHANGELOG.md`：本周期每轮“改动 / 原因 / 效果 / 验证”记录。
-- `scripts/runtime-guard.mjs`、`config/workflow-state-machine.json`：7/29 起的 Guard 与文件协议边界。
+- `scripts/runtime-guard.mjs`：当前 Agent JSON/JSONL 产物校验与契约自检；Control Kernel v2 的状态边界见 `scripts/control-core/` 和 `config/control-state-machine-v2.json`。
 - `scripts/agent-json-harness/`、`scripts/runtime-core/json-ingestion.mjs`、`docs/llm-json-recovery.md`：真实 LLM JSON 验证、恢复与证据链。
 - `scripts/control-kernel.mjs`、`scripts/control-core/`、`tests/control-kernel*.test.mjs`、`tests/task-repository.test.mjs`：v2 事务控制、投影、审计、并发和恢复。
-- `scripts/migrate-legacy-v1.mjs`、`docs/legacy-v1-migration.md`：遗留取证隔离。
-- `docs/report/first-week-report.md`、`docs/report/improvement-roadmap.md`：第一周原始复盘和第二周原始目标。
-- `docs/plan/2026-08-05-manager-orchestration-hardening.md`：下周待实施的编排整改计划。
+- `docs/archive/legacy/`：历史文件协议、迁移和早期实现资料归档；运行时历史数据仍保留但不由新代码读取。
+- `docs/archive/legacy/report/first-week-report.md`、`docs/report/improvement-roadmap.md`：历史复盘和原始目标。
+- `docs/archive/legacy/plan/2026-08-05-manager-orchestration-hardening.md`：已归档的历史编排整改计划。
