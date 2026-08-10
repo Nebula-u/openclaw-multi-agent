@@ -21,5 +21,6 @@
   ],
   "approved_decision_ids": [],
   "overall": "HOLD",
-  "overall_reason": "<PLACEHOLDER: 当前证据不足，默认 HOLD>"
+  "overall_reason": "<PLACEHOLDER: 当前证据不足，默认 HOLD>",
+  "failure_target": null
 }

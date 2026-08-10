@@ -34,6 +34,21 @@
 - 五层是单轮内存决策流水线，不是五份持久状态；最后只生成命令意图，实际状态变更仍由 Control Kernel reducer、CAS 和 SQLite 事务完成。
 - 动态路由只能在 `control-state-machine-v2.json` 声明的合法边中选择；无法验证的结果统一停止或进入 `HOLD`。
 
+### StateGraph 合法边单一来源与 Gate 失败回退（2026-08-10）
+
+#### 变更（Changed）
+
+- `workflow-graph-v1.json` 移除所有阶段目标名称，改为只保留 task 类型、Agent、结果分类和路由策略；Control Kernel 以具名合法边（如 `STANDARD_FLOW`、`PASS`、`NEEDS_REWORK`）作为唯一业务路径定义，Graph 只引用边 ID，避免以数组顺序隐式选择目标。
+- Control Kernel reducer 从同一份具名边映射取得目标阶段并继续按目标值执行合法性校验；阶段集合、状态条件、终态和既有源/目标合法边均保持不变。
+- Gate 结果新增 `failure_target`：当 `overall=FAIL` 时必须提供，路由器会校验其是否为当前 Gate 阶段的 Control Kernel 合法边。`ARCHITECTURE_GATE` 因而可明确回退到 `REQUIREMENTS`、`ARCHITECTURE` 或其他合法目标，而非被 Graph 配置固定为单一路径。
+- 更新 Gate 结果 Schema、模板和检查清单；非 FAIL 结果必须将 `failure_target` 设为 `null`。
+
+#### 验证（Tests）
+
+- 新增 Gate FAIL 合法回退与非法目标拒绝测试，以及 StateGraph 阶段、具名边、目标阶段与 Control Kernel 完整同步的测试。
+- `node --test tests/workflow-graph-routing.test.mjs tests/workflow-graph.test.mjs`：17 项通过。
+- `npm test`：97 项通过，0 失败；`git diff --check` 通过。
+
 ### V2 收口：清理旧版残留与文档归档（2026-08-10）
 
 #### 变更（Changed）
