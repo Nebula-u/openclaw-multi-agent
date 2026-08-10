@@ -66,7 +66,7 @@ export function reduceWorkflow(current, command, machine) {
   if (command.command_type === 'ADVANCE_PHASE') {
     requireActive(current, command);
     if (!command.target_phase) reject('CONTROL_TARGET_PHASE_REQUIRED', 'ADVANCE_PHASE requires target_phase');
-    const allowed = machine.phase_transitions[current.phase] ?? [];
+    const allowed = Object.values(machine.phase_transitions[current.phase] ?? {});
     if (!allowed.includes(command.target_phase)) {
       reject('CONTROL_PHASE_TRANSITION_INVALID', `${current.phase} cannot transition to ${command.target_phase}`,
         { from_phase: current.phase, target_phase: command.target_phase });

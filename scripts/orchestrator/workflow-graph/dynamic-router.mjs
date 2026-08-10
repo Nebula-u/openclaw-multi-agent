@@ -70,7 +70,12 @@ export function classifierLayer(context) {
     }
     const recomputed = recomputeGate(gate.items ?? []);
     if (recomputed !== gate.overall) return { outcome: 'HOLD', reason: 'GRAPH_GATE_OVERALL_MISMATCH' };
-    return { outcome: `GATE_${recomputed}`, reason: `GRAPH_${phaseSpec.gate_name}_${recomputed}`, overall: recomputed };
+    return {
+      outcome: `GATE_${recomputed}`,
+      reason: `GRAPH_${phaseSpec.gate_name}_${recomputed}`,
+      overall: recomputed,
+      failureTarget: gate.failure_target,
+    };
   }
   if (kind === 'final') return classifyRelease(context);
   if (context.taskAgentValid === false) return { outcome: 'HOLD', reason: 'GRAPH_TASK_AGENT_MISMATCH' };
@@ -101,23 +106,39 @@ export function classifierLayer(context) {
   return { outcome: 'COMPLETED', reason: `GRAPH_${phaseSpec.task_type}_COMPLETED` };
 }
 
-// Layer 3: map an outcome to a business-policy action. This layer can select
-// a target, but it cannot decide whether that target is legal.
+// Layer 3: map an outcome to a business-policy action. Graph policy names a
+// Control Kernel edge, never a target phase; Gate FAIL supplies its explicit
+// recovery target, which is checked against those same legal edges.
 export function policyLayer({ kind, phaseSpec, machine, control }, facts) {
   const transition = (targetPhase, reason, payload = {}) => decision('TRANSITION', 'PROGRESSED', reason, { targetPhase, payload });
-  if (facts.outcome === 'DEMO_FAST_APPROVED') return transition(phaseSpec.demo_fast_next, facts.reason, { approval_decision_id: facts.decisionId });
-  if (facts.outcome === 'STANDARD_FLOW') return transition(phaseSpec.standard_next, facts.reason);
-  if (facts.outcome === 'GATE_PASS') return transition(phaseSpec.on_pass, facts.reason);
-  if (facts.outcome === 'GATE_FAIL') return transition(phaseSpec.on_fail, facts.reason);
-  if (kind !== 'final' && facts.outcome === 'RELEASE_GO') return transition(phaseSpec.on_go, facts.reason);
-  if (kind !== 'final' && facts.outcome === 'RELEASE_NO_GO') return transition(phaseSpec.on_no_go, facts.reason);
-  if (facts.outcome === 'NEEDS_REWORK') return phaseSpec.on_needs_rework
-    ? transition(phaseSpec.on_needs_rework, facts.reason)
-    : decision('HOLD', 'HOLD', 'GRAPH_REWORK_TARGET_REQUIRED');
-  if (['FAILED', 'LOST'].includes(facts.outcome)) return phaseSpec.on_failed
-    ? transition(phaseSpec.on_failed, facts.reason)
-    : decision('HOLD', 'HOLD', facts.reason);
-  if (facts.outcome === 'TRIAGE_TARGET') return transition(facts.targetPhase, facts.reason);
+  const select = (route, payload = {}) => {
+    if (route?.select === 'control_edge') {
+      const targetPhase = machine.phase_transitions[control.phase]?.[route.edge];
+      return targetPhase
+        ? transition(targetPhase, facts.reason, payload)
+        : decision('HOLD', 'HOLD', `GRAPH_CONTROL_EDGE_MISSING:${control.phase}:${route.edge ?? ''}`);
+    }
+    if (route?.select === 'gate_failure_target') {
+      return payload.failureTarget
+        ? transition(payload.failureTarget, facts.reason, payload)
+        : decision('HOLD', 'HOLD', 'GRAPH_GATE_FAILURE_TARGET_REQUIRED');
+    }
+    if (route?.select === 'requested_or_recommended_legal_target') {
+      return payload.targetPhase
+        ? transition(payload.targetPhase, facts.reason, payload)
+        : decision('HOLD', 'HOLD', 'GRAPH_TRIAGE_TARGET_REQUIRED');
+    }
+    return decision('HOLD', 'HOLD', `GRAPH_ROUTING_SELECTOR_REQUIRED:${route?.select ?? ''}`);
+  };
+  if (facts.outcome === 'DEMO_FAST_APPROVED') return select(phaseSpec.routing?.demo_fast_approved, { approval_decision_id: facts.decisionId });
+  if (facts.outcome === 'STANDARD_FLOW') return select(phaseSpec.routing?.standard_flow);
+  if (facts.outcome === 'GATE_PASS') return select(phaseSpec.routing?.pass);
+  if (facts.outcome === 'GATE_FAIL') return select(phaseSpec.routing?.fail, { failureTarget: facts.failureTarget });
+  if (kind !== 'final' && facts.outcome === 'RELEASE_GO') return select(phaseSpec.routing?.release_go);
+  if (kind !== 'final' && facts.outcome === 'RELEASE_NO_GO') return select(phaseSpec.routing?.release_no_go);
+  if (facts.outcome === 'NEEDS_REWORK') return select(phaseSpec.routing?.needs_rework);
+  if (['FAILED', 'LOST'].includes(facts.outcome)) return select(phaseSpec.routing?.failed);
+  if (facts.outcome === 'TRIAGE_TARGET') return select(phaseSpec.routing?.triage_target, { targetPhase: facts.targetPhase });
   if (facts.outcome === 'SET_CANDIDATE') {
     return decision('SET_CANDIDATE', 'PROGRESSED', facts.reason, { candidateCommit: facts.candidateCommit });
   }
@@ -127,7 +148,7 @@ export function policyLayer({ kind, phaseSpec, machine, control }, facts) {
   if (kind === 'final' && facts.outcome === 'RELEASE_NO_GO') {
     return decision('COMPLETE', 'TERMINAL', facts.reason, { outcome: 'RELEASE_NO_GO' });
   }
-  if (facts.outcome === 'COMPLETED') return transition(phaseSpec.on_completed, facts.reason);
+  if (facts.outcome === 'COMPLETED') return select(phaseSpec.routing?.completed);
   if (facts.outcome === 'RELEASE_HOLD' || facts.outcome === 'HOLD') return decision('HOLD', 'HOLD', facts.reason);
   if (facts.outcome === 'WAITING_HUMAN') return decision('STOP', 'WAITING_HUMAN', facts.reason);
   if (facts.outcome === 'NEEDS_TASK') return decision('STOP', 'NEEDS_TASK', facts.reason);
@@ -139,9 +160,12 @@ export function policyLayer({ kind, phaseSpec, machine, control }, facts) {
 // graph before any command is built.
 export function validatorLayer({ control, machine }, proposed) {
   if (proposed.kind === 'TRANSITION') {
-    const allowed = machine.phase_transitions[control.phase] ?? [];
+    const allowed = Object.values(machine.phase_transitions[control.phase] ?? {});
     if (!proposed.targetPhase || !allowed.includes(proposed.targetPhase)) {
-      return decision('HOLD', 'HOLD', `GRAPH_ROUTE_ILLEGAL:${control.phase}->${proposed.targetPhase ?? ''}`);
+      const reason = proposed.payload?.failureTarget
+        ? `GRAPH_GATE_FAILURE_TARGET_ILLEGAL:${control.phase}->${proposed.targetPhase ?? ''}`
+        : `GRAPH_ROUTE_ILLEGAL:${control.phase}->${proposed.targetPhase ?? ''}`;
+      return decision('HOLD', 'HOLD', reason);
     }
   }
   if (proposed.kind === 'SET_CANDIDATE' && (!proposed.candidateCommit || control.condition !== 'ACTIVE')) {

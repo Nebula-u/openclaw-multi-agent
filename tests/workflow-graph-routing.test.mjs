@@ -76,6 +76,55 @@ test('validator layer converts a policy target outside the current legal edges i
   assert.equal(commandLayer(invalid).command.command_type, 'HOLD');
 });
 
+test('Gate FAIL selects its explicit Control Kernel legal recovery edge', () => {
+  const context = activeContext('ARCHITECTURE_GATE', {
+    kind: 'gate',
+    gateTaskId: 'TASK-architecture-gate',
+    gate: {
+      workflow_id: 'WF-routing-unit', task_id: 'TASK-architecture-gate', overall: 'FAIL', failure_target: 'REQUIREMENTS',
+      items: [{ status: 'FAIL', blocking: true }],
+    },
+  });
+  const routed = resolveDynamicRoute(context);
+  assert.equal(routed.decision.kind, 'TRANSITION');
+  assert.equal(routed.result.command.target_phase, 'REQUIREMENTS');
+});
+
+test('Gate FAIL rejects an explicit recovery target outside Control Kernel legal edges', () => {
+  const context = activeContext('ARCHITECTURE_GATE', {
+    kind: 'gate',
+    gateTaskId: 'TASK-architecture-gate',
+    gate: {
+      workflow_id: 'WF-routing-unit', task_id: 'TASK-architecture-gate', overall: 'FAIL', failure_target: 'FINAL_REPORT',
+      items: [{ status: 'FAIL', blocking: true }],
+    },
+  });
+  const routed = resolveDynamicRoute(context);
+  assert.equal(routed.decision.kind, 'HOLD');
+  assert.match(routed.decision.reason, /GRAPH_GATE_FAILURE_TARGET_ILLEGAL/u);
+});
+
+test('StateGraph policy and Control Kernel named edges are fully synchronized', () => {
+  const deprecated = [
+    'standard_next', 'demo_fast_next', 'on_completed', 'on_needs_rework',
+    'on_failed', 'on_pass', 'on_fail', 'on_go', 'on_no_go',
+  ];
+  assert.deepEqual(Object.keys(policy.phases).sort(), [...machine.phases].sort());
+  assert.deepEqual(Object.keys(machine.phase_transitions).sort(), [...machine.phases].sort());
+  for (const spec of Object.values(policy.phases)) {
+    assert.ok(spec.routing || spec.kind === 'final');
+    for (const field of deprecated) assert.equal(spec[field], undefined);
+  }
+  for (const phase of machine.phases) {
+    const edges = machine.phase_transitions[phase];
+    assert.ok(edges && !Array.isArray(edges));
+    for (const target of Object.values(edges)) assert.ok(machine.phases.includes(target));
+    for (const route of Object.values(policy.phases[phase].routing ?? {})) {
+      if (route.select === 'control_edge') assert.ok(Object.hasOwn(edges, route.edge));
+    }
+  }
+});
+
 test('dynamic failure triage accepts only a legal requested target phase', () => {
   const context = activeContext('FAILURE_TRIAGE', {
     kind: 'triage',
