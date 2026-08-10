@@ -9,8 +9,9 @@ import {
   validatorLayer,
 } from '../scripts/orchestrator/workflow-graph/dynamic-router.mjs';
 import { loadWorkflowGraphPolicy } from '../scripts/orchestrator/workflow-graph/phase-policy.mjs';
+import { fileURLToPath } from 'node:url';
 
-const ROOT = new URL('..', import.meta.url).pathname.replace(/^\//u, '').replaceAll('/', '\\');
+const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const { policy, machine } = loadWorkflowGraphPolicy(ROOT);
 
 function activeContext(phase, extra = {}) {
