@@ -42,8 +42,8 @@ function main() {
     const repository = createControlRepository(projectRoot, database);
     const tasks = createTaskRepository(projectRoot, database);
     const supervision = createSupervisionRepository(projectRoot, database);
-    const mutatingCommands = new Set(['apply', 'project', 'recover', 'task-register', 'task-validate', 'task-retry', 'dispatch-prepare',
-      'dispatch-receipt', 'result-ingest', 'supervision-request', 'supervision-claim', 'supervision-complete', 'wake-record']);
+    const mutatingCommands = new Set(['apply', 'project', 'recover', 'task-register', 'task-validate', 'task-retry', 'task-resume-human', 'dispatch-prepare',
+      'dispatch-receipt', 'result-ingest', 'approval-request', 'approval-resolve', 'supervision-request', 'supervision-claim', 'supervision-complete', 'wake-record']);
     const authority = mutatingCommands.has(command)
       ? authorizeLocalOrchestrator({
         capabilityPath: resolve(options['capability-file'] ?? defaultCapabilityPath(projectRoot)),
@@ -93,6 +93,8 @@ function main() {
       emit(task ? { ok: true, command: 'task-get', task } : { ok: false, command: 'task-get', errors: [{ code: 'TASK_NOT_FOUND' }] }, task ? 0 : 1);
     } else if (command === 'task-retry') {
       emit(tasks.retry(JSON.parse(readFileSync(resolve(required(options, 'task-file')), 'utf8'))));
+    } else if (command === 'task-resume-human') {
+      emit(tasks.resumeHumanTask(JSON.parse(readFileSync(resolve(required(options, 'resume-file')), 'utf8'))));
     } else if (command === 'task-supersede') {
       emit(tasks.supersede(JSON.parse(readFileSync(resolve(required(options, 'supersede-file')), 'utf8'))));
     } else if (command === 'dispatch-prepare') {
@@ -105,6 +107,15 @@ function main() {
       emit({ ok: true, command: 'dispatch-outbox', pending: tasks.outbox() });
     } else if (command === 'result-ingest') {
       emit(tasks.ingestCompletion(JSON.parse(readFileSync(resolve(required(options, 'completion-file')), 'utf8'))));
+    } else if (command === 'approval-request') {
+      emit(repository.requestApproval(JSON.parse(readFileSync(resolve(required(options, 'request-file')), 'utf8')), { actor: authority.actor }));
+    } else if (command === 'approval-list') {
+      emit({ ok: true, command: 'approval-list', approvals: repository.approvals({ workflowId: options['workflow-id'] ?? null, status: options.status ?? null }) });
+    } else if (command === 'approval-resolve') {
+      const response = JSON.parse(readFileSync(resolve(required(options, 'response-file')), 'utf8'));
+      const resolved = repository.resolveApproval(response, { actor: authority.actor });
+      const task = response.task_id ? tasks.resumeHumanTask({ task_id: response.task_id, decision_id: response.decision_id, occurred_at: response.decided_at }) : null;
+      emit({ ...resolved, task });
     } else if (command === 'supervision-request') {
       emit(supervision.request(JSON.parse(readFileSync(resolve(required(options, 'request-file')), 'utf8'))));
     } else if (command === 'supervision-list') {
@@ -120,7 +131,7 @@ function main() {
     } else if (command === 'wake-record') {
       emit(supervision.recordWake(JSON.parse(readFileSync(resolve(required(options, 'record-file')), 'utf8'))));
     } else {
-      throw new Error('usage: control-kernel.mjs <init|apply|get|events|active|snapshot|project|audit|recover|task-register|task-validate|task-get|task-retry|task-supersede|dispatch-prepare|dispatch-receipt|dispatch-list|dispatch-outbox|result-ingest|supervision-request|supervision-list|supervision-claim|supervision-complete|supervision-events|wake-outbox|wake-record> [options]');
+      throw new Error('usage: control-kernel.mjs <init|apply|get|events|active|snapshot|project|audit|recover|task-register|task-validate|task-get|task-retry|task-resume-human|task-supersede|dispatch-prepare|dispatch-receipt|dispatch-list|dispatch-outbox|result-ingest|approval-request|approval-list|approval-resolve|supervision-request|supervision-list|supervision-claim|supervision-complete|supervision-events|wake-outbox|wake-record> [options]');
     }
   } catch (error) {
     const code = error.code ?? (error instanceof ControlTransitionError ? error.code : 'CONTROL_KERNEL_ERROR');

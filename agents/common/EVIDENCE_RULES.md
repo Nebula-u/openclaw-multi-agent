@@ -47,4 +47,4 @@
 ## 6. 校验和
 
 - 每个 run 的关键产物写入 `checksums.sha256`（可用 PowerShell `Get-FileHash`、`sha256sum`、`shasum -a 256` 等原生工具计算，**不用** Python 脚本）。
-- events.jsonl 哈希链用 SHA-256（`previous_event_hash` → `event_hash`）。
+- Control Kernel v2 的 workflow/task event 使用 SHA-256 哈希链；`runtime/control/v2/**` 中的 `events.jsonl` 只是只读投影。

@@ -238,7 +238,7 @@ contains() { case " $1 " in *" $2 "*) return 0;; *) return 1;; esac; }
 # 3. runtime 目录清单
 # ---------------------------------------------------------------------------
 RUNTIME_DIRS=(
-  "$RUNTIME_ROOT_ABS/control/workflows"
+  "$RUNTIME_ROOT_ABS/control/v2"
   "$RUNTIME_ROOT_ABS/control/config-snapshots"
   "$RUNTIME_ROOT_ABS/control/component-requests"
   "$RUNTIME_ROOT_ABS/control/component-builds"

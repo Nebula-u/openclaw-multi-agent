@@ -8,8 +8,8 @@
 - Node.js `v24.18.0`，支持当前项目使用的内置 `node:sqlite`。
 - Control Kernel v2 已有 workflow、immutable workflow event、command idempotency、task、run、
   dispatch intent/outbox/receipt、completion ingest、projection、audit 和 recover。
-- 基线 `npm test` 通过：Runtime Guard 105 通过、2 跳过；Agent JSON 12 通过；runtime bundle
-  3 通过；Control Kernel 20 通过；legacy migration 2 通过；安装验证 2 通过。
+- 当前 `npm test` 通过：Runtime Guard 5 通过；Agent JSON 12 通过；runtime bundle
+  3 通过；Control Kernel 30 通过；Monitor 26 通过；安装验证 4 通过。旧迁移测试已删除。
 
 ## OpenClaw 实测接口
 
@@ -49,7 +49,7 @@ thinking 内容；遇到半行时保留 cursor，等待下一轮补齐。
 
 ## 当前阻断与实施门槛
 
-- Manager 编排加固计划仍待实施，真实 spawn 的 `agentId` 防线和统一派发入口尚未代码化封死。
+- Manager 编排的 Control Kernel、固定 `agentId`、统一派发入口和审批边界已代码化；仍需在真实 Gateway 上补充完整 workflow 演练。
 - 自动监督只能先以 shadow mode 运行。
 - Wake Adapter 默认关闭；只有配置显式开启、Control Kernel audit 通过并且请求已进入 durable
   outbox 时才允许调用真实 CLI。

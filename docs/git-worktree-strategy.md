@@ -99,4 +99,4 @@ Input-Commit: <hash>
 
 ## 9. 相关文档
 
-`manager-orchestration.md`（合并前校验的完整清单）、`workflow.md`（各阶段的 commit/worktree 时序）、`state-and-recovery.md`（Git 与 workflow.json 一致性）、`agent-contracts.md`（哪些角色需真实 commit）、`human-approval.md`（审批节点）。
+`manager-orchestration.md`（合并前校验的完整清单）、`control-kernel-v2.md`（状态、投影与恢复）、`agent-contracts.md`（哪些角色需真实 commit）、`human-approval.md`（审批节点）。

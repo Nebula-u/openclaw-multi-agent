@@ -1,6 +1,5 @@
 export const CONTRACT_SCENARIOS = {
   'acceptance-criteria.schema.json': ['requirement-agent', false],
-  'active-workflows.schema.json': ['manager-agent', false],
   'agent-package.schema.json': ['manager-agent', false],
   'approval-assessment.schema.json': ['manager-agent', false],
   'approval-request.schema.json': ['manager-agent', false],
@@ -23,8 +22,6 @@ export const CONTRACT_SCENARIOS = {
   'task-run.schema.json': ['manager-agent', false],
   'task.schema.json': ['manager-agent', false],
   'transaction.schema.json': ['manager-agent', false],
-  'workflow-event.schema.json': ['manager-agent', false],
-  'workflow.schema.json': ['manager-agent', false],
 };
 
 // These contracts are produced only by the deterministic Control Kernel. They
@@ -36,7 +33,6 @@ export const INTERNAL_CONTRACTS = new Set([
   'active-workflows-v2.schema.json',
   'control-event-v2.schema.json',
   'control-state-v2.schema.json',
-  'legacy-quarantine-report-v2.schema.json',
   'manager-wake-record.schema.json',
   'monitor-event.schema.json',
   'supervision-claim.schema.json',

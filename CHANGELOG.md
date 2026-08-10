@@ -2,6 +2,26 @@
 
 ## [Unreleased] - 2026-08-07
 
+### V2 收口：清理旧版残留与文档归档（2026-08-10）
+
+#### 变更（Changed）
+
+- 新版本运行链路统一使用 Control Kernel v2；workflow 的待人工状态统一为 `condition=WAITING_HUMAN`，审批对象继续使用 `status=PENDING`，不再混用旧 v1 状态模型。
+- `scripts/runtime-guard.mjs` 收敛为当前 v2 产物校验入口：支持 JSON/JSONL Schema 校验、大小限制、重复 ID 检查、占位符策略和脱敏失败摘要；移除旧文件状态推进、事务恢复和 workflow/task package 检查协议。
+- 安装脚本改为创建和同步 `runtime/control/v2`，不再创建或依赖旧的文件型 `runtime/control/workflows` 控制链路。
+- 清理旧 v1 状态 Schema、模板、迁移脚本、迁移测试、旧 runtime-core 文件协议及 `tools/legacy-migrations/unsafe-direct-writes/` 下的禁用脚本。
+- 更新与 v2 混合的架构、编排、Agent 契约、审批、Gate、证据、上下文传递、Monitor 和安装文档；旧版文档移至 `docs/archive/legacy/`，仅用于人工查阅和审计背景。
+
+#### 保留范围（Notes）
+
+- 未修改 `CHANGELOG.md` 之外的历史记录语义；本次变更不执行历史数据迁移，不删除或改写 `control.db`、历史 workflow/task/event、`legacy-archive` 或 `deletion-backups`。
+- 不调整不同角色的模型配置，也不启用按任务动态模型路由，避免扩大本轮变更范围。
+
+#### 验证（Tests）
+
+- `npm test`：80 项通过，0 失败。
+- Runtime Guard self-check、`git diff --check` 通过；Control DB SHA-256 保持不变。
+
 ### Linux：Tomcat HTTPS 实时 Monitor 部署
 
 #### 改动了什么

@@ -3,10 +3,11 @@
 > 版本: human-approval v1
 > 权威规则以 `agents/common/APPROVAL_RULES.md`（approval-rules v1）与 `contracts/approval-request.schema.json` / `contracts/approval-response.schema.json` 为准。
 > 散文用中文；`trigger`、`status`、`outcome` 等字段值用英文。
+> 新 workflow 的状态权威是 SQLite Control Kernel v2：`runtime/control/control.db`。`condition=WAITING_HUMAN` 是 workflow 状态，`approval-request.status=PENDING` 是审批对象状态，两者不是同一枚举。
 
 ## 1. 审批责任分工
 
-- **manager-agent** 是唯一的审批发起、记录与放行方：命中任一触发条件时，它生成 `approval-request.json` 并把工作流置为 `WAITING_HUMAN`。Runtime Guard 只校验审批关联，不发起、不代答也不放行。
+- **manager-agent** 是唯一的审批发起、记录与放行方：命中任一触发条件时，它通过 local-orchestrator 生成审批记录，并用 v2 `WAIT_HUMAN` 把工作流置为 `condition=WAITING_HUMAN`。Runtime Guard 只校验审批关联，不发起、不代答也不放行。
 - **工作 Agent**（requirement / architect / developer / review / test / release）遇到需要审批的节点时**不擅自决定**，返回 `result_status = HUMAN_DECISION_REQUIRED`，在 `result.json.decisions_required[]` 列出选项、影响与可逆性，交 manager-agent 处理。
 
 ## 2. 15 个必须人工审批的触发条件
@@ -35,7 +36,7 @@
 - 等待审批期间，**不得**继续调度依赖该决策的任务。
 - 用户回复后，保存 `approval-response.json` + 原始回复摘要（`raw_user_reply_summary`）。
 - 审批 request/response 必须逐字段绑定到同一 `decision_id` / `workflow_id` / `task_id` / `run_id`；一次审批不得跨 workflow、task 或 run 重用。
-- manager-agent **不得**模拟用户审批，不得替用户选择选项。
+- manager-agent **不得**模拟用户审批，不得替用户选择选项。存在 `PENDING` request 时，直接 `RESUME` 会被 v2 Control Kernel 拒绝。
 - manager-agent 在 intake、ArchitectureGate 前和每个已派发 task 前必须写 `approval-assessments/*.json`，对第 2 节全部 15 个 trigger 逐项记录 `NOT_TRIGGERED` 或 `REQUIRES_APPROVAL`。后者必须绑定同 workflow/task/run 的已批准 response；ArchitectureGate PASS 必须引用其全部命中 decision。
 
 ## 4. approval-request.json 流程
@@ -57,7 +58,7 @@
 | `status` | 初始为 `PENDING`，用户处置后转 `RESOLVED`，撤销为 `CANCELLED` |
 
 流程：
-1. manager-agent 命中触发 → 生成 `decisions/<dec-id>.request.json`（`status = PENDING`），工作流置 `WAITING_HUMAN`，append event。
+1. manager-agent 命中触发 → 通过 v2 `WAIT_HUMAN` 生成绑定 `workflow_id/task_id/run_id` 的 `decisions/<dec-id>.request.json`（`status = PENDING`），并原子记录 workflow event。
 2. 向用户展示 `summary`、各 `options`（含影响与可逆性）、以及可选的 `recommended_option` 及其理由。
 3. 等待用户真实回复；**不轮询、不超时、不代答**。
 
@@ -85,6 +86,10 @@
    - `REJECTED`：不执行被否决的操作，回到审批前的安全状态或改走非破坏性替代方案。
    - `MODIFIED`：按用户修改后的方案执行，记录差异。
 4. 恢复被暂停的相关任务的调度。
+
+## 5.1 Demo 快速流程
+
+Demo 在 `INTAKE` 阶段先由 `demo-fast-request` 向用户展示“跳过 requirement-agent、architect-agent、review-agent、test-agent、release-agent，仅保留 developer-agent 和本地测试”的选择。只有用户明确选择 `DEMO_FAST` 后，才执行 v2 `RESOLVE_HUMAN` 并允许 `INTAKE → DEVELOPMENT`；选择 `STANDARD_FLOW`、拒绝、沉默、超时、Agent 自己的“同意”或 manager 的默认推荐都不能启用快速路径。
 
 ## 6. 工作 Agent 侧行为
 

@@ -11,7 +11,7 @@
     "mode": "truncate_only"
   },
   "prompt_content": {
-    "include": ["context-summary.md", "rules-snapshot.md", "current workflow.json", "latest events.jsonl record", "pending decision and gate locators"],
+    "include": ["context-summary.md", "rules-snapshot.md", "Control Kernel snapshot", "latest v2 event", "pending approval and gate locators"],
     "exclude": ["complete chat history", "complete historical Guard output", "complete raw command logs", "complete historical Agent summaries"]
   }
 }

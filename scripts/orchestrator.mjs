@@ -57,7 +57,48 @@ async function main() {
         return emit(tasks.register(input));
       }
       if (command === 'task-validate') return emit(tasks.validatePackage(required(options, 'task-id'), options['occurred-at']));
-      throw new Error('usage: orchestrator.mjs <init|apply|task-register|task-validate|dispatch> [options]');
+      if (command === 'approval-request') {
+        const input = JSON.parse(readFileSync(resolve(required(options, 'request-file')), 'utf8'));
+        return emit(controls.requestApproval(input, { actor: 'local-orchestrator' }));
+      }
+      if (command === 'approval-list') {
+        return emit({ ok: true, command: 'approval-list', approvals: controls.approvals({ workflowId: options['workflow-id'] ?? null, status: options.status ?? null }) });
+      }
+      if (command === 'demo-fast-request') {
+        return emit(controls.requestDemoFastApproval(required(options, 'workflow-id'), { actor: 'local-orchestrator' }));
+      }
+      if (command === 'approval-resolve') {
+        let response;
+        if (options['response-file']) {
+          response = JSON.parse(readFileSync(resolve(options['response-file']), 'utf8'));
+        } else {
+          const decisionId = required(options, 'decision-id');
+          const pending = controls.approvals({ status: 'PENDING' }).find((item) => item.decision_id === decisionId);
+          if (!pending) throw new Error(`pending approval not found: ${decisionId}`);
+          const decidedBy = required(options, 'decided-by');
+          const rawReply = required(options, 'raw-user-reply');
+          if (!/^human:/u.test(decidedBy)) throw new Error('decided-by must identify a human and start with human:');
+          const outcome = required(options, 'outcome');
+          const chosenOptionId = options['chosen-option-id'] ?? null;
+          response = {
+            schema_version: 1,
+            decision_id: pending.decision_id,
+            workflow_id: pending.workflow_id,
+            task_id: pending.task_id,
+            run_id: pending.run_id,
+            outcome,
+            chosen_option_id: chosenOptionId,
+            raw_user_reply_summary: rawReply,
+            decided_by: decidedBy,
+            decided_at: options['decided-at'] ?? new Date().toISOString(),
+            notes: options.notes ?? '',
+          };
+        }
+        const resolved = controls.resolveApproval(response, { actor: 'local-orchestrator' });
+        const task = response.task_id ? tasks.resumeHumanTask({ task_id: response.task_id, decision_id: response.decision_id, occurred_at: response.decided_at }) : null;
+        return emit({ ...resolved, task });
+      }
+      throw new Error('usage: orchestrator.mjs <init|apply|task-register|task-validate|dispatch|demo-fast-request|approval-request|approval-list|approval-resolve --response-file <abs>|--decision-id <id> --outcome <...> --chosen-option-id <id> --raw-user-reply <text> --decided-by human:<id>> [options]');
     } finally { database.close(); }
   } catch (error) {
     emit({ ok: false, command, errors: [{ code: error.code ?? 'ORCHESTRATOR_ERROR', message: error.message, ...error.details }] }, 1);

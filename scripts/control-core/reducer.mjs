@@ -71,6 +71,10 @@ export function reduceWorkflow(current, command, machine) {
       reject('CONTROL_PHASE_TRANSITION_INVALID', `${current.phase} cannot transition to ${command.target_phase}`,
         { from_phase: current.phase, target_phase: command.target_phase });
     }
+    if (current.phase === 'INTAKE' && command.target_phase === 'DEVELOPMENT'
+      && typeof command.payload?.approval_decision_id !== 'string') {
+      reject('CONTROL_DEMO_FAST_APPROVAL_REQUIRED', 'INTAKE to DEVELOPMENT requires an approved DEMO_FAST decision');
+    }
     next.phase = command.target_phase;
     next.resume_phase = null;
     next.resume_condition = null;
@@ -84,9 +88,9 @@ export function reduceWorkflow(current, command, machine) {
     next.condition = 'HOLD';
     next.resume_phase = current.phase;
     next.resume_condition = current.condition === 'WAITING_HUMAN' ? 'WAITING_HUMAN' : 'ACTIVE';
-  } else if (command.command_type === 'RESUME') {
+  } else if (command.command_type === 'RESUME' || command.command_type === 'RESOLVE_HUMAN') {
     if (!['WAITING_HUMAN', 'HOLD'].includes(current.condition)) {
-      reject('CONTROL_CONDITION_INVALID', `RESUME requires WAITING_HUMAN or HOLD, found ${current.condition}`);
+      reject('CONTROL_CONDITION_INVALID', `${command.command_type} requires WAITING_HUMAN or HOLD, found ${current.condition}`);
     }
     next.phase = current.resume_phase ?? current.phase;
     next.condition = current.resume_condition ?? 'ACTIVE';

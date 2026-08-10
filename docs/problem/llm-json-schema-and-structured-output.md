@@ -11,7 +11,7 @@
 2026-08-04 更新：`scripts/runtime-core/json-ingestion.mjs` 已支持 BOM、唯一 Markdown fence 与唯一解释性包裹的确定性提取，并拒绝多个候选；`json-repair-prompts.mjs` 会区分 enum/type、schema drift、截断和空输出，首次调用外最多重试两次。DeepSeek JSON Output 官方参数为 `response_format: {"type":"json_object"}`，但当前 OpenClaw Gateway `chat.send` schema 不含请求级 `responseFormat`，不能可靠透传；本项目不会把它错误地全局静态施加给工具调用与 Markdown 对话。
 
 - 7 个内置 Agent 的源规则和当前 runtime 规则均要求使用 Runtime Guard + Ajv 校验 JSON/JSONL，并在首次失败后仅允许一次 JSON-only retry。
-- Manager 在派发前校验输入包 JSON/JSONL；`check-workflow` 自动校验 `result.json`、`evidence.jsonl`、`command-records.jsonl`、`review-findings.json` 与 `release-decision.json` 等核心产物。
+- Manager 在派发前通过 `task-validate` 校验输入包 JSON/JSONL；`result-ingest` 在入库前按 task 固定的 `structured_outputs` 自动校验 `result.json`、`evidence.jsonl`、`command-records.jsonl`、`review-findings.json` 与 `release-decision.json` 等核心产物。
 - Agent 的自然语言会话回复、`user-summary.md` 和 `manager-summary.md` 是 Markdown，不是 JSON Schema 契约；它们不得成为工作流状态推进的权威依据。
 - 项目没有使用 `response_format`、`json_schema`、`json_object`、`text.format` 或其他 LLM API 结构化输出参数。现有 Gateway harness 只在 prompt 中要求“仅输出 JSON”，然后再由 Guard 校验。
 - 历史真实 LLM 测试计划 190 个用例，仅执行 60 个，16 个在一次 schema retry 后仍失败。因此不能声明所有 Agent 已完成真实 JSON 合规验证。
@@ -20,7 +20,7 @@
 
 ### 现状与根因
 
-`scripts/runtime-guard.mjs` 的 `check-workflow` 会重验核心产物，但不会根据 `task_type` 或角色声明逐一校验需求、架构、开发和测试阶段的全部专属 JSON。例如验收标准、实现计划、风险登记、变更清单和测试用例可能只由生成它们的 Agent 自检；`task.required_outputs` 对这些文件只确认存在，不关联 Schema。
+`scripts/runtime-guard.mjs validate-file` 负责 Agent 自检和当前契约自检；Control Kernel v2 的 `result-ingest` 会根据 task 中固定的 `structured_outputs` 逐项重验需求、架构、开发和测试阶段的专属 JSON。Agent 自检不能替代入库前复核。
 
 这意味着某个 Agent 遗漏本地自检时，Manager 仍可能在文件存在的情况下继续推进。
 
@@ -28,9 +28,9 @@
 
 1. 扩展 `contracts/task.schema.json`，新增受版本控制的 `structured_outputs` 清单。每项至少包含：`path`、`schema_path`、`format`（`json` 或 `jsonl`）、`required`、`producer`。
 2. 由 Manager 在创建 task 时，按 `task_type` 生成该清单；不得让 Agent 自行决定要校验哪些跨 Agent 数据文件。
-3. 扩展 `check-workflow`：对每个 `structured_outputs` 项执行文件存在性、路径范围、JSON/JSONL 解析和 Ajv Schema 校验；任何缺失或失败均返回 fail-closed `HOLD`。
+3. 已由 `result-ingest` 对每个 `structured_outputs` 项执行文件存在性、路径范围、JSON/JSONL 解析和 Ajv Schema 校验；任何缺失或失败都不会提交 `COMPLETED`。
 4. 保留现有的作用域、证据、hash 和 Gate 校验；专属产物校验是补充，不替代它们。
-5. 增加测试：每个内置 Agent 至少有一个任务 fixture；将其任一声明 JSON 改为非法、缺失或替换为错误 Schema 时，`check-workflow` 必须失败。
+5. 保留任务仓库和结果摄取反例测试：将任一声明 JSON 改为非法、缺失或替换为错误 Schema 时，Control Kernel 必须拒绝提交。
 
 ### 验收标准
 

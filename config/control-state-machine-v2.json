@@ -1,5 +1,6 @@
 {
   "schema_version": 2,
+  "$comment": "唯一用于新 workflow 的状态机。审批等待使用 condition=WAITING_HUMAN；approval request 的 status=PENDING 不是 workflow 状态。",
   "phases": [
     "INTAKE",
     "REQUIREMENTS",
@@ -16,7 +17,7 @@
     "FINAL_REPORT"
   ],
   "phase_transitions": {
-    "INTAKE": ["REQUIREMENTS"],
+    "INTAKE": ["REQUIREMENTS", "DEVELOPMENT"],
     "REQUIREMENTS": ["REQUIREMENT_GATE"],
     "REQUIREMENT_GATE": ["REQUIREMENTS", "ARCHITECTURE"],
     "ARCHITECTURE": ["ARCHITECTURE_GATE"],

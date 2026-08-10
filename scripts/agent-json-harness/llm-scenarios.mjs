@@ -16,7 +16,6 @@ const VARIATIONS = [
 
 const SCHEMA_SPECS = [
   ['acceptance-criteria.schema.json', 'requirement-agent', false],
-  ['active-workflows.schema.json', 'manager-agent', false],
   ['agent-package.schema.json', 'manager-agent', false],
   ['approval-assessment.schema.json', 'manager-agent', false],
   ['approval-request.schema.json', 'manager-agent', false],
@@ -33,8 +32,6 @@ const SCHEMA_SPECS = [
   ['review-findings.schema.json', 'review-agent', false],
   ['skill-package.schema.json', 'manager-agent', false],
   ['task.schema.json', 'manager-agent', false],
-  ['workflow-event.schema.json', 'manager-agent', false],
-  ['workflow.schema.json', 'manager-agent', false],
 ];
 
 function slug(value) {
