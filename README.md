@@ -91,7 +91,7 @@ node scripts/orchestrator.mjs workflow-run `
   --workflow-id WF-example
 ```
 
-每次调用最多提交一个 workflow transition。返回 `NEEDS_TASK`、`WAITING_HUMAN`、`HOLD`、`RUNNING` 或 `TERMINAL` 时应停止，并根据 Control DB 中的事实准备任务、处理审批或恢复流程。StateGraph 不启用独立 checkpointer；重新调用时从 SQLite 和已校验 artifact 恢复。
+每次调用最多提交一个 workflow transition。动态路由依次经过安全守卫、结构化结果分类、阶段策略、合法边校验和命令构建五层。返回 `NEEDS_TASK`、`WAITING_HUMAN`、`HOLD`、`RUNNING` 或 `TERMINAL` 时应停止，并根据 Control DB 中的事实准备任务、处理审批或恢复流程。StateGraph 不启用独立 checkpointer；重新调用时从 SQLite 和已校验 artifact 恢复。
 
 ## Agent 角色
 

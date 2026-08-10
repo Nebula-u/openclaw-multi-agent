@@ -19,7 +19,20 @@
 #### 验证（Tests）
 
 - 新增 StateGraph 标准入口、人工等待、Demo 审批、缺失 task、task 完成、Gate 重算、候选 commit 和 release 完成回归测试。
-- `npm test`：89 项通过，0 失败；依赖审计为 0 个已知漏洞。
+- `npm test`：94 项通过，0 失败；依赖审计为 0 个已知漏洞。
+
+### StateGraph 五层动态路由（2026-08-10）
+
+#### 新增（Added）
+
+- 新增统一动态路由器：安全守卫、结构化结果分类、阶段策略、状态机合法边校验和 Control Kernel command 构建。
+- Graph run result 增加 `route_kind`、`route_reason` 和路由事实摘要，便于审计本轮为何选择某个目标或停止。
+- 增加非法路由、失败分诊、review 返工和 release `NO_GO` 终态的分层单元测试。
+
+#### 边界（Notes）
+
+- 五层是单轮内存决策流水线，不是五份持久状态；最后只生成命令意图，实际状态变更仍由 Control Kernel reducer、CAS 和 SQLite 事务完成。
+- 动态路由只能在 `control-state-machine-v2.json` 声明的合法边中选择；无法验证的结果统一停止或进入 `HOLD`。
 
 ### V2 收口：清理旧版残留与文档归档（2026-08-10）
 
