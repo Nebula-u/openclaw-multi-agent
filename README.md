@@ -51,13 +51,34 @@ openclaw gateway status
 
 ### 2. 初始化本地 Orchestrator
 
-首次运行或 `runtime/control` 尚未初始化时执行一次：
+`scripts/orchestrator.mjs` 是项目源码中的控制脚本，不是 OpenClaw Agent 的 runtime 文件。`init` 只初始化本地 Orchestrator capability，不会安装、复制或生成
+`runtime/scripts/orchestrator.mjs`；因此 `runtime/scripts` 不存在是正常的。Control DB、capability 和 Agent workspace 属于 `runtime/`，脚本仍然从项目根目录的 `scripts/` 执行。
+
+必须把 `<project-root>` 替换为本项目根目录的绝对路径。若当前 PowerShell 目录已经是项目根目录，可以执行：
 
 ```powershell
-node scripts/orchestrator.mjs init --project-root .
+$ProjectRoot = (Get-Location).Path
+$Orchestrator = Join-Path $ProjectRoot 'scripts\orchestrator.mjs'
+if (-not (Test-Path -LiteralPath $Orchestrator -PathType Leaf)) {
+  throw "项目根目录错误，找不到 $Orchestrator"
+}
+node $Orchestrator init --project-root $ProjectRoot
 ```
 
-该命令创建本地 capability；不要读取、复制或打印 capability 文件内容。
+如果命令由 `runtime/agents/manager-agent/workspace` 或其他非项目目录发起，不能使用相对路径 `scripts/orchestrator.mjs` 和 `--project-root .`，应显式指定项目根目录：
+
+```powershell
+$ProjectRoot = 'D:\path\to\openclaw-multi-agent'
+$Orchestrator = Join-Path $ProjectRoot 'scripts\orchestrator.mjs'
+if (-not (Test-Path -LiteralPath $Orchestrator -PathType Leaf)) {
+  throw "项目根目录错误，找不到 $Orchestrator"
+}
+node $Orchestrator init --project-root $ProjectRoot
+```
+
+初始化后的检查应满足：`<project-root>\scripts\orchestrator.mjs` 存在，
+`<project-root>\runtime\control\.local-orchestrator.capability` 存在；不应检查
+`<project-root>\runtime\scripts\orchestrator.mjs`。不要读取、复制或打印 capability 文件内容。
 
 ### 3. 启动只读看板
 
@@ -86,8 +107,10 @@ node scripts/control-kernel.mjs snapshot --project-root .
 先由 Manager 完成 workflow bootstrap 和当前阶段所需 task package 注册；随后执行：
 
 ```powershell
-node scripts/orchestrator.mjs workflow-run `
-  --project-root . `
+$ProjectRoot = 'D:\path\to\openclaw-multi-agent'
+$Orchestrator = Join-Path $ProjectRoot 'scripts\orchestrator.mjs'
+node $Orchestrator workflow-run `
+  --project-root $ProjectRoot `
   --workflow-id WF-example
 ```
 
@@ -160,7 +183,8 @@ bash scripts/install.sh --apply --yes --runtime-root runtime
 
 # Linux：验证安装、初始化控制面并启动 Gateway
 bash scripts/validate-install.sh
-node scripts/orchestrator.mjs init --project-root .
+PROJECT_ROOT="$(pwd -P)"
+node "$PROJECT_ROOT/scripts/orchestrator.mjs" init --project-root "$PROJECT_ROOT"
 openclaw gateway start
 openclaw gateway status
 ```
