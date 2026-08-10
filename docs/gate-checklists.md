@@ -37,7 +37,7 @@ Finding 的阻断权威只来自 `reviewed_commit == workflow.current_candidate_
 
 ### 0.5 gate-result.json 必填字段
 
-`schema_version`、`gate_id`、`gate_name`、`workflow_id`、`task_id`、`checklist_version`（= `gate-checklists v1`）、`evaluated_at`、顶层 `evidence_refs`（至少一条）、`items[]`（每项必须含 `item_id`、`description`、`status`、`blocking`、`evidence_refs`、`notes`）、`overall`、`overall_reason`。
+`schema_version`、`gate_id`、`gate_name`、`workflow_id`、`task_id`、`checklist_version`（= `gate-checklists v1`）、`evaluated_at`、顶层 `evidence_refs`（至少一条）、`items[]`（每项必须含 `item_id`、`description`、`status`、`blocking`、`evidence_refs`、`notes`）、`overall`、`overall_reason`、`failure_target`。`overall=FAIL` 时，`failure_target` 必须指定当前 Gate 阶段的一个 Control Kernel 合法边；其他 overall 时必须为 `null`。
 
 ---
 

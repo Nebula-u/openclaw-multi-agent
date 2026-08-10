@@ -1,0 +1,100 @@
+{
+  "schema_version": 1,
+  "state_machine_version": 2,
+  "$comment": "StateGraph execution policy only. Routing references explicit Control Kernel edge identifiers in control-state-machine-v2.json; this file never names target phases.",
+  "phases": {
+    "INTAKE": {
+      "kind": "intake",
+      "routing": {
+        "standard_flow": { "select": "control_edge", "edge": "STANDARD_FLOW" },
+        "demo_fast_approved": { "select": "control_edge", "edge": "DEMO_FAST_APPROVED" }
+      }
+    },
+    "REQUIREMENTS": {
+      "kind": "task",
+      "task_type": "REQUIREMENTS",
+      "agent": "requirement-agent",
+      "routing": { "completed": { "select": "control_edge", "edge": "COMPLETED" } }
+    },
+    "REQUIREMENT_GATE": {
+      "kind": "gate",
+      "gate_name": "RequirementGate",
+      "routing": {
+        "pass": { "select": "control_edge", "edge": "PASS" },
+        "fail": { "select": "gate_failure_target" }
+      }
+    },
+    "ARCHITECTURE": {
+      "kind": "task",
+      "task_type": "ARCHITECTURE",
+      "agent": "architect-agent",
+      "routing": { "completed": { "select": "control_edge", "edge": "COMPLETED" } }
+    },
+    "ARCHITECTURE_GATE": {
+      "kind": "gate",
+      "gate_name": "ArchitectureGate",
+      "routing": {
+        "pass": { "select": "control_edge", "edge": "PASS" },
+        "fail": { "select": "gate_failure_target" }
+      }
+    },
+    "DEVELOPMENT": {
+      "kind": "task",
+      "task_type": "DEVELOPMENT",
+      "agent": "developer-agent",
+      "routing": { "completed": { "select": "control_edge", "edge": "COMPLETED" } }
+    },
+    "CODE_REVIEW": {
+      "kind": "task",
+      "task_type": "CODE_REVIEW",
+      "agent": "review-agent",
+      "routing": {
+        "completed": { "select": "control_edge", "edge": "COMPLETED" },
+        "needs_rework": { "select": "control_edge", "edge": "NEEDS_REWORK" }
+      }
+    },
+    "DEVELOPER_REWORK": {
+      "kind": "task",
+      "task_type": "DEVELOPER_REWORK",
+      "agent": "developer-agent",
+      "routing": { "completed": { "select": "control_edge", "edge": "COMPLETED" } }
+    },
+    "TESTING": {
+      "kind": "task",
+      "task_type": "TEST_IMPLEMENTATION",
+      "agent": "test-agent",
+      "routing": {
+        "completed": { "select": "control_edge", "edge": "COMPLETED" },
+        "failed": { "select": "control_edge", "edge": "FAILED" }
+      }
+    },
+    "TEST_CODE_REVIEW": {
+      "kind": "task",
+      "task_type": "TEST_CODE_REVIEW",
+      "agent": "review-agent",
+      "routing": {
+        "completed": { "select": "control_edge", "edge": "COMPLETED" },
+        "needs_rework": { "select": "control_edge", "edge": "NEEDS_REWORK" }
+      }
+    },
+    "FAILURE_TRIAGE": {
+      "kind": "triage",
+      "task_type": "FAILURE_TRIAGE",
+      "agent": "developer-agent",
+      "routing": { "triage_target": { "select": "requested_or_recommended_legal_target" } }
+    },
+    "RELEASE_VERIFICATION": {
+      "kind": "release",
+      "task_type": "RELEASE_VERIFICATION",
+      "agent": "release-agent",
+      "routing": {
+        "release_go": { "select": "control_edge", "edge": "RELEASE_GO" },
+        "release_no_go": { "select": "control_edge", "edge": "RELEASE_NO_GO" },
+        "failed": { "select": "control_edge", "edge": "FAILED" }
+      }
+    },
+    "FINAL_REPORT": {
+      "kind": "final"
+    }
+  }
+}

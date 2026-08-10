@@ -89,7 +89,21 @@ node scripts/control-kernel.mjs dispatch-outbox --project-root .
 
 宣布完成前必须确认：结果、Gate、release decision、审批、Git 候选、task/dispatch/outbox 和 Control Kernel audit 均一致；最终状态只能由 `COMPLETE`、`FAIL`、`CANCEL` 等受控命令产生。
 
-## 7. 相关文档
+## 7. StateGraph 执行层
+
+Manager 可以通过以下命令请求本地 StateGraph 执行一个有界编排轮次：
+
+```powershell
+node scripts/orchestrator.mjs workflow-run --project-root . --workflow-id <workflow-id>
+```
+
+StateGraph 根据 Control DB 的 `phase + condition` 路由，复用现有 task validation、dispatch、result ingestion 和 transition command。动态路由依次经过安全守卫、结构化结果分类、阶段策略、状态机合法边校验和命令构建五层；五层共享同一轮读取的事实，不产生额外持久状态。它不会创建缺少上下文的 task package：当前阶段没有已注册 task 时返回 `NEEDS_TASK`；审批、HOLD、运行中 task 和终态均立即停止。失败分诊只有在结构化结果给出精确合法阶段，或调用方显式传入 `--target-phase` 时才推进。
+
+五层路由的最后一步只生成 Control Kernel command intent，不直接写状态。`repository.apply()` 仍负责 revision/CAS、reducer 合法性、事务、事件链和幂等。
+
+Graph 不使用独立持久化 checkpointer。命令 CAS、task operation 幂等、dispatch outbox、事件链和 workflow lock 共同承担并发与恢复边界。
+
+## 8. 相关文档
 
 - [architecture.md](architecture.md)
 - [control-kernel-v2.md](control-kernel-v2.md)

@@ -7,6 +7,7 @@ import { createControlRepository, openControlDatabase } from './control-core/rep
 import { createTaskRepository } from './control-core/task-repository.mjs';
 import { defaultCapabilityPath, initializeLocalAuthority } from './control-core/local-authority.mjs';
 import { dispatchReadyTask } from './orchestrator/service.mjs';
+import { runWorkflowTurn } from './workflow-runner.mjs';
 
 function parseArgs(argv) {
   const [command, ...tokens] = argv;
@@ -42,6 +43,16 @@ async function main() {
     if (command === 'dispatch') {
       const value = await dispatchReadyTask({ projectRoot, databasePath, taskId: required(options, 'task-id'),
         timeoutSeconds: Number(options['timeout-seconds'] ?? 900), leaseSeconds: Number(options['lease-seconds'] ?? 900) });
+      return emit(value, value.ok ? 0 : 1);
+    }
+    if (command === 'workflow-run') {
+      const value = await runWorkflowTurn({
+        projectRoot,
+        databasePath,
+        workflowId: required(options, 'workflow-id'),
+        graphRunId: options['graph-run-id'],
+        requestedTargetPhase: options['target-phase'] ?? null,
+      });
       return emit(value, value.ok ? 0 : 1);
     }
     const database = openControlDatabase(databasePath);
@@ -98,7 +109,7 @@ async function main() {
         const task = response.task_id ? tasks.resumeHumanTask({ task_id: response.task_id, decision_id: response.decision_id, occurred_at: response.decided_at }) : null;
         return emit({ ...resolved, task });
       }
-      throw new Error('usage: orchestrator.mjs <init|apply|task-register|task-validate|dispatch|demo-fast-request|approval-request|approval-list|approval-resolve --response-file <abs>|--decision-id <id> --outcome <...> --chosen-option-id <id> --raw-user-reply <text> --decided-by human:<id>> [options]');
+      throw new Error('usage: orchestrator.mjs <init|apply|task-register|task-validate|dispatch|workflow-run|demo-fast-request|approval-request|approval-list|approval-resolve --response-file <abs>|--decision-id <id> --outcome <...> --chosen-option-id <id> --raw-user-reply <text> --decided-by human:<id>> [options]');
     } finally { database.close(); }
   } catch (error) {
     emit({ ok: false, command, errors: [{ code: error.code ?? 'ORCHESTRATOR_ERROR', message: error.message, ...error.details }] }, 1);

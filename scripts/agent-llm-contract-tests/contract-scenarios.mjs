@@ -39,6 +39,7 @@ export const INTERNAL_CONTRACTS = new Set([
   'supervision-receipt.schema.json',
   'supervision-request.schema.json',
   'transition-command.schema.json',
+  'workflow-graph-run-result.schema.json',
 ]);
 
 export function getContractScenario(schemaFile) {
