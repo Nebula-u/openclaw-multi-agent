@@ -53,6 +53,10 @@ test('five routing layers keep guard, classification, policy, validation and com
   const command = commandLayer(validated);
   assert.equal(command.action, 'ADVANCE_PHASE');
   assert.equal(command.command.target_phase, 'DEVELOPER_REWORK');
+
+  const resolved = resolveDynamicRoute(context);
+  assert.equal(resolved.result.command.payload.graph_route_kind, 'TRANSITION');
+  assert.equal(resolved.result.command.payload.graph_route_facts.outcome, 'NEEDS_REWORK');
 });
 
 test('guard layer stops audit failure before route policy can create a mutation', () => {

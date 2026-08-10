@@ -191,5 +191,14 @@ export function resolveDynamicRoute(context) {
   const facts = classifierLayer(context);
   const proposed = policyLayer(context, facts);
   const validated = validatorLayer(context, proposed);
-  return { facts, decision: validated, result: commandLayer(validated) };
+  const result = commandLayer(validated);
+  if (result.command) {
+    result.command.payload = {
+      ...(result.command.payload ?? {}),
+      graph_route_kind: validated.kind,
+      graph_route_reason: validated.reason,
+      graph_route_facts: facts,
+    };
+  }
+  return { facts, decision: validated, result };
 }
