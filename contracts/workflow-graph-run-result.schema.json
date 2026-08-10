@@ -1,0 +1,48 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://openclaw-sdlc-multi-agent/contracts/workflow-graph-run-result.schema.json",
+  "title": "WorkflowGraphRunResult",
+  "description": "One bounded StateGraph orchestration turn. This is an execution receipt, not an authoritative workflow state.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "graph_run_id",
+    "workflow_id",
+    "status",
+    "before_revision",
+    "after_revision",
+    "action",
+    "phase",
+    "next_phase",
+    "stop_reason"
+  ],
+  "properties": {
+    "schema_version": { "type": "integer", "const": 1 },
+    "graph_run_id": { "type": "string", "pattern": "^GR-[A-Za-z0-9][A-Za-z0-9-]*$" },
+    "workflow_id": { "type": "string", "pattern": "^WF-[A-Za-z0-9][A-Za-z0-9-]*$" },
+    "status": {
+      "type": "string",
+      "enum": ["PROGRESSED", "NEEDS_TASK", "RUNNING", "WAITING_HUMAN", "HOLD", "TERMINAL", "FAILED"]
+    },
+    "before_revision": { "type": ["integer", "null"], "minimum": 1 },
+    "after_revision": { "type": ["integer", "null"], "minimum": 1 },
+    "action": { "type": ["string", "null"] },
+    "phase": { "type": ["string", "null"] },
+    "next_phase": { "type": ["string", "null"] },
+    "task_id": { "type": ["string", "null"], "pattern": "^TASK-[A-Za-z0-9][A-Za-z0-9-]*$" },
+    "stop_reason": { "type": ["string", "null"] },
+    "errors": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": ["code", "message"],
+        "properties": {
+          "code": { "type": "string", "minLength": 1 },
+          "message": { "type": "string", "minLength": 1 }
+        }
+      }
+    }
+  }
+}
