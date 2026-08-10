@@ -12,7 +12,7 @@
     "agent-json:collect": "npm run agent-json:real",
     "agent-contract:test": "node scripts/agent-llm-contract-tests/run-contract.mjs",
     "test:runtime-bundle": "node --test tests/runtime-bundle.test.mjs",
-    "test:control-kernel": "node --test tests/control-kernel.test.mjs tests/task-repository.test.mjs tests/control-kernel-resilience.test.mjs tests/orchestrator.test.mjs",
+    "test:control-kernel": "node --test tests/control-kernel.test.mjs tests/task-repository.test.mjs tests/control-kernel-resilience.test.mjs tests/orchestrator.test.mjs tests/workflow-graph.test.mjs",
     "test:monitor": "node --test --test-concurrency=1 tests/monitor-*.test.mjs tests/manager-wake-outbox.test.mjs",
     "supervisor:start": "node monitor/supervisor.mjs",
     "supervisor:check": "node monitor/check.mjs"

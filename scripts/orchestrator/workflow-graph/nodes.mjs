@@ -93,6 +93,7 @@ export function createGraphNodes({ adapter, policy, machine }) {
 
     async handleTask(state) {
       let task = adapter.latestTask(state.workflowId, state.phaseSpec.task_type);
+      let control = state.control;
       if (!task || ['CANCELLED', 'SUPERSEDED'].includes(task.status)) {
         return finish('NEEDS_TASK', `GRAPH_TASK_REQUIRED:${state.phaseSpec.task_type}`, { currentTask: task });
       }
@@ -104,10 +105,12 @@ export function createGraphNodes({ adapter, policy, machine }) {
       if (task.status === 'READY') {
         await adapter.dispatch(task.task_id);
         task = adapter.latestTask(state.workflowId, state.phaseSpec.task_type);
+        control = adapter.getWorkflow(state.workflowId);
       }
-      if (['DISPATCHED', 'RUNNING'].includes(task.status)) return finish('RUNNING', `TASK_${task.status}`, taskState(adapter, task));
-      if (task.status === 'WAITING_HUMAN') return finish('WAITING_HUMAN', 'TASK_WAITING_HUMAN', taskState(adapter, task));
-      return { route: 'evaluate', ...taskState(adapter, task) };
+      const refreshed = { ...taskState(adapter, task), control, afterRevision: control.revision };
+      if (['DISPATCHED', 'RUNNING'].includes(task.status)) return finish('RUNNING', `TASK_${task.status}`, refreshed);
+      if (task.status === 'WAITING_HUMAN') return finish('WAITING_HUMAN', 'TASK_WAITING_HUMAN', refreshed);
+      return { route: 'evaluate', ...refreshed };
     },
 
     evaluateTask(state) {

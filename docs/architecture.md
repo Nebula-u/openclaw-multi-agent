@@ -8,9 +8,10 @@
 
 ```text
 OpenClaw Agent 层
-  manager-agent ──> Orchestrator ──> sessions_spawn ──> 工作 Agent
-                         │
-                         ▼
+  manager-agent ──> StateGraph Runner ──> Orchestrator ──> sessions_spawn ──> 工作 Agent
+                         │                    │
+                         └──────────┬─────────┘
+                                    ▼
                   Control Kernel v2
                     runtime/control/control.db
                          │
@@ -19,6 +20,8 @@ OpenClaw Agent 层
        只读 v2 投影              Monitor / Dashboard
     runtime/control/v2/**       只读查询与监督请求
 ```
+
+StateGraph Runner 是轻量执行层，不是新的状态数据库。每轮先审计并读取 Control DB，只执行一个有界动作；所有 workflow mutation 仍提交给 Control Kernel reducer，task 派发仍由本地 Orchestrator 完成。`WAITING_HUMAN`、`HOLD` 和进程重启后均结束当前 Graph 调用，下次运行从 SQLite 重建，不依赖 LangGraph checkpoint。
 
 ## 权威边界
 

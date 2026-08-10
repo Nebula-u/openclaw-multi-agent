@@ -2,6 +2,25 @@
 
 ## [Unreleased] - 2026-08-07
 
+### 轻量 LangGraph StateGraph 编排层（2026-08-10）
+
+#### 新增（Added）
+
+- 引入 `@langchain/langgraph`，新增有界 `StateGraph` workflow runner、阶段策略配置和 Graph run result Schema。
+- 新增 `orchestrator.mjs workflow-run`：从 Control DB 审计并重建执行上下文，复用现有 task validation、OpenClaw dispatch、结构化结果摄取和 Control Kernel transition command。
+- 覆盖 INTAKE、task、Gate、review、failure triage、release 和 FINAL_REPORT 路由；Demo 快速路径仍要求绑定且已解决的真实 `DEMO_FAST` 审批。
+
+#### 权威边界（Changed）
+
+- StateGraph 每次只推进一个稳定 workflow 动作，`WAITING_HUMAN`、`HOLD`、运行中 task 和终态立即返回；重启后从 SQLite 恢复。
+- 不启用 LangGraph 独立 checkpointer，不修改 Control Kernel reducer、SQLite workflow 表、事件哈希链或 dispatch outbox。缺少 task、Gate、review findings、release decision 或候选 commit 时 fail-closed。
+- 同一 workflow 的 Graph 执行使用本地 workflow lock，workflow mutation 继续使用 `expected_revision` CAS 和受控命令。
+
+#### 验证（Tests）
+
+- 新增 StateGraph 标准入口、人工等待、Demo 审批、缺失 task、task 完成、Gate 重算、候选 commit 和 release 完成回归测试。
+- `npm test`：89 项通过，0 失败；依赖审计为 0 个已知漏洞。
+
 ### V2 收口：清理旧版残留与文档归档（2026-08-10）
 
 #### 变更（Changed）

@@ -7,6 +7,7 @@
 ## 当前功能
 
 - Control DB 是 workflow、task、run、dispatch、receipt 和 completion 的唯一事实源。
+- 轻量 LangGraph `StateGraph` 作为可选执行编排层，每次从 Control DB 重建状态并只推进一个稳定动作；它不保存第二份 workflow 状态。
 - 本地 Orchestrator 从已验证 task 固定派生目标 Agent、session 和派发回执；Agent 不可自行派发或改状态。
 - Agent JSON/JSONL 只能写入 `<artifact_root>/.agent-raw/**`；本地代码统一清洗、Ajv 校验、原子发布最终文件。
 - JSON 解析、路径安全或 Schema 校验失败时，本地代码保留原始暂存文件，并写入 `.orchestrator-ingest/*.failure.json` 和 `.orchestrator-ingest/validation-errors.jsonl`。
@@ -79,6 +80,18 @@ openclaw config validate --json
 node scripts/runtime-bundle.mjs verify --project-root . --runtime-root runtime
 node scripts/control-kernel.mjs snapshot --project-root .
 ```
+
+### 5. 执行一个 StateGraph 编排轮次
+
+先由 Manager 完成 workflow bootstrap 和当前阶段所需 task package 注册；随后执行：
+
+```powershell
+node scripts/orchestrator.mjs workflow-run `
+  --project-root . `
+  --workflow-id WF-example
+```
+
+每次调用最多提交一个 workflow transition。返回 `NEEDS_TASK`、`WAITING_HUMAN`、`HOLD`、`RUNNING` 或 `TERMINAL` 时应停止，并根据 Control DB 中的事实准备任务、处理审批或恢复流程。StateGraph 不启用独立 checkpointer；重新调用时从 SQLite 和已校验 artifact 恢复。
 
 ## Agent 角色
 

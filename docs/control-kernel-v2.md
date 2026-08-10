@@ -128,3 +128,7 @@ manager-agent 执行。
 - 提交前故障回滚整个事务；提交后响应丢失由相同 command/operation ID 幂等重放。
 - 投影失败将 outbox 标为 FAILED，权威数据库审计通过后可再次 `project/recover`。
 - dispatch 提交后、spawn 前中断会留下单一 PENDING intent；恢复必须查询原 session，不能直接创建第二个 intent。
+
+## StateGraph 适配
+
+`scripts/workflow-runner.mjs` 在 Control Kernel 之上提供轻量 LangGraph `StateGraph` 执行层。Graph state 只包含当前 workflow/task 的有界执行上下文，不是权威快照，也不写入第二个 checkpointer。每轮从 SQLite 读取和审计，最多提交一个 workflow transition；合法性、CAS、幂等、审批和事件记录仍由本 Control Kernel 决定。
