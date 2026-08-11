@@ -14,6 +14,18 @@
 
 - 新增 Manager 紧凑 snapshot 回归测试，确认历史与大 payload 不进入默认 Manager 上下文。
 
+### 控制面重复读取保护（2026-08-11）
+
+#### 变更（Changed）
+
+- StateGraph adapter 使用紧凑只读 snapshot；不再把完整历史 task/dispatch payload 放入 Graph state。
+- `workflow-run` 新增可选 `--after-revision`：没有新的 Control Kernel revision 时返回 `WAITING_FOR_CHANGE`，不启动本轮 Graph。
+- Local Orchestrator 对结构化输出 Schema validator 做进程内复用，并按 Schema 文件修改时间自动失效；不改变 ingestion 语义。
+
+#### 验证（Tests）
+
+- 新增无新 revision 时不启动 Graph 的回归测试。
+
 ### 轻量 LangGraph StateGraph 编排层（2026-08-10）
 
 #### 新增（Added）

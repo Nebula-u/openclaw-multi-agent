@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
-import { mkdirSync, readFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import Ajv from 'ajv';
 import Ajv2020 from 'ajv/dist/2020.js';
@@ -38,12 +38,19 @@ function outputPath(task, schemaName) {
   return output.path_abs;
 }
 
+const OUTPUT_SCHEMA_VALIDATORS = new Map();
+
 function compileOutputSchema(schemaPath) {
+  const modifiedAt = statSync(schemaPath).mtimeMs;
+  const cached = OUTPUT_SCHEMA_VALIDATORS.get(schemaPath);
+  if (cached?.modifiedAt === modifiedAt) return cached.validate;
   const schema = JSON.parse(readFileSync(schemaPath, 'utf8'));
   const AjvClass = String(schema.$schema ?? '').includes('2020-12') ? Ajv2020 : Ajv;
   const ajv = new AjvClass({ allErrors: true, strict: true });
   addFormats(ajv);
-  return ajv.compile(schema);
+  const validate = ajv.compile(schema);
+  OUTPUT_SCHEMA_VALIDATORS.set(schemaPath, { modifiedAt, validate });
+  return validate;
 }
 
 function createIntent(task, { createdAt, dispatchId, sessionId, leaseSeconds = 900 }) {
@@ -218,12 +225,8 @@ export async function dispatchReadyTask({ projectRoot: projectRootInput, databas
       if (!run.started) throw new OrchestratorError('ORCHESTRATOR_EXECUTION_FAILED', 'Gateway process exited before an execution session started');
       if (run.exit_code !== 0) throw new OrchestratorError('ORCHESTRATOR_AGENT_EXIT_NONZERO', `OpenClaw Agent exited with ${run.exit_code}`, { stderr: run.stderr.slice(-4000) });
       assertGatewayResponse(run.stdout);
-      const validators = new Map();
       const accepted = ingestStructuredOutputs(task, {
-        validateSchema: (schemaPath) => {
-          if (!validators.has(schemaPath)) validators.set(schemaPath, compileOutputSchema(schemaPath));
-          return validators.get(schemaPath);
-        },
+        validateSchema: compileOutputSchema,
         occurredAt: nowIso(clock),
       });
       const resultPath = outputPath(task, 'result.schema.json');

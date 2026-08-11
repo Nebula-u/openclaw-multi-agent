@@ -53,6 +53,24 @@ async function turn(value, suffix = 'run') {
   });
 }
 
+test('StateGraph can wait for a newer Control Kernel revision without invoking a graph turn', async () => {
+  const value = fixture('revision-gate');
+  try {
+    const result = await runWorkflowTurn({
+      projectRoot: ROOT,
+      databasePath: value.databasePath,
+      workflowId: value.workflowId,
+      graphRunId: `GR-revision-${randomUUID()}`,
+      afterRevision: 1,
+    });
+    assert.equal(result.ok, true);
+    assert.equal(result.result.status, 'WAITING_FOR_CHANGE');
+    assert.equal(result.result.stop_reason, 'NO_NEW_CONTROL_REVISION');
+    assert.equal(result.result.before_revision, 1);
+    assert.equal(result.result.after_revision, 1);
+  } finally { value.close(); }
+});
+
 test('StateGraph advances active INTAKE through the standard path using Control Kernel', async () => {
   const value = fixture('intake');
   try {

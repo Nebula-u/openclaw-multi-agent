@@ -27,7 +27,7 @@ export function createWorkflowGraphAdapter({ projectRoot, databasePath, database
   return {
     audit() { return auditControlDatabase(database); },
     getWorkflow(workflowId) { return controls.get(workflowId); },
-    snapshot(workflowId) { return createControlSnapshot(database, { workflowId }); },
+    snapshot(workflowId) { return createControlSnapshot(database, { workflowId, view: 'manager' }); },
     approvals(workflowId, status = null) { return controls.approvals({ workflowId, status }); },
     latestTask(workflowId, taskType) { return taskRows(workflowId).find((task) => task.task_type === taskType) ?? null; },
     taskResult(runId) {

@@ -20,7 +20,8 @@ function errorResult({ graphRunId, workflowId, error }) {
 }
 
 export async function runWorkflowTurn({ projectRoot: projectRootInput, databasePath: databasePathInput, workflowId,
-  graphRunId = `GR-${randomUUID()}`, requestedTargetPhase = null, runner, clock = () => new Date() } = {}) {
+  graphRunId = `GR-${randomUUID()}`, requestedTargetPhase = null, afterRevision = null, runner,
+  clock = () => new Date() } = {}) {
   const projectRoot = resolve(projectRootInput);
   const databasePath = resolve(databasePathInput ?? join(projectRoot, 'runtime', 'control', 'control.db'));
   if (!/^WF-[A-Za-z0-9][A-Za-z0-9-]*$/u.test(workflowId ?? '')) throw Object.assign(new Error('valid workflowId is required'), { code: 'GRAPH_WORKFLOW_ID_INVALID' });
@@ -29,6 +30,33 @@ export async function runWorkflowTurn({ projectRoot: projectRootInput, databaseP
   let database = null;
   try {
     database = openControlDatabase(databasePath);
+    const current = database.prepare('SELECT revision, phase, condition, outcome FROM workflows WHERE workflow_id=?').get(workflowId);
+    if (!current) throw Object.assign(new Error(`workflow does not exist: ${workflowId}`), { code: 'CONTROL_WORKFLOW_NOT_FOUND' });
+    if (afterRevision !== null && (!Number.isInteger(Number(afterRevision)) || Number(afterRevision) < 0)) {
+      throw Object.assign(new Error('afterRevision must be a non-negative integer'), { code: 'GRAPH_AFTER_REVISION_INVALID' });
+    }
+    if (afterRevision !== null && current.revision <= Number(afterRevision)) {
+      const result = {
+        schema_version: 1,
+        graph_run_id: graphRunId,
+        workflow_id: workflowId,
+        status: 'WAITING_FOR_CHANGE',
+        before_revision: current.revision,
+        after_revision: current.revision,
+        action: null,
+        phase: current.phase,
+        next_phase: null,
+        task_id: null,
+        stop_reason: 'NO_NEW_CONTROL_REVISION',
+        route_kind: null,
+        route_reason: null,
+        route_facts: { observed_revision: current.revision, after_revision: Number(afterRevision) },
+        errors: [],
+      };
+      const validate = createGraphResultValidator(projectRoot);
+      if (!validate(result)) throw Object.assign(new Error('workflow graph produced an invalid wait result'), { code: 'GRAPH_RESULT_SCHEMA_INVALID', details: validate.errors });
+      return { ok: true, command: 'workflow-run', result };
+    }
     const { policy, machine } = loadWorkflowGraphPolicy(projectRoot);
     const adapter = createWorkflowGraphAdapter({ projectRoot, databasePath, database, runner, clock });
     const graph = buildWorkflowGraph({ adapter, policy, machine });
@@ -65,6 +93,7 @@ async function main() {
     workflowId: options['workflow-id'],
     graphRunId: options['graph-run-id'],
     requestedTargetPhase: options['target-phase'] ?? null,
+    afterRevision: options['after-revision'] ?? null,
   });
   process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
   process.exitCode = result.ok ? 0 : 1;

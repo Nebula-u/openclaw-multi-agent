@@ -26,7 +26,7 @@
     "workflow_id": { "type": "string", "pattern": "^WF-[A-Za-z0-9][A-Za-z0-9-]*$" },
     "status": {
       "type": "string",
-      "enum": ["PROGRESSED", "NEEDS_TASK", "RUNNING", "WAITING_HUMAN", "HOLD", "TERMINAL", "FAILED"]
+      "enum": ["PROGRESSED", "NEEDS_TASK", "RUNNING", "WAITING_HUMAN", "WAITING_FOR_CHANGE", "HOLD", "TERMINAL", "FAILED"]
     },
     "before_revision": { "type": ["integer", "null"], "minimum": 1 },
     "after_revision": { "type": ["integer", "null"], "minimum": 1 },

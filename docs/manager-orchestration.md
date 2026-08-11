@@ -99,6 +99,8 @@ Manager 可以通过以下命令请求本地 StateGraph 执行一个有界编排
 node scripts/orchestrator.mjs workflow-run --project-root . --workflow-id <workflow-id>
 ```
 
+调用方若已保存上次观察到的 Control Kernel `revision`，可追加 `--after-revision <n>`。当数据库没有比该 revision 更新的事实时，Runner 返回 `WAITING_FOR_CHANGE`，不会启动本轮 Graph；这只是事件/修订版本保护，不改变任何合法边，也不替代正常 StateGraph 路由。
+
 StateGraph 根据 Control DB 的 `phase + condition` 路由，复用现有 task validation、dispatch、result ingestion 和 transition command。动态路由依次经过安全守卫、结构化结果分类、阶段策略、状态机合法边校验和命令构建五层；五层共享同一轮读取的事实，不产生额外持久状态。它不会创建缺少上下文的 task package：当前阶段没有已注册 task 时返回 `NEEDS_TASK`；审批、HOLD、运行中 task 和终态均立即停止。失败分诊只有在结构化结果给出精确合法阶段，或调用方显式传入 `--target-phase` 时才推进。
 
 五层路由的最后一步只生成 Control Kernel command intent，不直接写状态。`repository.apply()` 仍负责 revision/CAS、reducer 合法性、事务、事件链和幂等。

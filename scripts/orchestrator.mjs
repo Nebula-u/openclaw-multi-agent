@@ -52,6 +52,7 @@ async function main() {
         workflowId: required(options, 'workflow-id'),
         graphRunId: options['graph-run-id'],
         requestedTargetPhase: options['target-phase'] ?? null,
+        afterRevision: options['after-revision'] ?? null,
       });
       return emit(value, value.ok ? 0 : 1);
     }
