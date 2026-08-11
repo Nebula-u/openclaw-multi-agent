@@ -65,7 +65,10 @@ function main() {
     } else if (command === 'active') {
       emit({ ok: true, command: 'active', workflows: repository.workflows({ activeOnly: true }) });
     } else if (command === 'snapshot') {
-      emit({ ok: true, command: 'snapshot', snapshot: createControlSnapshot(database, { workflowId: options['workflow-id'] ?? null }) });
+      emit({ ok: true, command: 'snapshot', snapshot: createControlSnapshot(database, {
+        workflowId: options['workflow-id'] ?? null,
+        view: options.view ?? 'full',
+      }) });
     } else if (command === 'project') {
       const runtimeRoot = resolve(required(options, 'runtime-root'));
       emit({ ...exportControlProjections(database, runtimeRoot), command: 'project' });

@@ -2,6 +2,18 @@
 
 ## [Unreleased] - 2026-08-07
 
+### Manager 紧凑上下文视图（2026-08-11）
+
+#### 变更（Changed）
+
+- `control-kernel snapshot` 新增 `--view manager`，提供面向 Manager 的紧凑 workflow 上下文。
+- 紧凑视图只保留当前状态、活动 task、待审批、待处理 dispatch 和最新事件；历史 task、完整 receipt、completion payload、raw log 与历史事件改为按需读取。
+- 不改变 SQLite Control Kernel 的权威状态、事件链、审计和完整 snapshot 视图。
+
+#### 验证（Tests）
+
+- 新增 Manager 紧凑 snapshot 回归测试，确认历史与大 payload 不进入默认 Manager 上下文。
+
 ### 轻量 LangGraph StateGraph 编排层（2026-08-10）
 
 #### 新增（Added）

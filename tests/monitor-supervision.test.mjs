@@ -121,6 +121,20 @@ test('control snapshot joins workflow and supervision state without mutating con
   } finally { value.close(); }
 });
 
+test('manager context snapshot omits historical and payload-heavy control details', () => {
+  const value = setup();
+  try {
+    const snapshot = createControlSnapshot(value.database, { workflowId: WORKFLOW_ID, view: 'manager' });
+    assert.equal(snapshot.view, 'manager-context');
+    assert.equal(snapshot.workflow.workflow_id, WORKFLOW_ID);
+    assert.deepEqual(snapshot.active_tasks, []);
+    assert.deepEqual(snapshot.pending_approvals, []);
+    assert.deepEqual(snapshot.dispatch_outbox, []);
+    assert.equal(snapshot.omitted.historical_events, true);
+    assert.equal(snapshot.omitted.completion_payloads, true);
+  } finally { value.close(); }
+});
+
 test('audit detects a tampered supervision event hash', () => {
   const value = setup();
   try {
