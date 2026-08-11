@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "npm run test:runtime-guard && npm run test:agent-json && npm run test:runtime-bundle && npm run test:control-kernel && npm run test:monitor && node --test tests/validate-install.test.mjs",
+    "test": "npm run test:runtime-guard && npm run test:agent-json && npm run test:runtime-bundle && npm run test:model-routing && npm run test:control-kernel && npm run test:monitor && node --test tests/validate-install.test.mjs",
     "test:runtime-guard": "node --test tests/runtime-guard.test.mjs",
     "test:agent-json:offline": "node --test tests/agent-llm-json-harness.test.mjs",
     "test:agent-json": "npm run test:agent-json:offline && npm run test:agent-json:matrix && npm run test:agent-json:gateway",
@@ -15,6 +15,7 @@
     "agent-json-schema:matrix": "node scripts/agent-llm-contract-tests/run-json-schema-matrix.mjs",
     "agent-contract:test": "node scripts/agent-llm-contract-tests/run-contract.mjs",
     "test:runtime-bundle": "node --test tests/runtime-bundle.test.mjs",
+    "test:model-routing": "node --test tests/model-routing-config.test.mjs",
     "test:control-kernel": "node --test tests/control-kernel.test.mjs tests/task-repository.test.mjs tests/control-kernel-resilience.test.mjs tests/orchestrator.test.mjs tests/workflow-graph.test.mjs tests/workflow-graph-routing.test.mjs",
     "test:monitor": "node --test --test-concurrency=1 tests/monitor-*.test.mjs tests/manager-wake-outbox.test.mjs",
     "supervisor:start": "node monitor/supervisor.mjs",

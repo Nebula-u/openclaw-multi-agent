@@ -26,6 +26,19 @@
 
 - 新增无新 revision 时不启动 Graph 的回归测试。
 
+### 静态 Flash 模型分级与 Manager 会话预算（2026-08-11）
+
+#### 变更（Changed）
+
+- Requirement、Test、Release 和生成的 Dialogue Agent 固定使用 `deepseek-v4-flash`；Manager、Architect、Developer、Review 保留 `deepseek-v4-pro`。
+- 模型只在 package/安装配置阶段静态确定，本轮不增加按 task、token 或失败状态动态选模。
+- Manager 会话软预算从上下文窗口的 80%/160k 下调到 60%/120k，默认 thinking 从 `high` 下调到 `medium`。
+- Manager 默认只读取 `--view manager` 紧凑 snapshot；完整 Control Kernel snapshot、历史 task、receipt、completion payload 和 raw log 改为按 locator 读取。
+
+#### 验证（Tests）
+
+- 新增静态模型分级和 Manager 会话策略测试，防止 Flash/Pro 分工及上下文排除规则漂移。
+
 ### 轻量 LangGraph StateGraph 编排层（2026-08-10）
 
 #### 新增（Added）

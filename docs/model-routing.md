@@ -5,14 +5,16 @@
 | Agent | 模型引用 | 协议 | 用途 |
 | --- | --- | --- | --- |
 | manager-agent | `deepseek/deepseek-v4-pro` | Chat Completions API | 调度、工具调用、多轮状态 |
-| requirement-agent | `deepseek/deepseek-v4-pro` | Chat Completions API | 需求理解与结构化输出 |
+| requirement-agent | `deepseek/deepseek-v4-flash` | Chat Completions API | 需求整理、验收标准与结构化输出 |
 | architect-agent | `deepseek/deepseek-v4-pro` | Chat Completions API | 架构设计与深度推理 |
 | developer-agent | `deepseek/deepseek-v4-pro` | Chat Completions API | 代码执行、工具链、多轮修改 |
 | review-agent | `deepseek/deepseek-v4-pro` | Chat Completions API | 代码审查与深度推理 |
-| test-agent | `deepseek/deepseek-v4-pro` | Chat Completions API | 测试执行与日志分析 |
-| release-agent | `deepseek/deepseek-v4-pro` | Chat Completions API | 运维前验证与工具执行 |
+| test-agent | `deepseek/deepseek-v4-flash` | Chat Completions API | 测试执行、结果归纳与常规日志分析 |
+| release-agent | `deepseek/deepseek-v4-flash` | Chat Completions API | 基于已验证证据执行发布前聚合 |
 
-当前所有 7 个 Agent 统一使用 `deepseek` provider 的 `https://api.deepseek.com` + `openai-completions`，模型固定为 `deepseek-v4-pro`。不再依赖 Responses API；保留的 `deepseek-responses` 样例不参与默认路由。
+当前使用静态模型分级：Manager、Architect、Developer、Review 保留 `deepseek-v4-pro`；Requirement、Test、Release 使用 `deepseek-v4-flash`。模型在 Agent package/安装配置阶段确定，不按 task、token、失败次数或运行时状态动态切换。不再依赖 Responses API；保留的 `deepseek-responses` 样例不参与默认路由。
+
+Flash 角色遇到关键需求歧义、复杂测试根因或证据不足时仍按现有协议返回 `HUMAN_DECISION_REQUIRED`、`NEEDS_REWORK`、`BLOCKED` 或 `HOLD`，不得自行切换模型或降低 Gate 标准。
 
 配置样例见 `config/agent-models.deepseek-routing.example.json`。不得把 API Key 写入样例、仓库、prompt、测试报告或运行日志。
 

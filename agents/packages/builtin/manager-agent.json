@@ -11,7 +11,7 @@
   "runtime_subdir": "agents/manager-agent",
   "role": "manager",
   "capabilities": ["workflow.orchestration", "agent.lifecycle", "skill.lifecycle"],
-  "model": "",
+  "model": "deepseek/deepseek-v4-pro",
   "delegation": { "callable_by_manager": false, "allow_agents": [], "require_agent_id": true, "delegation_mode": "prefer" },
   "sandbox_mode": null,
   "assembly": { "include_common_rules": true, "include_templates": true },
