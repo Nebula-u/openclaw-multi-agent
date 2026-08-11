@@ -39,6 +39,18 @@
 
 - 新增静态模型分级和 Manager 会话策略测试，防止 Flash/Pro 分工及上下文排除规则漂移。
 
+### Manager 会话轮换入口（2026-08-11）
+
+#### 新增（Added）
+
+- Local Orchestrator 新增 `manager-context` 命令，将 120k 静态软预算判断与紧凑 Control Kernel snapshot 合并为一次确定性读取。
+- 达到软预算时返回 `START_NEW_MANAGER_SESSION`；新会话只恢复紧凑 `prompt_context`，不复制旧聊天历史。
+- 未提供 token 估算时返回 `MEASURE_CONTEXT`，避免把未知用量误判为预算充足。
+
+#### 验证（Tests）
+
+- 新增预算内继续、达到预算轮换和未知用量三种 Manager 会话回归测试。
+
 ### 轻量 LangGraph StateGraph 编排层（2026-08-10）
 
 #### 新增（Added）

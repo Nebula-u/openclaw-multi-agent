@@ -74,6 +74,7 @@ Control Kernel 负责计算 `phase + condition + outcome`，Manager 不自行计
 新 Manager 会话先查询：
 
 ```powershell
+node scripts/orchestrator.mjs manager-context --project-root . --workflow-id <WF-...> --estimated-tokens <n>
 node scripts/control-kernel.mjs snapshot --project-root . --workflow-id <WF-...> --view manager
 node scripts/control-kernel.mjs audit --project-root .
 node scripts/control-kernel.mjs approval-list --project-root . --status PENDING
@@ -81,6 +82,8 @@ node scripts/control-kernel.mjs dispatch-outbox --project-root .
 ```
 
 `--view manager` 是面向 Manager 的紧凑只读上下文：只包含当前 workflow、活动 task、待审批、待处理 dispatch 和最新事件；历史 task、完整 dispatch receipt、completion payload、raw log 与历史事件必须按需通过 artifact/evidence 引用读取，不得默认注入 Manager 会话。
+
+`manager-context` 将静态会话预算与紧凑 snapshot 合并为一次确定性读取。达到 120k soft budget 时返回 `START_NEW_MANAGER_SESSION`；新会话只使用返回的 `prompt_context` 和必要 artifact locator 恢复，不复制旧聊天历史。调用方暂时无法提供 token 估算时返回 `MEASURE_CONTEXT`，不得据此假定预算充足。
 
 按 audit 结果处理：
 

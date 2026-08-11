@@ -7,6 +7,7 @@ import { createControlRepository, openControlDatabase } from './control-core/rep
 import { createTaskRepository } from './control-core/task-repository.mjs';
 import { defaultCapabilityPath, initializeLocalAuthority } from './control-core/local-authority.mjs';
 import { dispatchReadyTask } from './orchestrator/service.mjs';
+import { createManagerSessionContext } from './orchestrator/manager-context.mjs';
 import { runWorkflowTurn } from './workflow-runner.mjs';
 
 function parseArgs(argv) {
@@ -60,6 +61,14 @@ async function main() {
     try {
       const controls = createControlRepository(projectRoot, database);
       const tasks = createTaskRepository(projectRoot, database);
+      if (command === 'manager-context') {
+        return emit({ ok: true, command: 'manager-context', ...createManagerSessionContext({
+          projectRoot,
+          database,
+          workflowId: required(options, 'workflow-id'),
+          estimatedTokens: options['estimated-tokens'] ?? null,
+        }) });
+      }
       if (command === 'apply') {
         const input = JSON.parse(readFileSync(resolve(required(options, 'command-file')), 'utf8'));
         return emit(controls.apply({ ...input, actor: 'local-orchestrator' }));
@@ -110,7 +119,7 @@ async function main() {
         const task = response.task_id ? tasks.resumeHumanTask({ task_id: response.task_id, decision_id: response.decision_id, occurred_at: response.decided_at }) : null;
         return emit({ ...resolved, task });
       }
-      throw new Error('usage: orchestrator.mjs <init|apply|task-register|task-validate|dispatch|workflow-run|demo-fast-request|approval-request|approval-list|approval-resolve --response-file <abs>|--decision-id <id> --outcome <...> --chosen-option-id <id> --raw-user-reply <text> --decided-by human:<id>> [options]');
+      throw new Error('usage: orchestrator.mjs <init|manager-context|apply|task-register|task-validate|dispatch|workflow-run|demo-fast-request|approval-request|approval-list|approval-resolve --response-file <abs>|--decision-id <id> --outcome <...> --chosen-option-id <id> --raw-user-reply <text> --decided-by human:<id>> [options]');
     } finally { database.close(); }
   } catch (error) {
     emit({ ok: false, command, errors: [{ code: error.code ?? 'ORCHESTRATOR_ERROR', message: error.message, ...error.details }] }, 1);

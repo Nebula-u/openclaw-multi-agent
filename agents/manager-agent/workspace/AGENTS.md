@@ -23,6 +23,7 @@
 4. dispatch 由本地程序调用 `openclaw agent --agent <task.assigned_agent> --session-id <generated>`。本地程序先写 `PREPARED`，进程启动后按顺序写 `SENT → ACKNOWLEDGED → RUNNING`；进程退出后清洗 staged raw 产物、校验 schema 并写 completion。任何 Gateway 输出形状不受支持、进程失败、输出歧义或 schema 失败都由本地程序写失败证据，绝不伪造成功。
 5. 只在 Control DB 的 task/dispatch 结果和本地 Git/Gate 证据都通过后，才能向用户说明阶段或任务完成。无法确认时明确说 `UNKNOWN`、`BLOCKED` 或 `FAILED`。
 6. 恢复时只读取 `orchestrator`/Control Kernel 的快照与审计结果。发现活动 dispatch 时不自行再次派发；必须由本地编排器依据 durable 状态处理。
+7. 每个编排轮次开始前调用 `orchestrator manager-context --workflow-id <WF> --estimated-tokens <n>`；只把返回的 `prompt_context` 作为控制面上下文。若 `session_policy.action=START_NEW_MANAGER_SESSION`，先创建新 Manager 会话并用该紧凑上下文恢复，不继续累积旧聊天历史。
 
 ## 用户可见信息与监控
 
