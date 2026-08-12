@@ -158,32 +158,34 @@ Agent 只可写 `.agent-raw` 暂存文件，不能写最终 `output/*.json`。�
 
 源码中的 Agent 提示、规则、模板或受管配置变更后，优先使用幂等同步更新，**不删除、不重装现有 Agent**。普通 `install.ps1` / `install.sh` 会校验 Agent ID 与 workspace 路径：现有且兼容的 Agent 显示为 `KEEP`，不会执行 `openclaw agents add`；随后只同步 workspace、共享规则、模板和受管配置。脚本只处理本项目 manifest 声明的 7 个 Agent，不处理 `main`、其他项目 Agent 或未注册的 `dialogue-agent`。
 
-更新前应确认没有正在运行的 workflow/task，再停止 Gateway。必须先执行 dry-run：7 个项目 Agent 都应显示为现有兼容项；如果出现 `ADD`、路径冲突或同名冲突，应停止并核对 runtime 路径，不要继续 apply。
+`.env` 只会在安装器或 Node 控制面读取时加载；正在运行的 OpenClaw Gateway 和 Monitor 不会自动监视文件变化。更换模型、provider、上下文窗口或输出上限时，必须执行一次安装器 `apply`，让值同步到 OpenClaw 的持久配置；完成后需要让 Gateway 重新加载配置。仅修改 Manager soft budget 等控制面参数时，不需要 Gateway 重启，但下一次 `orchestrator.mjs` / Monitor 进程启动或读取时才会生效。
+
+更新前应确认没有正在运行的 workflow/task。dry-run 不修改 Gateway，可以在 Gateway 运行时执行；apply 前再决定是否暂停任务。7 个项目 Agent 都应显示为现有兼容项；如果出现 `ADD`、路径冲突或同名冲突，应停止并核对 runtime 路径，不要继续 apply。项目没有额外的 `daemon` 更新命令：OpenClaw 使用 Gateway 服务，Monitor 是独立的 Supervisor 进程或 systemd 服务。
 
 ### Windows PowerShell：原地更新，不重装
 
 在项目根目录执行：
 
 ```powershell
-# 1. 确认没有运行中的任务，然后停止 Gateway
-openclaw gateway stop
-
-# 2. Dry-run
+# 1. 编辑 .env 后先 dry-run（Gateway 可保持运行）
 pwsh -NoProfile -File ".\scripts\install.ps1" `
   -RuntimeRoot ".\runtime"
 
-# 3. 确认全部为 KEEP 后执行原地更新
+# 2. 确认没有运行中的任务、全部为 KEEP 后执行原地更新
 pwsh -NoProfile -File ".\scripts\install.ps1" `
   -Apply -Yes -RuntimeRoot ".\runtime"
 
-# 4. 校验同步结果并重新启动 Gateway
+# 3. 校验同步结果（install.ps1 已执行 config validate）
 openclaw config validate --json
 node ".\scripts\runtime-bundle.mjs" verify `
   --project-root "." --runtime-root ".\runtime"
-node ".\scripts\orchestrator.mjs" init --project-root "."
-openclaw gateway start
+
+# 4. 让 Gateway 安全重新加载新的 Agent/model 配置
+openclaw gateway restart --safe
 openclaw gateway status
 ```
+
+`orchestrator.mjs init` 只在首次部署或 capability 文件缺失时执行，不属于每次 `.env` 更新步骤。若当前 Gateway 版本不支持安全重启，才使用 `openclaw gateway stop`、确认停止后 `openclaw gateway start`。
 
 只更新指定 Agent 时，Windows 可在 dry-run 和 apply 命令中同时加入例如 `-AgentIds 'manager-agent,architect-agent'`；两次命令的 Agent 范围必须一致。
 
@@ -196,36 +198,39 @@ project_root="$(pwd -P)"
 runtime_root="$project_root/runtime"
 install_script="$project_root/scripts/install.sh"
 
-# 1. 确认没有运行中的任务，然后停止 Gateway
-openclaw gateway stop
-
-# 2. Dry-run：所有已安装项目 Agent 都应是兼容项，不应计划创建新 Agent
+# 1. 编辑 .env 后先 dry-run（Gateway 可保持运行）
 bash "$install_script" --runtime-root "$runtime_root"
 
-# 3. 原地同步 workspace、规则、模板与受管配置；不会删除或重建现有 Agent
+# 2. 确认没有运行中的任务、全部为 KEEP 后原地同步；不会删除或重建现有 Agent
 bash "$install_script" --apply --yes --runtime-root "$runtime_root"
 
-# 4. 校验同步结果并重新启动 Gateway
+# 3. 校验同步结果（install.sh 已执行 config validate）
 openclaw config validate --json
 node "$project_root/scripts/runtime-bundle.mjs" verify \
   --project-root "$project_root" --runtime-root "$runtime_root"
-node "$project_root/scripts/orchestrator.mjs" init --project-root "$project_root"
-openclaw gateway start
+
+# 4. 让 Gateway 安全重新加载新的 Agent/model 配置
+openclaw gateway restart --safe
 openclaw gateway status
 ```
+
+`orchestrator.mjs init` 只在首次部署或 capability 文件缺失时执行，不属于每次 `.env` 更新步骤。若当前 Gateway 版本不支持安全重启，才使用 `openclaw gateway stop`、确认停止后 `openclaw gateway start`。
 
 apply 前会把 OpenClaw 配置备份到 `runtime/control/config-snapshots/`。以上更新流程不调用 `scripts/reinstall-agents.ps1`，也不调用 `openclaw agents delete`；只有明确需要删除并重建 Agent 时才使用重装脚本。
 
 ### 按 Agent 静态配置模型
 
-项目根目录 `.env` 是实际读取的模型与 LLM 预算配置。当前 package 默认模型已同步写入 `.env`；需要切换时直接修改对应 Agent 的 `OPENCLAW_AGENT_*_MODEL`，不需要让 Agent 自行切换。
+项目根目录 `.env` 是实际读取的模型与 LLM 预算配置。当前 package 默认模型已同步写入 `.env`；需要切换时直接修改对应 Agent 的 `OPENCLAW_AGENT_*_MODEL`，然后按上面的 dry-run/apply/restart 流程更新，不需要让 Agent 自行切换。
 
-```powershell
-pwsh -NoProfile -File '.\scripts\install.ps1' `
-  -RuntimeRoot '.\runtime'
+例如只切换 Architect 的模型：
+
+```dotenv
+OPENCLAW_AGENT_ARCHITECT_AGENT_MODEL=provider/model-id
 ```
 
-Linux 对应使用 `bash scripts/install.sh --runtime-root runtime`。`.env` 中公共 LLM 配置包括 OpenAI Chat Completions、128k 上下文、49,152 输出上限和 200k session 上限；需要差异时使用 `OPENCLAW_AGENT_<ID>_*` 覆盖。apply 时安装器会把上下文、输出上限和 token 字段同步到实际 OpenClaw 模型目录。凭据必须由 OpenClaw auth/profile 管理。完整说明见 [模型配置与静态路由](docs/model-routing.md)。
+保存 `.env` 后，按上面的 Windows 或 Linux dry-run → apply → Gateway safe restart 流程执行。Linux 对应入口是 `bash scripts/install.sh --runtime-root runtime`。`.env` 中公共 LLM 配置包括 OpenAI Chat Completions、128k 上下文、49,152 输出上限和 200k session 上限；需要差异时使用 `OPENCLAW_AGENT_<ID>_*` 覆盖。apply 时安装器会把上下文、输出上限和 token 字段同步到实际 OpenClaw 模型目录。凭据必须由 OpenClaw auth/profile 管理。完整说明见 [模型配置与静态路由](docs/model-routing.md)。
+
+如果修改的是 Monitor 自身的 `MONITOR_*`、runtime 路径或端口变量，还要重启 Monitor：Windows 前台运行时停止原 `npm run supervisor:start` 后重新启动；Linux systemd 部署使用 `sudo systemctl restart openclaw-monitor.service`。只修改 Agent LLM 配置不要求重启 Monitor。
 
 ## 将 Monitor 部署为 Linux 服务
 

@@ -5,10 +5,16 @@
 ### 通用静态模型配置与协议清理（2026-08-12）
 
 - 保留 Agent package 当前默认模型，不触发已安装 Agent 的隐式换模。
-- 将模型覆盖接口收敛为通用 `agent-models.example.json`，支持每个 Agent 静态配置不同 `provider/model`，禁止运行时自主选模。
+- 将模型覆盖接口收敛为项目根 `.env`，支持每个 Agent 静态配置不同 `provider/model`；旧 `agent-models.json` 仅保留为兼容回退，禁止运行时自主选模。
 - 新增 OpenAI Chat Completions provider 模板：128k context、49,152 输出上限和 `max_completion_tokens` 字段，不含凭据。
 - Manager 上下文软阈值调整为 76,800，单个持久 session 累计 token 上限为 200k；两者不被当作单次请求窗口。
 - 删除厂商专属路由/provider 样例、Responses 协议内容及对应测试锁定；JSON 清洗、Ajv、失败证据链保持 provider 无关。
+
+### `.env` 更新与 Gateway reload 流程（2026-08-12）
+
+- 明确项目根 `.env` 由安装器和 Node 控制面按需读取，OpenClaw Gateway/Monitor 不会自动监视 `.env` 文件变化。
+- 更新 Agent 模型、provider、上下文或输出限制时，流程统一为 `install.ps1` / `install.sh` dry-run → apply → `config validate` / runtime bundle verify → `openclaw gateway restart --safe`；不再要求每次执行 `orchestrator.mjs init`。
+- 明确 dry-run 可在 Gateway 运行时执行；apply 前仍须确认没有活动 workflow/task。仅修改 Manager soft budget 等控制面参数无需 Gateway 重启；修改 `MONITOR_*` 后需单独重启 Monitor 服务。
 
 ### 轻量 StateGraph、持久 Supervisor 与 Agent 会话控制台（2026-08-12）
 

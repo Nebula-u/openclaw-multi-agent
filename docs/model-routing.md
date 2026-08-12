@@ -27,6 +27,8 @@ bash scripts/install.sh --runtime-root runtime
 
 项目根 `.env` 是实际运行时配置入口；`.env.example` 是无密钥模板。旧 `ModelConfig` JSON 仅作为兼容回退，不覆盖 `.env` 中的非空模型配置。
 
+修改 `.env` 后必须重新运行安装器的 `dry-run` 和 `apply`，因为 OpenClaw Gateway 不会自动读取项目 `.env`；`apply` 会将模型和限制写入 OpenClaw 持久配置。apply 完成后使用 `openclaw gateway restart --safe` 重新加载 Agent/model 配置。只修改 Manager soft budget 等 Node 控制面参数时不需要 Gateway 重启，但已运行的长期 Monitor 进程若涉及 `MONITOR_*` 变量，仍需单独重启。
+
 ## 通用 Provider 边界
 
 `.env` 使用以下统一设置：
@@ -57,7 +59,7 @@ OPENCLAW_AGENT_ARCHITECT_AGENT_MAX_SESSION_TOKENS=200000
 模型上下文窗口和持久 session 累计预算是两个不同概念：
 
 - 单次上下文窗口：128k。
-- Manager 上下文软阈值：76,800（128k 的 60%），达到后创建新会话并只恢复紧凑控制上下文。
+- Manager 上下文软阈值由 `OPENCLAW_MANAGER_SOFT_BUDGET_PERCENT` 计算；模板默认是 60%，即 76,800（128k 的 60%），达到后创建新会话并只恢复紧凑控制上下文。
 - 单个持久 session 累计 token 上限：200k；它不是单次模型请求可用窗口。
 
 输出上限保持 49,152。模型输出被截断、为空或不符合 Schema 时，仍由通用失败链路处理，不做厂商特判。
