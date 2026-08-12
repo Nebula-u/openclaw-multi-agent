@@ -45,7 +45,7 @@ Demo 快速路径不是默认路径。Manager 必须先提交 `WAIT_HUMAN`，在
 6. `dispatch-reconcile --dispatch-id <id>` 或下一轮 `workflow-run` 只对账原 dispatch，按 `SENT → ACKNOWLEDGED → RUNNING` 记录真实生命周期，然后摄取结果。
 7. Agent 只能写入 `artifact_root/.agent-raw/**`；Orchestrator 负责摄取、清洗、Schema 校验和原子发布。
 
-当前小型项目执行策略由 `config/agent-execution-policy.json` 固定：Agent 进程超时和 dispatch lease 均不得超过 300 秒。Manager 唤醒、启动检测、工具运行宽限期及 Agent 契约测试调用采用相同的 300 秒硬上限；配置或命令行显式传入更大值时直接拒绝，不自动放宽。
+当前 Agent 执行策略由 `config/agent-execution-policy.json` 固定：Agent 进程超时、dispatch lease、Agent 工具运行宽限期及 Agent 契约测试调用均不得超过 900 秒。Manager 唤醒和健康检测仍使用更短的独立上限，以便监工及时发现状态变化；配置或命令行显式传入超过对应上限的值时直接拒绝，不自动放宽。
 
 PENDING dispatch intent 或 `DISPATCHED/RUNNING` task 代表需要查询原 launcher/session 后对账，不代表可以无条件重派。若是旧版 dispatch 且没有 launcher locator，`dispatch-reconcile` 只返回 `RECOVERY_REQUIRED`，不会根据聊天记录或残留产物伪造 completion；必须重新建立新的受控 run。即使用户批准应急恢复，也只能调用 `dispatch-reconcile`，不能直接调用 `openclaw.cmd` 或手工写 SQLite。
 

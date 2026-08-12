@@ -84,13 +84,13 @@ test('package exposes the full matrix command', () => {
   assert.equal(packageJson.scripts['agent-json-schema:matrix'], 'node scripts/agent-llm-contract-tests/run-json-schema-matrix.mjs');
 });
 
-test('matrix Agent calls are capped at five minutes', async () => {
-  assert.equal(DEFAULT_TIMEOUT_MS, 300000);
+test('matrix Agent calls are capped at fifteen minutes', async () => {
+  assert.equal(DEFAULT_TIMEOUT_MS, 900000);
   await assert.rejects(
     () => runJsonSchemaMatrix({
-      scenarios: [JSON_SCHEMA_AGENT_SCENARIOS[0]], timeoutMs: 300001,
+      scenarios: [JSON_SCHEMA_AGENT_SCENARIOS[0]], timeoutMs: 900001,
       createClient: async () => ({ send: async () => '{}', close() {} }),
     }),
-    /no more than 300000ms/u,
+    /no more than 900000ms/u,
   );
 });

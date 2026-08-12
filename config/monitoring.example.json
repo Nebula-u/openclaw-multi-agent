@@ -13,7 +13,7 @@
   "heartbeat_stale_seconds": 180,
   "possibly_stalled_seconds": 300,
   "starting_timeout_seconds": 120,
-  "tool_running_grace_seconds": 300,
+  "tool_running_grace_seconds": 900,
   "supervision_cooldown_seconds": 300,
   "manager_wake_enabled": true,
   "manager_session_key": null,

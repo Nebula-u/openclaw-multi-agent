@@ -8,9 +8,9 @@ function integer(value, fallback) {
   return parsed;
 }
 
-function boundedSeconds(value, fallback, name) {
+function boundedSeconds(value, fallback, name, maximum = 300) {
   const parsed = integer(value, fallback);
-  if (parsed > 300) throw new Error(`${name} must not exceed 300 seconds`);
+  if (parsed > maximum) throw new Error(`${name} must not exceed ${maximum} seconds`);
   return parsed;
 }
 
@@ -76,7 +76,7 @@ export function loadMonitorConfig(overrides = {}) {
     heartbeatStaleSeconds: boundedSeconds(overrides.heartbeatStaleSeconds ?? fileConfig.heartbeat_stale_seconds, 180, 'heartbeat_stale_seconds'),
     possiblyStalledSeconds: boundedSeconds(overrides.possiblyStalledSeconds ?? fileConfig.possibly_stalled_seconds, 300, 'possibly_stalled_seconds'),
     startingTimeoutSeconds: boundedSeconds(overrides.startingTimeoutSeconds ?? fileConfig.starting_timeout_seconds, 120, 'starting_timeout_seconds'),
-    toolRunningGraceSeconds: boundedSeconds(overrides.toolRunningGraceSeconds ?? fileConfig.tool_running_grace_seconds, 300, 'tool_running_grace_seconds'),
+    toolRunningGraceSeconds: boundedSeconds(overrides.toolRunningGraceSeconds ?? fileConfig.tool_running_grace_seconds, 900, 'tool_running_grace_seconds', 900),
     supervisionCooldownSeconds: integer(overrides.supervisionCooldownSeconds ?? fileConfig.supervision_cooldown_seconds, 300),
     managerWakeEnabled: boolean(overrides.managerWakeEnabled ?? fileConfig.manager_wake_enabled, true),
     managerSessionKey: overrides.managerSessionKey ?? process.env.MANAGER_SESSION_KEY ?? fileConfig.manager_session_key ?? null,

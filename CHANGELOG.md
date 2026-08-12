@@ -11,7 +11,7 @@
 - launcher locator 在 Control Kernel 准备事务前持久化，缩小“已登记 dispatch 但没有恢复定位信息”的崩溃窗口；移除旧的同步 Agent spawn/ingestion 路径，所有正式 dispatch 统一走 detached runner。
 - 对历史上没有 launcher 证据的 dispatch，`dispatch-reconcile` 返回 `RECOVERY_REQUIRED`，不凭聊天记录、session transcript 或残留文件伪造 completion，也不擅自标记失败；后续必须重新建立受控、可审计的 run。
 - StateGraph 在 task 已 `DISPATCHED/RUNNING` 时返回 `RUNNING`，不再等待长时间 Agent 进程；下一轮只通过原 dispatch 对账，不重复派发。
-- 小型项目的 Agent 执行超时、dispatch lease、manager 唤醒和监控宽限期统一封顶为 300 秒；外部传入 301 秒以上的配置会 fail-closed，runner 不再额外增加 5 秒等待。Agent JSON 契约测试工具采用相同上限。
+- Agent 执行超时、dispatch lease、Agent 工具运行宽限期和 Agent JSON 契约测试统一封顶为 900 秒；外部传入 901 秒以上的配置会 fail-closed。Manager 唤醒与健康检测保持更短的独立上限。
 - Manager 规则增加人工应急恢复边界：即使用户批准恢复，也只能调用 `dispatch-reconcile`，不得直接执行 `openclaw.cmd`、手工写 SQLite、伪造状态或跳过 test/review/release 阶段。
 - Manager 会话策略增加 `summary_only` 用户可见输出约束，禁止逐工具播报、源码探查、session tail 和模型思考过程。
 
