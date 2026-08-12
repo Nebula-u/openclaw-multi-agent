@@ -15,6 +15,7 @@
 - 明确项目根 `.env` 由安装器和 Node 控制面按需读取，OpenClaw Gateway/Monitor 不会自动监视 `.env` 文件变化。
 - 更新 Agent 模型、provider、上下文或输出限制时，流程统一为 `install.ps1` / `install.sh` dry-run → apply → `config validate` / runtime bundle verify → `openclaw gateway restart --safe`；不再要求每次执行 `orchestrator.mjs init`。
 - 明确 dry-run 可在 Gateway 运行时执行；apply 前仍须确认没有活动 workflow/task。仅修改 Manager soft budget 等控制面参数无需 Gateway 重启；修改 `MONITOR_*` 后需单独重启 Monitor 服务。
+- 修复 PowerShell 安装器在完全幂等同步时将空变更列表误判为缺失参数的问题；`install.ps1 -Apply` 现在允许模型目录和 Agent 配置均已一致的无变更路径正常完成。
 
 ### 轻量 StateGraph、持久 Supervisor 与 Agent 会话控制台（2026-08-12）
 

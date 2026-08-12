@@ -35,6 +35,27 @@ test('installers materialize an explicit worker delegation allowlist', () => {
   assert.match(bash, /ALLOW_JSON\[\$id\]/u);
 });
 
+test(
+  'PowerShell installer accepts an empty change list on an idempotent apply',
+  { skip: PWSH_AVAILABLE ? false : 'pwsh unavailable in this environment' },
+  () => {
+    const powershell = readFileSync(join(ROOT, 'scripts', 'install.ps1'), 'utf8');
+    assert.match(powershell, /function Set-OpenClawJson[\s\S]*?\[AllowEmptyCollection\(\)\]\[System\.Collections\.Generic\.List\[string\]\]\$Changes/u);
+    assert.match(powershell, /function Sync-ModelCatalog[\s\S]*?\[AllowEmptyCollection\(\)\]\[System\.Collections\.Generic\.List\[string\]\]\$Changes/u);
+
+    const probe = spawnSync('pwsh', ['-NoProfile', '-Command', [
+      'function Accept-Changes {',
+      '  param([Parameter(Mandatory)][AllowEmptyCollection()][System.Collections.Generic.List[string]]$Changes)',
+      '  "count=$($Changes.Count)"',
+      '}',
+      '$empty = [System.Collections.Generic.List[string]]::new()',
+      'Accept-Changes -Changes $empty',
+    ].join('\n')], { encoding: 'utf8' });
+    assert.equal(probe.status, 0, `${probe.stdout}\n${probe.stderr}`);
+    assert.match(probe.stdout, /count=0/u);
+  },
+);
+
 test('project Agent reinstall requires an explicit stopped-Gateway acknowledgement and deletes only verified runtime paths', () => {
   const reinstall = readFileSync(join(ROOT, 'scripts', 'reinstall-agents.ps1'), 'utf8');
   assert.match(reinstall, /\[switch\]\$GatewayStopped/u);
