@@ -2,6 +2,13 @@
 
 ## [Unreleased] - 2026-08-07
 
+### 轻量 StateGraph、持久 Supervisor 与 Agent 会话控制台（2026-08-12）
+
+- StateGraph 使用 `control.db` 内的 SQLite checkpointer，Supervisor 可从 checkpoint 恢复并以固定代码续跑，只在有限决策点唤醒 Manager。
+- Agent 执行、dispatch lease、工具宽限和 JSON 契约调用上限统一为 900 秒；Manager wake 与健康检测保持短周期。
+- Monitor 新增全部 Agent、session 索引和安全对话 API；控制台左侧显示所有已创建 Agent，右侧支持 session 切换和完整 user/assistant 历史。
+- 删除旧的任务/Agent 摘要 activity HTTP 路径，保留健康判定和 SSE 所需 session tailer，以及 Control Kernel、回执、审批、投影恢复等兼容边界。
+
 ### Orchestrator Windows 派发恢复与 Manager 旁路收敛（2026-08-11）
 
 #### 变更（Changed）

@@ -6,12 +6,12 @@
 
 ## 当前功能
 
-- Control DB 是 workflow、task、run、dispatch、receipt 和 completion 的唯一事实源。
-- 轻量 LangGraph `StateGraph` 作为可选执行编排层，每次从 Control DB 重建状态并只推进一个稳定动作；它不保存第二份 workflow 状态。
+- `runtime/control/control.db` 同时保存业务控制事实和 LangGraph checkpoint：业务表是 workflow/task/run/dispatch 的唯一事实源，checkpoint 表只保存 Graph 续跑位置和 pending writes。
+- 轻量 LangGraph `StateGraph` 是确定性执行编排层；固定代码负责状态分类、合法边校验、派发与续跑，Manager 只在 `NEEDS_TASK`、`HOLD`、`FAILED` 等有限决策点介入。
 - 本地 Orchestrator 从已验证 task 固定派生目标 Agent、session 和派发回执；Agent 不可自行派发或改状态。
 - Agent JSON/JSONL 只能写入 `<artifact_root>/.agent-raw/**`；本地代码统一清洗、Ajv 校验、原子发布最终文件。
 - JSON 解析、路径安全或 Schema 校验失败时，本地代码保留原始暂存文件，并写入 `.orchestrator-ingest/*.failure.json` 和 `.orchestrator-ingest/validation-errors.jsonl`。
-- Monitor 不提供写入、重试、催办或与 Agent 交互的入口；不展示思考、工具调用、session、路径和控制细节。
+- Monitor 不提供写入、重试、催办或与 Agent 交互的入口；可显示全部已创建 Agent、持久 session 和完整 user/assistant 文本，但不展示思考、工具调用、工具结果、prompt、凭据、路径和控制细节。
 
 ## 前置条件
 
@@ -86,7 +86,7 @@ node $Orchestrator init --project-root $ProjectRoot
 npm run supervisor:start
 ```
 
-另开浏览器打开 `monitor/ui/index.html`。默认 Supervisor API 为 `http://127.0.0.1:4319`。
+另开浏览器打开 `monitor/ui/index.html`。默认 Supervisor API 为 `http://127.0.0.1:4319`。控制台左侧列出所有已创建 Agent（包括未激活或已结束），右侧可切换 session 并查看持久化的 user/assistant 对话历史。
 
 启动前检查：
 
@@ -114,7 +114,9 @@ node $Orchestrator workflow-run `
   --workflow-id WF-example
 ```
 
-每次调用最多提交一个 workflow transition。动态路由依次经过安全守卫、结构化结果分类、阶段策略、合法边校验和命令构建五层。返回 `NEEDS_TASK`、`WAITING_HUMAN`、`HOLD`、`RUNNING` 或 `TERMINAL` 时应停止，并根据 Control DB 中的事实准备任务、处理审批或恢复流程。StateGraph 不启用独立 checkpointer；重新调用时从 SQLite 和已校验 artifact 恢复。
+每次调用最多提交一个 workflow transition。动态路由依次经过安全守卫、结构化结果分类、阶段策略、合法边校验和命令构建五层。返回 `NEEDS_TASK`、`WAITING_HUMAN`、`HOLD`、`RUNNING` 或 `TERMINAL` 时应停止，并根据 Control DB 中的事实准备任务、处理审批或恢复流程。StateGraph 使用同一个 `control.db` 中的 SQLite checkpointer；Supervisor 可按 `workflow_id` 恢复 checkpoint 并继续有界 Graph turn。
+
+工作 Agent 的单次进程、dispatch lease、工具执行宽限与 JSON 契约调用统一上限为 **900 秒**。Manager wake 和健康检测保留较短上限，以便监督流程及时响应。
 
 ## Agent 角色
 
