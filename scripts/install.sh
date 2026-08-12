@@ -26,7 +26,7 @@ usage() {
 用法: install.sh [选项]
   --apply                     真正写入配置（缺省为 dry-run）
   --runtime-root <path>       runtime 根目录（相对值相对项目根解析），默认 runtime
-  --model-config <path>       每 Agent 模型配置 JSON（agent-models.json）
+  --model-config <path>       兼容回退：每 Agent 模型配置 JSON（主入口为项目 .env）
   --set-manager-as-default    将 manager-agent 设为默认 Agent
   --manager-binding <chan>    manager-agent 的用户渠道 binding，如 discord:acct
   --yes                       非交互确认（配合 --apply）
@@ -59,6 +59,24 @@ while [ -h "$SOURCE" ]; do
 done
 SCRIPT_DIR="$(cd -P "$(dirname "$SOURCE")" >/dev/null 2>&1 && pwd -P)"
 PROJECT_ROOT="$(cd -P "$SCRIPT_DIR/.." >/dev/null 2>&1 && pwd -P)"
+
+# Read project .env as data (never execute it). Explicit process variables are
+# retained as higher-priority overrides for CI/service deployments.
+load_dotenv() {
+  local dotenv="$PROJECT_ROOT/.env" line key value
+  [ -f "$dotenv" ] || return 0
+  while IFS= read -r line || [ -n "$line" ]; do
+    line="${line%$'\r'}"
+    [[ "$line" =~ ^[[:space:]]*#|^[[:space:]]*$ ]] && continue
+    if [[ "$line" =~ ^[[:space:]]*(export[[:space:]]+)?([A-Za-z_][A-Za-z0-9_]*)[[:space:]]*=[[:space:]]*(.*)[[:space:]]*$ ]]; then
+      key="${BASH_REMATCH[2]}"; value="${BASH_REMATCH[3]}"
+      if [[ "$value" == \"*\" && "$value" == *\" ]]; then value="${value:1:${#value}-2}"; fi
+      if [[ "$value" == \'*\' && "$value" == *\' ]]; then value="${value:1:${#value}-2}"; fi
+      [ -n "${!key+x}" ] || export "$key=$value"
+    fi
+  done < "$dotenv"
+}
+load_dotenv
 
 # 规范化可能不存在的路径（不依赖 realpath -m，保证 macOS 兼容）
 normpath() {
@@ -127,7 +145,7 @@ mapfile -t PACKAGE_MANIFESTS < <(
 AGENT_IDS=()
 WORKER_IDS=()
 MANAGER_ID=""
-declare -A WS DIR OC_WS OC_DIR MODEL SRC_WS ROLE ORIGIN PROTECTED ACTIVE REGISTER CALLABLE ALLOW_JSON SANDBOX INCLUDE_COMMON INCLUDE_TEMPLATES MANIFEST
+declare -A WS DIR OC_WS OC_DIR MODEL PROVIDER API BASE_URL API_EXPLICIT BASE_URL_EXPLICIT CONTEXT_WINDOW MAX_OUTPUT MAX_TOKENS_FIELD SRC_WS ROLE ORIGIN PROTECTED ACTIVE REGISTER CALLABLE ALLOW_JSON SANDBOX INCLUDE_COMMON INCLUDE_TEMPLATES MANIFEST
 declare -A SEEN_IDS
 
 for mf in "${PACKAGE_MANIFESTS[@]}"; do
@@ -170,7 +188,40 @@ for mf in "${PACKAGE_MANIFESTS[@]}"; do
 
   MANIFEST[$id]="$mf"; SRC_WS[$id]="$src_ws"; WS[$id]="$runtime_base/workspace"; DIR[$id]="$runtime_base/state"
   OC_WS[$id]="$(native_path "${WS[$id]}")"; OC_DIR[$id]="$(native_path "${DIR[$id]}")"
-  MODEL[$id]="$(jq_clean -r '.model // ""' "$mf_jq")"; ROLE[$id]="$role"; ORIGIN[$id]="$origin"; PROTECTED[$id]="$protected"
+  MODEL[$id]="$(jq_clean -r '.model // ""' "$mf_jq")";
+  env_model_key="OPENCLAW_AGENT_${id//-/_}_MODEL"; env_model_key="${env_model_key^^}"
+  if [ -n "${!env_model_key:-}" ]; then
+    MODEL[$id]="${!env_model_key}"
+  elif [ -n "${OPENCLAW_LLM_MODEL:-}" ]; then
+    MODEL[$id]="${OPENCLAW_LLM_MODEL}"
+  fi
+  env_key="OPENCLAW_AGENT_${id//-/_}_PROVIDER"; env_key="${env_key^^}"
+  PROVIDER[$id]="${!env_key:-${OPENCLAW_LLM_PROVIDER:-}}"
+  if [[ "${MODEL[$id]}" == */* ]]; then PROVIDER[$id]="${MODEL[$id]%%/*}"; fi
+  env_key="OPENCLAW_AGENT_${id//-/_}_API"; env_key="${env_key^^}"
+  provider_key="OPENCLAW_PROVIDER_${PROVIDER[$id]//-/_}_API"; provider_key="${provider_key^^}"
+  API[$id]="${!env_key:-${!provider_key:-${OPENCLAW_LLM_API:-openai-completions}}}"
+  env_key="OPENCLAW_AGENT_${id//-/_}_BASE_URL"; env_key="${env_key^^}"
+  provider_key="OPENCLAW_PROVIDER_${PROVIDER[$id]//-/_}_BASE_URL"; provider_key="${provider_key^^}"
+  BASE_URL[$id]="${!env_key:-${!provider_key:-${OPENCLAW_LLM_BASE_URL:-https://api.openai.com/v1}}}"
+  API_EXPLICIT[$id]=0; BASE_URL_EXPLICIT[$id]=0
+  env_key="OPENCLAW_AGENT_${id//-/_}_API"; env_key="${env_key^^}"
+  [[ -n "${!env_key:-}" ]] && API_EXPLICIT[$id]=1
+  provider_key="OPENCLAW_PROVIDER_${PROVIDER[$id]//-/_}_API"; provider_key="${provider_key^^}"
+  [[ -n "${!provider_key:-}" ]] && API_EXPLICIT[$id]=1
+  env_key="OPENCLAW_AGENT_${id//-/_}_BASE_URL"; env_key="${env_key^^}"
+  [[ -n "${!env_key:-}" ]] && BASE_URL_EXPLICIT[$id]=1
+  provider_key="OPENCLAW_PROVIDER_${PROVIDER[$id]//-/_}_BASE_URL"; provider_key="${provider_key^^}"
+  [[ -n "${!provider_key:-}" ]] && BASE_URL_EXPLICIT[$id]=1
+  [[ ( "${MODEL[$id]}" != */* || "${PROVIDER[$id]}" = "openai" ) && -n "${OPENCLAW_LLM_API:-}" ]] && API_EXPLICIT[$id]=1
+  [[ ( "${MODEL[$id]}" != */* || "${PROVIDER[$id]}" = "openai" ) && -n "${OPENCLAW_LLM_BASE_URL:-}" ]] && BASE_URL_EXPLICIT[$id]=1
+  env_key="OPENCLAW_AGENT_${id//-/_}_CONTEXT_WINDOW_TOKENS"; env_key="${env_key^^}"
+  CONTEXT_WINDOW[$id]="${!env_key:-${OPENCLAW_LLM_CONTEXT_WINDOW_TOKENS:-128000}}"
+  env_key="OPENCLAW_AGENT_${id//-/_}_MAX_OUTPUT_TOKENS"; env_key="${env_key^^}"
+  MAX_OUTPUT[$id]="${!env_key:-${OPENCLAW_LLM_MAX_OUTPUT_TOKENS:-49152}}"
+  env_key="OPENCLAW_AGENT_${id//-/_}_MAX_TOKENS_FIELD"; env_key="${env_key^^}"
+  MAX_TOKENS_FIELD[$id]="${!env_key:-${OPENCLAW_LLM_MAX_TOKENS_FIELD:-max_completion_tokens}}"
+  ROLE[$id]="$role"; ORIGIN[$id]="$origin"; PROTECTED[$id]="$protected"
   REGISTER[$id]="$register"; ACTIVE[$id]="$active"; CALLABLE[$id]="$(jq_clean -r '.delegation.callable_by_manager' "$mf_jq")"
   ALLOW_JSON[$id]="$(jq_clean -c '.delegation.allow_agents // []' "$mf_jq")"; SANDBOX[$id]="$(jq_clean -r '.sandbox_mode // ""' "$mf_jq")"
   INCLUDE_COMMON[$id]="$(jq_clean -r '.assembly.include_common_rules' "$mf_jq")"; INCLUDE_TEMPLATES[$id]="$(jq_clean -r '.assembly.include_templates' "$mf_jq")"
@@ -200,6 +251,16 @@ if [ -n "$MODEL_CONFIG" ]; then
     echo "警告: ModelConfig 不存在，忽略：$MODEL_CONFIG" >&2
   fi
 fi
+
+# .env is the active project source and wins over the legacy JSON override.
+for id in "${AGENT_IDS[@]}"; do
+  env_model_key="OPENCLAW_AGENT_${id//-/_}_MODEL"; env_model_key="${env_model_key^^}"
+  if [ -n "${!env_model_key:-}" ]; then
+    MODEL[$id]="${!env_model_key}"
+  elif [ -n "${OPENCLAW_LLM_MODEL:-}" ]; then
+    MODEL[$id]="${OPENCLAW_LLM_MODEL}"
+  fi
+done
 
 # 校验 workspace / agentDir 彼此不同
 registered_workspaces=()
@@ -312,7 +373,8 @@ write_manifest() {
     local ews edir emdl emft esrc eorigin
     ews="$(json_escape "$(native_path "${OC_WS[$id]}")")"; edir="$(json_escape "$(native_path "${OC_DIR[$id]}")")"; emdl="$(json_escape "${MODEL[$id]}")"
     emft="$(json_escape "$(native_path "${MANIFEST[$id]}")")"; esrc="$(json_escape "$(native_path "${SRC_WS[$id]}")")"; eorigin="$(json_escape "${ORIGIN[$id]}")"
-    agents_json="$agents_json{\"id\":\"$id\",\"origin\":\"$eorigin\",\"protected\":${PROTECTED[$id]},\"manifest_abs\":\"$emft\",\"workspace_source_abs\":\"$esrc\",\"workspace_abs\":\"$ews\",\"agentDir_abs\":\"$edir\",\"model\":\"$emdl\",\"register\":true,\"active\":${ACTIVE[$id]},\"subagents_allow\":$allow,\"require_agent_id\":$reqid,\"sandbox_mode\":$sb}"
+    eprovider="$(json_escape "${PROVIDER[$id]}")"; eapi="$(json_escape "${API[$id]}")"; ebase="$(json_escape "${BASE_URL[$id]}")"; efield="$(json_escape "${MAX_TOKENS_FIELD[$id]}")"
+    agents_json="$agents_json{\"id\":\"$id\",\"origin\":\"$eorigin\",\"protected\":${PROTECTED[$id]},\"manifest_abs\":\"$emft\",\"workspace_source_abs\":\"$esrc\",\"workspace_abs\":\"$ews\",\"agentDir_abs\":\"$edir\",\"model\":\"$emdl\",\"provider\":\"$eprovider\",\"api\":\"$eapi\",\"base_url\":\"$ebase\",\"context_window_tokens\":${CONTEXT_WINDOW[$id]},\"max_output_tokens\":${MAX_OUTPUT[$id]},\"max_tokens_field\":\"$efield\",\"transport_api_explicit\":${API_EXPLICIT[$id]},\"transport_base_url_explicit\":${BASE_URL_EXPLICIT[$id]},\"register\":true,\"active\":${ACTIVE[$id]},\"subagents_allow\":$allow,\"require_agent_id\":$reqid,\"sandbox_mode\":$sb}"
   done
   local ecfg epr err
   ecfg="$(json_escape "$(native_path "$CONFIG_FILE")")"; epr="$(json_escape "$(native_path "$PROJECT_ROOT")")"; err="$(json_escape "$(native_path "$RUNTIME_ROOT_ABS")")"
@@ -463,6 +525,50 @@ set_json() {
   fi
   CONFIG_CHANGES+=("set $1")
 }
+
+# Synchronize the limits that the project .env controls into OpenClaw's
+# provider catalog.  Agent model references are qualified as provider/model;
+# API keys and unrelated provider/model rows are never touched.
+declare -A MODEL_SYNC_SEEN
+declare -A PROVIDER_SYNC_SEEN
+for id in "${AGENT_IDS[@]}"; do
+  model="${MODEL[$id]}"
+  [[ "$model" == */* ]] || continue
+  provider="${model%%/*}"; model_id="${model#*/}"; sync_key="$provider/$model_id"
+  if [ -z "${PROVIDER_SYNC_SEEN[$provider]:-}" ]; then
+    PROVIDER_SYNC_SEEN[$provider]="$id"
+    provider_json="$(openclaw config get "models.providers.$provider" --json 2>/dev/null | tr -d '\r')"
+    current_api="$(printf '%s' "$provider_json" | jq -r '.api // empty')"
+    current_base="$(printf '%s' "$provider_json" | jq -r '.baseUrl // empty')"
+    [ "${API_EXPLICIT[$id]}" -eq 1 ] && [ "$current_api" = "${API[$id]}" ] || { [ "${API_EXPLICIT[$id]}" -eq 0 ] || set_json "models.providers.$provider.api" "\"$(json_escape "${API[$id]}")\""; }
+    [ "${BASE_URL_EXPLICIT[$id]}" -eq 1 ] && [ "$current_base" = "${BASE_URL[$id]}" ] || { [ "${BASE_URL_EXPLICIT[$id]}" -eq 0 ] || set_json "models.providers.$provider.baseUrl" "\"$(json_escape "${BASE_URL[$id]}")\""; }
+  else
+    prior_provider_id="${PROVIDER_SYNC_SEEN[$provider]}"
+    if [ "${API_EXPLICIT[$prior_provider_id]}" -eq 1 ] || [ "${API_EXPLICIT[$id]}" -eq 1 ]; then
+      [ "${API[$prior_provider_id]}" = "${API[$id]}" ] || { restore_on_failure "Provider $provider 的 .env API 配置不一致"; exit 1; }
+    fi
+    if [ "${BASE_URL_EXPLICIT[$prior_provider_id]}" -eq 1 ] || [ "${BASE_URL_EXPLICIT[$id]}" -eq 1 ]; then
+      [ "${BASE_URL[$prior_provider_id]}" = "${BASE_URL[$id]}" ] || { restore_on_failure "Provider $provider 的 .env base URL 配置不一致"; exit 1; }
+    fi
+  fi
+  if [ -n "${MODEL_SYNC_SEEN[$sync_key]:-}" ]; then
+    prior_id="${MODEL_SYNC_SEEN[$sync_key]}"
+    [ "${CONTEXT_WINDOW[$prior_id]}" = "${CONTEXT_WINDOW[$id]}" ] && [ "${MAX_OUTPUT[$prior_id]}" = "${MAX_OUTPUT[$id]}" ] && [ "${MAX_TOKENS_FIELD[$prior_id]}" = "${MAX_TOKENS_FIELD[$id]}" ] || { restore_on_failure "模型 $sync_key 的 .env 限制不一致"; exit 1; }
+    continue
+  fi
+  MODEL_SYNC_SEEN[$sync_key]="$id"
+  model_rows="$(openclaw config get "models.providers.$provider.models" --json 2>/dev/null | tr -d '\r')"
+  model_index="$(printf '%s' "$model_rows" | jq -r --arg id "$model_id" 'to_entries[] | select(.value.id==$id) | .key' | head -1)"
+  [ -n "$model_index" ] || { restore_on_failure "OpenClaw 模型目录中不存在 $sync_key"; exit 1; }
+  current_model="$(printf '%s' "$model_rows" | jq -c --argjson i "$model_index" '.[$i]')"
+  current_context="$(printf '%s' "$current_model" | jq -r '.contextWindow // 0')"
+  current_max="$(printf '%s' "$current_model" | jq -r '.maxTokens // 0')"
+  [ "$current_context" = "${CONTEXT_WINDOW[$id]}" ] || set_json "models.providers.$provider.models[$model_index].contextWindow" "${CONTEXT_WINDOW[$id]}"
+  [ "$current_max" = "${MAX_OUTPUT[$id]}" ] || set_json "models.providers.$provider.models[$model_index].maxTokens" "${MAX_OUTPUT[$id]}"
+  current_compat="$(printf '%s' "$current_model" | jq -c '.compat // {}')"
+  desired_compat="$(printf '%s' "$current_compat" | jq -c --arg field "${MAX_TOKENS_FIELD[$id]}" '. + {maxTokensField:$field}')"
+  [ "$current_compat" = "$desired_compat" ] || set_json "models.providers.$provider.models[$model_index].compat" "$desired_compat"
+done
 
 for id in "${AGENT_IDS[@]}"; do
   idx="$(agent_index "$id")"

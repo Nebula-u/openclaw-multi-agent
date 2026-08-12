@@ -9,7 +9,8 @@
 - 删除现役文档中的厂商缺陷、专属 JSON 模式和 Responses 协议设计。
 - 测试不再断言具体厂商的 Pro/Flash 分工，改为校验通用静态 per-Agent 配置结构。
 - 保留 builtin 与 generated Agent package 中现有默认 `model` 字段，避免本轮更新自动改变已安装 Agent。
-- `config/agent-models.example.json` 作为唯一通用覆盖入口；Windows `-ModelConfig` 与 Linux `--model-config` 已支持对每个 Agent 指定不同模型。
+- 项目根 `.env` 作为实际通用覆盖入口；Windows/Linux 安装器和 Node 控制面都会读取它。旧 JSON ModelConfig 保留为兼容回退。
+- 安装器 apply 会把 `.env` 的上下文窗口、最大输出和 token 字段同步到实际 OpenClaw `models.providers` 目录；只更新被 Agent 引用的模型，不覆盖 API key 或无关模型。
 - 新增 `config/openai-provider.example.json`，统一使用 OpenAI Chat Completions 兼容协议。
 
 ## Token 边界

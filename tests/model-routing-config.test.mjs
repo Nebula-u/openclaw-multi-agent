@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import test from 'node:test';
+import { loadAgentLlmConfig, loadManagerSessionLlmConfig } from '../scripts/config/llm-config.mjs';
 
 const ROOT = resolve(import.meta.dirname, '..');
 function json(relativePath) {
@@ -29,14 +30,29 @@ test('OpenAI provider template uses Chat Completions with bounded generic limits
 
 test('manager session policy rotates before long context dominates the session', () => {
   const policy = json(join('config', 'manager-session-policy.json'));
-  assert.equal(policy.soft_budget_percent, 60);
-  assert.equal(policy.model_context_window_tokens, 128000);
-  assert.equal(policy.soft_budget_tokens, 76800);
-  assert.equal(policy.max_session_tokens, 200000);
-  assert.equal(policy.thinking_level, 'medium');
+  const llm = loadManagerSessionLlmConfig(ROOT, { processEnvironment: {} });
+  assert.equal(llm.softBudgetPercent, 60);
+  assert.equal(llm.contextWindowTokens, 128000);
+  assert.equal(llm.softBudgetTokens, 76800);
+  assert.equal(llm.maxSessionTokens, 200000);
+  assert.equal(llm.thinkingLevel, 'medium');
+  assert.equal(policy.thinking_level, undefined);
   assert.equal(policy.visible_output.mode, 'summary_only');
   assert.equal(policy.visible_output.max_items, 4);
   assert.ok(policy.prompt_content.include.includes('Control Kernel manager-context snapshot'));
   assert.ok(policy.prompt_content.exclude.includes('complete Control Kernel snapshot'));
   assert.ok(policy.prompt_content.exclude.includes('dispatch receipts and completion payloads'));
+});
+
+test('the project .env is the active seven-Agent LLM source', () => {
+  const agentIds = ['manager-agent', 'requirement-agent', 'architect-agent', 'developer-agent', 'review-agent', 'test-agent', 'release-agent'];
+  for (const agentId of agentIds) {
+    const config = loadAgentLlmConfig(ROOT, agentId, { processEnvironment: {} });
+    assert.ok(config.model, agentId);
+    assert.equal(config.contextWindowTokens, 128000, agentId);
+    assert.equal(config.maxOutputTokens, 49152, agentId);
+    assert.equal(config.maxSessionTokens, 200000, agentId);
+    assert.equal(config.api, 'openai-completions', agentId);
+    assert.equal(config.provider, config.model.split('/', 1)[0], agentId);
+  }
 });

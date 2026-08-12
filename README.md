@@ -218,16 +218,14 @@ apply 前会把 OpenClaw 配置备份到 `runtime/control/config-snapshots/`。�
 
 ### 按 Agent 静态配置模型
 
-当前 package 中的默认模型保持不变。需要切换时复制 `config/agent-models.example.json`，分别填写各 Agent 的 `provider/model`，然后在 dry-run 和 apply 中加入同一个模型配置路径：
+项目根目录 `.env` 是实际读取的模型与 LLM 预算配置。当前 package 默认模型已同步写入 `.env`；需要切换时直接修改对应 Agent 的 `OPENCLAW_AGENT_*_MODEL`，不需要让 Agent 自行切换。
 
 ```powershell
-Copy-Item '.\config\agent-models.example.json' '.\config\agent-models.json'
 pwsh -NoProfile -File '.\scripts\install.ps1' `
-  -RuntimeRoot '.\runtime' `
-  -ModelConfig '.\config\agent-models.json'
+  -RuntimeRoot '.\runtime'
 ```
 
-Linux 对应使用 `--model-config config/agent-models.json`。Provider 模板见 `config/openai-provider.example.json`；凭据必须由 OpenClaw auth/profile 管理。不存在运行时自动路由或 Agent 自主切换。完整说明见 [模型配置与静态路由](docs/model-routing.md)。
+Linux 对应使用 `bash scripts/install.sh --runtime-root runtime`。`.env` 中公共 LLM 配置包括 OpenAI Chat Completions、128k 上下文、49,152 输出上限和 200k session 上限；需要差异时使用 `OPENCLAW_AGENT_<ID>_*` 覆盖。apply 时安装器会把上下文、输出上限和 token 字段同步到实际 OpenClaw 模型目录。凭据必须由 OpenClaw auth/profile 管理。完整说明见 [模型配置与静态路由](docs/model-routing.md)。
 
 ## 将 Monitor 部署为 Linux 服务
 

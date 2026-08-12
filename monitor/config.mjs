@@ -1,5 +1,6 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
+import { loadProjectEnvironment } from '../scripts/config/dotenv.mjs';
 
 function integer(value, fallback) {
   if (value === undefined || value === null || value === '') return fallback;
@@ -27,22 +28,6 @@ function readConfig(path) {
   return JSON.parse(readFileSync(path, 'utf8'));
 }
 
-function readEnvironmentFile(path) {
-  if (!existsSync(path)) return {};
-  const values = {};
-  for (const rawLine of readFileSync(path, 'utf8').split(/\r?\n/u)) {
-    const line = rawLine.trim();
-    if (!line || line.startsWith('#')) continue;
-    const separator = line.indexOf('=');
-    if (separator <= 0) continue;
-    const name = line.slice(0, separator).trim();
-    let value = line.slice(separator + 1).trim();
-    if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) value = value.slice(1, -1);
-    values[name] = value;
-  }
-  return values;
-}
-
 function expandEnvironment(value) {
   if (typeof value !== 'string') return value;
   return value.replace(/%([A-Za-z_][A-Za-z0-9_]*)%/gu, (_, name) => process.env[name] ?? `%${name}%`)
@@ -51,8 +36,8 @@ function expandEnvironment(value) {
 
 export function loadMonitorConfig(overrides = {}) {
   const projectRoot = resolve(overrides.projectRoot ?? process.env.OPENCLAW_PROJECT_ROOT ?? process.cwd());
-  const localEnvironment = readEnvironmentFile(join(projectRoot, '.env'));
-  const environment = (name) => process.env[name] ?? localEnvironment[name];
+  const localEnvironment = loadProjectEnvironment(projectRoot);
+  const environment = (name) => localEnvironment[name];
   const fileConfig = readConfig(overrides.configPath ?? process.env.MONITOR_CONFIG_PATH);
   const runtimeRoot = resolve(overrides.runtimeRoot ?? environment('OPENCLAW_RUNTIME_ROOT') ?? fileConfig.runtime_root ?? join(projectRoot, 'runtime'));
   const allowedOrigins = overrides.allowedOrigins ?? fileConfig.allowed_origins
