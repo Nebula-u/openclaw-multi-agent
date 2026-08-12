@@ -17,6 +17,11 @@ test('static dashboard opens without a build step and contains no external runti
   assert.match(script, /EventSource/u);
   assert.match(script, /api\/client-config/u);
   assert.match(script, /api\/tasks\/\$\{encodeURIComponent\(task\.task_id\)\}\/activity/u);
+  assert.match(script, /request\('\/api\/agents'\)/u);
+  assert.match(script, /sessions\/\$\{encodeURIComponent\(state\.selectedSessionId\)\}\/messages/u);
+  assert.match(html, /id="conversation-agent-list"/u);
+  assert.match(html, /id="session-select"/u);
+  assert.match(html, /id="conversation-history"/u);
   assert.doesNotMatch(`${html}${script}`, /api\/supervision|api\/activity|nudge|request-type|api-token/u);
   assert.match(css, /prefers-reduced-motion/u);
 });

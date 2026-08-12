@@ -26,7 +26,7 @@
   <main>
     <section class="telemetry-strip" aria-label="系统总览">
       <article><span>ACTIVE WORKFLOWS</span><strong id="metric-workflows">—</strong></article>
-      <article><span>RUNNING AGENTS</span><strong id="metric-running">—</strong></article>
+      <article><span>CREATED AGENTS</span><strong id="metric-running">—</strong></article>
       <article><span>WAIT / BLOCK</span><strong id="metric-waiting">—</strong></article>
       <article class="wide"><span>CONTROL STATUS</span><strong id="metric-control">UNKNOWN</strong><small id="last-sync">尚未同步</small></article>
     </section>
@@ -69,9 +69,28 @@
           </aside>
         </div>
 
+        <section class="conversation-panel" aria-label="Agent 对话控制台">
+          <div class="section-heading compact">
+            <span>04</span><div><h2>Agent Conversations</h2><p>持久 session 与用户可见完整对话</p></div>
+          </div>
+          <div class="conversation-console">
+            <aside class="agent-rail">
+              <div class="rail-label">ALL CREATED AGENTS</div>
+              <nav id="conversation-agent-list" aria-label="Agent 列表"><div class="empty-state">等待 Agent 索引…</div></nav>
+            </aside>
+            <section class="conversation-stage">
+              <header class="conversation-header">
+                <div><span id="conversation-agent-status" class="eyebrow">NO AGENT SELECTED</span><h3 id="conversation-agent-name">选择 Agent 查看对话</h3><p id="conversation-agent-meta">包括已结束与未激活的 Agent</p></div>
+                <label class="session-picker">SESSION<select id="session-select" disabled><option>暂无 session</option></select></label>
+              </header>
+              <div id="conversation-history" class="conversation-history" aria-live="polite"><div class="conversation-empty"><b>NO CONVERSATION SELECTED</b><span>从左侧选择 Agent，再切换其持久 session。</span></div></div>
+            </section>
+          </div>
+        </section>
+
         <section class="event-panel">
           <div class="section-heading compact">
-            <span>04</span><div><h2>Live Feed</h2><p>SSE 增量与监督事件</p></div>
+            <span>05</span><div><h2>Live Feed</h2><p>SSE 增量与监督事件</p></div>
           </div>
           <div class="feed-tools">
             <select id="feed-filter" aria-label="事件筛选">
