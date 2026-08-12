@@ -10,7 +10,7 @@
 - run_id: `RUN-00000000-0000-0000-0000-000000000000`
 - assigned_agent: `<PLACEHOLDER: requirement-agent | architect-agent | developer-agent | review-agent | test-agent | release-agent>`
 - context_manifest_path_abs: `C:\path\to\openclaw-runtime\artifacts\TASK-...\RUN-...\context-manifest.json`
-- isolation_mode: `UNSANDBOXED_LOCAL`
+- isolation_mode: `<PLACEHOLDER: 新 test-agent run 必须为 SANDBOXED_DOCKER；其他角色按实际执行环境填写>`
 
 ## workflow 摘要
 <PLACEHOLDER: 用 2-4 句说明本 workflow 的总体目标、target_project_root_abs、integration_branch 与 base_commit。>

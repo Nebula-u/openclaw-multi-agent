@@ -11,7 +11,7 @@
 - assigned_agent: `release-agent`
 - candidate_commit: `PLACEHOLDER_CANDIDATE_COMMIT_SHA`
 - evaluated_at: `2026-01-01T00:00:00Z`
-- isolation_mode: `UNSANDBOXED_LOCAL`
+- isolation_mode: `<PLACEHOLDER: 按本阶段实际执行环境填写；新 test-agent 证据必须为 SANDBOXED_DOCKER>`
 
 ## 证据汇总（Evidence Roll-up）
 > 汇总各阶段证据与门禁状态；status ∈ PASS | FAIL | HOLD | UNKNOWN | NOT_APPLICABLE。

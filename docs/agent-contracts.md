@@ -52,7 +52,7 @@ JSON ingestion 保留原文/清洗后 SHA-256。只允许确定性转换：移�
 
 约束：
 
-- `isolation_mode` 枚举仅 `UNSANDBOXED_LOCAL`（本阶段无 sandbox）。
+- `isolation_mode` 契约保留 `UNSANDBOXED_LOCAL` 以读取历史 artifact；新 `test-agent` run 只能使用 `SANDBOXED_DOCKER`，并必须提供有效 `sandbox_attestation`。
 - `self_validation.checks[].status ∈ PASS / FAIL / UNKNOWN / NOT_APPLICABLE`。
 - `claims[]` 每项含 `claim_id`、`statement`、`classification ∈ OBSERVED / INFERRED / PROPOSED / UNKNOWN`、`evidence_refs`、`limitations`、`observed_at`。
 
@@ -105,7 +105,7 @@ JSON ingestion 保留原文/清洗后 SHA-256。只允许确定性转换：移�
 
 新增单元测试、新增集成测试、测试配置与 fixture、`test-plan.md`、`test-cases.json`、`test-report.md`、`coverage-report.json`（**仅当工具真实生成数据时**）、`test-traceability.json`、`command-records.jsonl`、原始 stdout/stderr 日志、`user-summary.md`、`manager-summary.md`、`result.json`，以及**真实本地 Git commit**。
 - `test-report.md` 必须列出：命令、退出码、发现/成功/失败/跳过/错误数量、日志路径、哈希、重试、flaky、验收标准覆盖、`UNKNOWN` 项、是否修改生产代码。
-- 每次测试记录 `isolation_mode=UNSANDBOXED_LOCAL`；未经授权不得改生产代码；不得自行宣布"测试通过"或"可发布"，只报告执行事实。第一次失败即使重试成功也**保留第一次失败**并标记潜在 flaky。
+- 每次新测试记录 `isolation_mode=SANDBOXED_DOCKER`，并保留 runtime/container ID、镜像 digest、挂载、资源边界、网络策略与 attestation；沙箱不可用即 `BLOCKED`，未经授权不得改生产代码；不得自行宣布"测试通过"或"可发布"，只报告执行事实。第一次失败即使重试成功也**保留第一次失败**并标记潜在 flaky。
 
 ### 6.F release-agent（§16.F）
 
@@ -116,7 +116,7 @@ JSON ingestion 保留原文/清洗后 SHA-256。只允许确定性转换：移�
 
 ## 7. 命令记录与证据（配套产物字段）
 
-- `command-records.jsonl`（`contracts/command-record.schema.json`）：每行含 `command_record_id`、`executable`、`cwd_abs`、`started_at`、`finished_at`、`exit_code`、`timed_out`、`stdout_path_abs`、`stderr_path_abs`、`attempt`、`invoked_by_agent`、`task_id`、`run_id`、`isolation_mode`（`UNSANDBOXED_LOCAL`）等；stdout/stderr 落盘为独立原始文件，重试生成**新**记录不覆盖失败。
+- `command-records.jsonl`（`contracts/command-record.schema.json`）：每行含 `command_record_id`、`executable`、`cwd_abs`、`started_at`、`finished_at`、`exit_code`、`timed_out`、`stdout_path_abs`、`stderr_path_abs`、`attempt`、`invoked_by_agent`、`task_id`、`run_id`、`isolation_mode`（新 test-agent run 为 `SANDBOXED_DOCKER`）、`sandbox_runtime_id`、`sandbox_cwd_abs`、`sandbox_attestation_ref` 等；stdout/stderr 落盘为独立原始文件，重试生成**新**记录不覆盖失败。
 - `evidence.jsonl`（`contracts/evidence.schema.json`）：每行含 `evidence_id`（`^EVD-`）、`source_type ∈ file/git/command/doc/user_input/config/other`、`locator_abs` 或 `git_locator`、`sha256`、`line_start`/`line_end`、`collected_at`、`collector`、`command_record_id`、`notes`。
 
 ## 8. 相关文档

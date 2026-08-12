@@ -25,7 +25,7 @@
 9. 需要改变**已批准**的需求或架构。（`CHANGE_APPROVED_REQ_OR_ARCH`）
 10. 第三方代码 / 许可证 / 版权来源不明确。（`THIRDPARTY_LICENSE_UNCLEAR`）
 11. 严重安全问题需要**风险接受**。（`SECURITY_RISK_ACCEPTANCE`）
-12. 失败测试、UNKNOWN 安全结果或 `UNSANDBOXED_LOCAL` 风险需要**例外放行**。（`TEST_OR_SECURITY_EXCEPTION`）
+12. 失败测试或 UNKNOWN 安全结果需要**例外放行**。（`TEST_OR_SECURITY_EXCEPTION`）新 test-agent 的 Docker sandbox 不可用不是例外放行项，而是 `BLOCKED`，不得回退宿主机。
 13. release-agent 给出 `HOLD`，但用户希望**继续**。（`RELEASE_HOLD_OVERRIDE`）
 14. 超过**最大重做次数**（默认 3）。（`MAX_REWORK_EXCEEDED`）
 15. 任何**破坏性、不可逆或可能影响其他项目**的操作。（`DESTRUCTIVE_OR_CROSS_PROJECT`）

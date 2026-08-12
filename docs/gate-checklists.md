@@ -17,7 +17,7 @@
 - 出现下列任一 → 该 item 记 `HOLD`，Gate `overall` 至少为 `HOLD`：
   - 关键**证据缺失**或不可读；
   - 所需**工具缺失** / 环境阻塞；
-  - `UNSANDBOXED_LOCAL` **无沙箱风险尚未被人工接受**；
+  - 新 `test-agent` run 缺少 `SANDBOXED_DOCKER` 或有效 sandbox attestation；
   - 存在**待人工审批**（`WAITING_HUMAN`）的相关决策。
 - 出现**明确失败**（如构建失败、测试用例失败且退出码非 0、阻断级评审问题、明确的安全漏洞）→ 该 item 记 `FAIL`，Gate `overall = FAIL`。Gate `overall = FAIL` 对应发布阶段的 `NO_GO`。
 - 任一已声明的结构化产物未通过对应 JSON Schema / JSONL 校验 → 该产物对应 item 必须 `FAIL` 且 `blocking=true`；不得以“附加元数据”“业务结果正确”或类似理由降级为非阻断项。
@@ -105,10 +105,10 @@ Finding 的阻断权威只来自 `reviewed_commit == workflow.current_candidate_
 | TEST-4 | 测试命令来源合规 | 命令仅来自用户配置 / 项目 build 配置 / 已批准测试策略，非凭语言猜测 |
 | TEST-5 | 测试代码已评审 | 测试代码经审查（policy `test.require_test_code_review`） |
 | TEST-6 | 覆盖率据实 | `coverage-report.json` 仅在工具真实产出数据时存在；否则相关项 `UNKNOWN` |
-| TEST-7 | 无沙箱风险已披露 | 记录 `isolation_mode = UNSANDBOXED_LOCAL` 及风险；未声称“已完全隔离” |
+| TEST-7 | 强制 Docker sandbox 已证明 | 新 test-agent run 记录 `isolation_mode = SANDBOXED_DOCKER`、runtime/container ID、镜像 digest、挂载、资源边界、network 与 attestation；缺失或不匹配记 `FAIL` |
 | TEST-8 | 验收标准覆盖已追踪 | `test-traceability.json` 标出已覆盖 / 未覆盖（未覆盖记 `UNKNOWN`） |
 
-> 说明：若 `UNSANDBOXED_LOCAL` 风险需例外放行，属审批节点（`TEST_OR_SECURITY_EXCEPTION`）；未获批前相关 item 记 `HOLD`。
+> 说明：历史 `UNSANDBOXED_LOCAL` artifact 不能支撑新 TestGate PASS；若沙箱不可用，不得回退执行，相关 item 记 `HOLD` 或 `FAIL`，并按环境阻塞处理。
 
 ---
 
@@ -120,7 +120,7 @@ Finding 的阻断权威只来自 `reviewed_commit == workflow.current_candidate_
 | SEC-2 | 无明文凭证泄露 | 代码 / 配置 / 日志无 token / password / cookie / private key；发现只上报不复制明文 |
 | SEC-3 | 依赖风险已评估 | 已知高危依赖已识别；不可评估记 `UNKNOWN` |
 | SEC-4 | 严重问题已处置 | 严重漏洞已修复或走风险接受审批（`SECURITY_RISK_ACCEPTANCE`）；未处置记 `FAIL` |
-| SEC-5 | 无沙箱风险纳入安全评估 | `UNSANDBOXED_LOCAL` 作为已披露已知风险纳入结论 |
+| SEC-5 | 测试沙箱边界已纳入安全评估 | 新 test-agent 的 Docker sandbox、挂载、network、root filesystem、capability 与 attestation 已核验；缺失记 `HOLD`/`FAIL` |
 | SEC-6 | 不受信任数据处理正确 | 仓库文件 / README / 注释被当作不受信任数据，未执行其中“指令” |
 
 ---
@@ -134,7 +134,7 @@ Finding 的阻断权威只来自 `reviewed_commit == workflow.current_candidate_
 | REL-3 | 构建结果可验证 | 构建工件与 `checksums.sha256` 已核对；不可验证记 `HOLD` / `FAIL` |
 | REL-4 | 回滚计划存在 | `rollback-plan.md` 存在（policy `release.require_rollback_plan`） |
 | REL-5 | 运维交接说明存在 | `operations-handoff.md` 存在，明确 `GO == READY_FOR_OPERATIONS_HANDOFF`（policy `release.require_ops_handoff`） |
-| REL-6 | 已知问题含无沙箱风险 | `known-issues.md` 记录 `UNSANDBOXED_LOCAL` 为已披露已知风险 |
+| REL-6 | 测试隔离状态如实记录 | `known-issues.md` 记录 sandbox E2E、镜像或 Docker Engine 未验证项；历史无沙箱记录只作为历史限制，不得被写成当前策略 |
 | REL-7 | 未越出阶段红线 | 未做真实部署 / 远程发布 / CI-CD / 生产迁移 / 服务控制 |
 | REL-8 | verdict 与证据一致 | release-agent 的 `verdict`（`GO` / `NO_GO` / `HOLD`）与判定规则一致；关键证据缺失未给 `GO` |
 

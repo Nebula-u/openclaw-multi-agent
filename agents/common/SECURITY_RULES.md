@@ -34,12 +34,14 @@
 - 任何破坏性 / 不可逆 / 可能影响其他项目的操作 → 必须人工审批（见 APPROVAL_RULES.md）。
 - 默认选择非破坏性替代方案。
 
-## 6. 测试无沙箱风险（本阶段）
+## 6. test-agent 强制轻量级 sandbox
 
-- 本阶段测试**无 sandbox**，`isolation_mode=UNSANDBOXED_LOCAL`。
-- 每次测试必须记录：isolation_mode、worktree 绝对路径、当前用户权限、网络策略、是否涉及不受信任代码、已知风险。
+- 新 test-agent run 必须使用 `isolation_mode=SANDBOXED_DOCKER`，OpenClaw `sandbox.mode=all`、Docker backend、session scope、`workspaceAccess=none`。
+- Docker Engine、镜像、动态挂载、有效配置或 runtime attestation 任一不可用，必须 `BLOCKED`；禁止使用 `UNSANDBOXED_LOCAL` 或回退宿主机执行。
+- 容器内只使用 `/worktree`、`/input`、`/agent-raw`、`/raw-logs` 和 `/workspace`；宿主机路径只作为审计元数据。
+- 每次测试必须记录：isolation_mode、runtime/container ID、image digest、workdir、挂载、资源限制、网络策略、是否涉及不受信任代码与已知风险。
 - 默认禁止：网络、依赖安装、系统配置修改、服务启动、计划任务、注册表修改、访问用户凭证目录。
-- 不得声称当前测试"已完全隔离"。
+- 历史 artifact 可保留 `UNSANDBOXED_LOCAL` 事实，但不能用于新 test-agent run 的通过结论。
 
 ## 7. 最小权限与最小上下文
 

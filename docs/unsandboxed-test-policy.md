@@ -1,23 +1,20 @@
-# unsandboxed-test-policy.md — 本阶段无沙箱测试策略
+# unsandboxed-test-policy.md — 历史策略（已废止）
 
-> 版本: unsandboxed-test-policy v1
-> 权威规则以 `agents/common/SECURITY_RULES.md`（第 6 节）与 `agents/test-agent/workspace/AGENTS.md`（第 5、6 节）为准。
+> 版本: unsandboxed-test-policy v1（历史记录）
+> 本文件不再是当前 test-agent 策略。当前规则见 [`docs/sandboxed-test-policy.md`](sandboxed-test-policy.md)。
 > 散文用中文；`isolation_mode`、`sandbox.mode` 等字段值用英文。
 
-## 1. 明确的阶段限制
+## 1. 历史说明
 
-**本阶段不实现测试沙箱。** 这是当前阶段**已知的安全限制**，在文档、报告与发布已知问题中都必须如实披露。未来的运维 / 加固阶段可以另行加入 sandbox；在此之前，任何 Agent **不得声称测试“已完全隔离”**。
+本文件记录迁移前的无沙箱策略，仅用于解释历史 artifact 中的 `UNSANDBOXED_LOCAL`。它不允许新 test-agent run 继续使用宿主机执行。
 
-- test-agent 的 `sandbox.mode = "off"`（枚举取值 `off` / `non-main` / `all`，本项目工作 Agent 取 `off`）。
-- 测试固定记录 `isolation_mode = UNSANDBOXED_LOCAL`。
-- policy 中 `testing.require_sandbox = false`、`testing.require_isolation_disclosure = true`（见 `config/default-policy.yaml`）。
+- 历史 test-agent 的 `sandbox.mode = "off"`。
+- 历史测试记录 `isolation_mode = UNSANDBOXED_LOCAL`。
+- 当前策略已改为 `testing.require_sandbox = true`，并固定 `SANDBOXED_DOCKER`。
 
-## 2. 执行方式
+## 2. 当前替代策略
 
-- test-agent 在 manager-agent 分配的**绝对本地 Git worktree** 内**直接执行**测试，路径形如 `<ABS_RUNTIME_ROOT>/worktrees/<workflow-id>/<task-id>/<run-id>/repo`。
-- **不启动 Docker**、**不把 sandbox 作为测试前置条件**、不配置 sandbox 作为运行环境。
-- 全程使用绝对路径，不依赖当前工作目录（即使从 `C:\Windows\System32` 启动也用绝对 worktree 路径解析）。
-- worktree 路径必须 canonicalize 后落在允许根目录内，拒绝 `..` / 符号链接 / junction 逃逸。
+请遵循 [`docs/sandboxed-test-policy.md`](sandboxed-test-policy.md)：test-agent 只能在 OpenClaw Docker sandbox 中运行；Docker 不可用时必须 `BLOCKED`，不允许宿主机回退。
 
 ## 3. 每次测试必须记录的字段
 
@@ -63,7 +60,7 @@
 ## 7. 结论表述规范
 
 - 测试报告只陈述**执行事实**（found / passed / failed / skipped / error、退出码、日志路径与哈希），不自行宣布“测试通过 / 质量达标 / 可以发布”。
-- `UNSANDBOXED_LOCAL` 必须写入 `test-report.md` 的风险披露、release-agent 的 `known-issues.md`、以及 SecurityGate / TestGate 结论。
+- 历史 `UNSANDBOXED_LOCAL` 必须保留在对应历史 `test-report.md`、release-agent `known-issues.md` 与历史 SecurityGate / TestGate 结论中；这些记录不能支撑新 test-agent run 的通过结论。
 - **不得**出现“已完全隔离 / 已沙箱隔离 / 环境完全安全”之类表述。
 
 ## 8. 相关文件

@@ -128,7 +128,7 @@ node $Orchestrator workflow-run `
 | `architect-agent` | 输出架构、接口、任务拆分、风险与测试策略。 |
 | `developer-agent` | 在 `runtime/worktrees/<workflow>/<task>/<run>/repo` 实现代码。 |
 | `review-agent` | 独立审查代码、测试和安全问题。 |
-| `test-agent` | 补充并执行测试；当前为本地无 sandbox 模式。 |
+| `test-agent` | 补充并执行测试；强制使用轻量级 `SANDBOXED_DOCKER`，沙箱不可用即阻断。 |
 | `release-agent` | 汇总发布前验证结论，不执行部署。 |
 
 本地 Orchestrator 不是 LLM Agent。它负责读取 READY task、选择固定 worker、生成 session/receipt、调用 OpenClaw、接收暂存输出、验证结果并更新 Control DB。

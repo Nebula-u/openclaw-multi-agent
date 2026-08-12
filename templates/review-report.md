@@ -10,7 +10,7 @@
 - assigned_agent: `review-agent`
 - review_scope: `<PLACEHOLDER: PRODUCTION_CODE | TEST_CODE | BOTH>`
 - generated_at: `2026-01-01T00:00:00Z`
-- isolation_mode: `UNSANDBOXED_LOCAL`
+- isolation_mode: `<PLACEHOLDER: 按本阶段实际执行环境填写>`
 
 ## 审查范围（Review Scope）
 <PLACEHOLDER: 说明审查覆盖的文件 / 变更集 / diff 基线，标注 `[OBSERVED: 对应 commit 范围]`。>

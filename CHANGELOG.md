@@ -2,6 +2,14 @@
 
 ## [Unreleased] - 2026-08-07
 
+### 强制 test-agent Docker sandbox（Round 4，2026-08-12）
+
+- 将 test-agent 的工具边界、身份、使命、永久规则和本地规则说明统一为强制 `SANDBOXED_DOCKER`；沙箱、动态挂载、配置或 attestation 不可验证时 `BLOCKED`，禁止宿主机回退。
+- 更新 agent contracts、Evidence/Test/Security/Release Gate、OpenClaw 兼容性说明和人工审批边界：历史 `UNSANDBOXED_LOCAL` 仅用于迁移前 artifact，不再支撑新 test-agent 的通过结论。
+- 更新 demo policy/project/request、测试报告、命令记录、上下文与结果模板，要求记录 runtime/container ID、镜像 digest、挂载、资源限制、网络策略和 sandbox attestation。
+- 更新 release-agent、review-agent、developer-agent 的消费/契约说明，以及当前进度和交付报告，明确 Docker Desktop Linux Engine 恢复后仍需执行真实 Docker E2E。
+- 验证：Runtime Guard self-check `35 contracts / 10 templates`；sandbox runtime `6/6`；Orchestrator `10/10`；Node 语法检查与 `git diff --check` 通过。真实 Docker E2E 仍因 Docker Engine 不可用而未执行。
+
 ### 强制 test-agent Docker sandbox（Round 1，2026-08-12）
 
 - 新增 fail-closed 的 `config/test-sandbox-policy.json`，固定 `SANDBOXED_DOCKER`、Docker、session scope、`network=none`、只读根文件系统、`capDrop=ALL` 和资源上限。

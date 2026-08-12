@@ -8,7 +8,7 @@
 - integration_branch: `sdlc/integration`
 - final_candidate_commit: `PLACEHOLDER_CANDIDATE_COMMIT_SHA`
 - generated_at: `2026-01-01T00:00:00Z`
-- isolation_mode: `UNSANDBOXED_LOCAL`
+- isolation_mode: `<PLACEHOLDER: 按各阶段实际执行环境汇总>`
 
 ## 各 Agent 原始总结（Per-Agent Raw Summaries）
 > 逐角色粘贴该 Agent 的 `summary_for_manager` 原文，标注来源角色与 result 文件绝对路径；不得改写其结论。

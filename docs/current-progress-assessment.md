@@ -84,7 +84,7 @@
 | Agent 角色和通信契约 | 完成并加强 | 7 角色职责未变；契约、结构化输出声明、输入包/规则快照和身份/路径校验已增强。 | 需要在真实 6 工作 Agent 链路验证每个角色都按当前 bundle 生效。 |
 | 日志、过程追踪、事件证据 | 框架完成 | 不可变哈希事件、task/dispatch/outbox/audit、失败 JSON 包和遗留取证已具备。 | 外部 Gateway receipt 和真实会话中断证据尚未补齐。 |
 | Pipeline、Gate、人工审批 | 核心机制完成 | Gate fail-closed、当前 candidate 权威、审批作用域、审批评估和架构变更门禁均已落地。 | 标准 SDLC 与轻量原型的 Intake 分流/不可绕过派发仍是下一轮编排整改项。 |
-| 测试隔离 | 未完成 | 已明确 `UNSANDBOXED_LOCAL` 风险并保留审批边界。 | 将 `test-agent` 迁移至真正隔离环境；在此之前，限制命令、联网和依赖安装，并把风险写入 Gate。 |
+| 测试隔离 | 控制链已完成，真实 Docker E2E 待环境恢复 | `test-agent` 新 run 已固定 `SANDBOXED_DOCKER`，Orchestrator 已接入 lease、动态挂载、attestation 与 fail-closed。 | Docker Engine 恢复后完成镜像构建、真实 dispatch、挂载/资源/网络/非 root 与结果契约 E2E。 |
 
 ## 第二周计划复盘（可信需求→架构→开发闭环）
 
