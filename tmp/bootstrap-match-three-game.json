@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "command_id": "CMD-BOOTSTRAP-match-three-001",
+  "workflow_id": "WF-match-three-game",
+  "expected_revision": 0,
+  "command_type": "BOOTSTRAP",
+  "actor": "local-orchestrator",
+  "occurred_at": "2026-08-12T06:53:00.000Z",
+  "reason": "创建单人本地 Web 消消乐游戏工作流",
+  "candidate_commit": null,
+  "payload": {
+    "contract_set_id": "match-three-game-v1.0",
+    "agent_bundle_id": "5ea60658a5c6eb8ff7fa5ec07628f8752333ffd197cf0c1afe9f077e44e621b5"
+  }
+}

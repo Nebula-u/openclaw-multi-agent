@@ -112,7 +112,7 @@ function Get-AgentIndex {
 }
 
 function Set-OpenClawJson {
-  param([string]$Path, $Value, [System.Collections.Generic.List[string]]$Changes)
+  param([string]$Path, $Value, [AllowEmptyCollection()][System.Collections.Generic.List[string]]$Changes)
   $json = $Value | ConvertTo-Json -Depth 10 -Compress
   $dry = Invoke-OpenClaw @('config','set',$Path,$json,'--strict-json','--dry-run')
   if ($dry.ExitCode -ne 0) { throw "config set dry-run 失败：$Path`n$($dry.Output)" }
@@ -124,7 +124,7 @@ function Set-OpenClawJson {
 function Sync-ModelCatalog {
   param(
     [Parameter(Mandatory)]$Packages,
-    [Parameter(Mandatory)][System.Collections.Generic.List[string]]$Changes
+    [Parameter(Mandatory)][AllowEmptyCollection()][System.Collections.Generic.List[string]]$Changes
   )
   $seen = @{}
   $providers = @{}
