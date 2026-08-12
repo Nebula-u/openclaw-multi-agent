@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "command_id": "CMD-ADVANCE-todo-app-req-gate",
+  "workflow_id": "WF-todo-app",
+  "expected_revision": 2,
+  "command_type": "ADVANCE_PHASE",
+  "actor": "local-orchestrator",
+  "occurred_at": "2026-08-11T03:20:00.000Z",
+  "reason": "需求分析完成，进入 REQUIREMENT_GATE 阶段",
+  "target_phase": "REQUIREMENT_GATE",
+  "payload": {}
+}

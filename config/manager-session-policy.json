@@ -5,6 +5,12 @@
   "soft_budget_tokens": 120000,
   "thinking_level": "medium",
   "on_soft_budget_reached": "start_new_manager_session",
+  "visible_output": {
+    "mode": "summary_only",
+    "max_items": 4,
+    "max_chars": 1200,
+    "exclude": ["tool-by-tool narration", "source inspection transcript", "session tail", "model reasoning"]
+  },
   "compaction": {
     "allowed": true,
     "command": "openclaw sessions compact <session-key> --max-lines <N>",

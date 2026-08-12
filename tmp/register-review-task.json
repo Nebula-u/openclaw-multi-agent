@@ -1,0 +1,55 @@
+{
+  "schema_version": 1,
+  "output_contract_version": 1,
+  "output_ingestion_mode": "LOCAL_STAGED",
+  "workflow_id": "WF-todo-app",
+  "task_id": "TASK-todo-review",
+  "run_id": "RUN-REV-001",
+  "parent_task_id": null,
+  "task_type": "CODE_REVIEW",
+  "assigned_agent": "review-agent",
+  "title": "Todo App 代码审查",
+  "description": "对 developer-agent 产出的 Todo App 源码进行全面代码审查。评审源码质量、测试覆盖率、架构合规性、安全性和最佳实践。源码位于 D:\\MicroConnect\\project\\openclaw-multi-agent\\runtime\\worktrees\\WF-todo-app\\TASK-todo-dev\\RUN-DEV-001\\repo\\src\\",
+  "status": "CREATED",
+  "dependencies": ["TASK-todo-dev"],
+  "acceptance_criteria_ids": ["AC-001","AC-002","AC-003","AC-004","AC-005","AC-006","AC-007","AC-008","AC-009","AC-010","AC-011","AC-012","AC-013","AC-014","AC-015","AC-016"],
+  "attempt": 1,
+  "max_attempts": 3,
+  "input_commit": null,
+  "expected_branch": null,
+  "worktree_path_abs": "D:\\MicroConnect\\project\\openclaw-multi-agent\\runtime\\worktrees\\WF-todo-app\\TASK-todo-review\\RUN-REV-001\\repo",
+  "artifact_root_abs": "D:\\MicroConnect\\project\\openclaw-multi-agent\\runtime\\artifacts\\WF-todo-app\\TASK-todo-review\\RUN-REV-001",
+  "context_manifest_path_abs": "D:\\MicroConnect\\project\\openclaw-multi-agent\\runtime\\artifacts\\WF-todo-app\\TASK-todo-review\\RUN-REV-001\\context-manifest.json",
+  "allowed_write_paths_abs": [
+    "D:\\MicroConnect\\project\\openclaw-multi-agent\\runtime\\worktrees\\WF-todo-app\\TASK-todo-review\\RUN-REV-001\\repo",
+    "D:\\MicroConnect\\project\\openclaw-multi-agent\\runtime\\artifacts\\WF-todo-app\\TASK-todo-review\\RUN-REV-001"
+  ],
+  "forbidden_paths_abs": [],
+  "required_outputs": ["result.json", "evidence.jsonl", "command-records.jsonl"],
+  "structured_outputs": [
+    {
+      "path_abs": "D:\\MicroConnect\\project\\openclaw-multi-agent\\runtime\\artifacts\\WF-todo-app\\TASK-todo-review\\RUN-REV-001\\result.json",
+      "schema_path_abs": "D:\\MicroConnect\\project\\openclaw-multi-agent\\contracts\\result.schema.json",
+      "format": "json",
+      "required": true,
+      "producer": "review-agent"
+    },
+    {
+      "path_abs": "D:\\MicroConnect\\project\\openclaw-multi-agent\\runtime\\artifacts\\WF-todo-app\\TASK-todo-review\\RUN-REV-001\\evidence.jsonl",
+      "schema_path_abs": "D:\\MicroConnect\\project\\openclaw-multi-agent\\contracts\\evidence.schema.json",
+      "format": "jsonl",
+      "required": true,
+      "producer": "review-agent"
+    },
+    {
+      "path_abs": "D:\\MicroConnect\\project\\openclaw-multi-agent\\runtime\\artifacts\\WF-todo-app\\TASK-todo-review\\RUN-REV-001\\command-records.jsonl",
+      "schema_path_abs": "D:\\MicroConnect\\project\\openclaw-multi-agent\\contracts\\command-record.schema.json",
+      "format": "jsonl",
+      "required": true,
+      "producer": "review-agent"
+    }
+  ],
+  "approval_dependencies": [],
+  "created_at": "2026-08-11T03:45:00.000Z",
+  "updated_at": "2026-08-11T03:45:00.000Z"
+}

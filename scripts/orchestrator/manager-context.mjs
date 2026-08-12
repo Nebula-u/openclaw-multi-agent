@@ -31,6 +31,7 @@ export function createManagerSessionContext({ projectRoot: projectRootInput, dat
       estimated_tokens: usedTokens,
       remaining_soft_budget_tokens: remainingTokens,
       action,
+      visible_output: policy.visible_output ?? { mode: 'summary_only', max_items: 4, max_chars: 1200 },
     },
     prompt_context: context,
   };

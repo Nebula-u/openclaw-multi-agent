@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "defaults": {
+    "timeout_seconds": 300,
+    "lease_seconds": 300
+  },
+  "task_types": {
+    "REQUIREMENTS": { "timeout_seconds": 300, "lease_seconds": 300 },
+    "ARCHITECTURE": { "timeout_seconds": 300, "lease_seconds": 300 },
+    "DEVELOPMENT": { "timeout_seconds": 300, "lease_seconds": 300 },
+    "DEVELOPER_REWORK": { "timeout_seconds": 300, "lease_seconds": 300 },
+    "TEST_IMPLEMENTATION": { "timeout_seconds": 300, "lease_seconds": 300 }
+  }
+}

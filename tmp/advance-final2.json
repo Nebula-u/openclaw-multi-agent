@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "command_id": "CMD-ADVANCE-todo-app-final",
+  "workflow_id": "WF-todo-app",
+  "expected_revision": 10,
+  "command_type": "ADVANCE_PHASE",
+  "actor": "local-orchestrator",
+  "occurred_at": "2026-08-11T03:52:00.000Z",
+  "reason": "Release Go，进入 FINAL_REPORT",
+  "target_phase": "FINAL_REPORT",
+  "payload": {}
+}

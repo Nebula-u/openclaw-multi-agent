@@ -34,6 +34,7 @@ test('manager context keeps the session below the configured soft budget', () =>
     assert.equal(value.session_policy.action, 'CONTINUE');
     assert.equal(value.session_policy.remaining_soft_budget_tokens, 30000);
     assert.equal(value.prompt_context.view, 'manager-context');
+    assert.equal(value.session_policy.visible_output.mode, 'summary_only');
   } finally { database.close(); }
 });
 

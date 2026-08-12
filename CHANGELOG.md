@@ -2,6 +2,30 @@
 
 ## [Unreleased] - 2026-08-07
 
+### Orchestrator Windows 派发恢复与 Manager 旁路收敛（2026-08-11）
+
+#### 变更（Changed）
+
+- Windows 下的 OpenClaw 启动改为显式使用 `ComSpec` 调用 `openclaw.cmd`，通过 `/d /s /c` 和 `windowsVerbatimArguments` 传递参数，不再依赖 Node 的 `shell:true`；统一传递 `--thinking off --verbose off`。新增独立 Agent runner，将 stdout、stderr、启动状态和进程结果持久化到当前 dispatch 的 `.orchestrator` 目录。
+- `orchestrator.mjs dispatch` 改为非阻塞启动，立即返回 `STARTED`；新增 `dispatch-reconcile --dispatch-id`，只对账原有 dispatch、摄取结构化产物并写入 completion，避免宿主命令超时后留下无法恢复的 `RUNNING` 状态。
+- launcher locator 在 Control Kernel 准备事务前持久化，缩小“已登记 dispatch 但没有恢复定位信息”的崩溃窗口；移除旧的同步 Agent spawn/ingestion 路径，所有正式 dispatch 统一走 detached runner。
+- 对历史上没有 launcher 证据的 dispatch，`dispatch-reconcile` 返回 `RECOVERY_REQUIRED`，不凭聊天记录、session transcript 或残留文件伪造 completion，也不擅自标记失败；后续必须重新建立受控、可审计的 run。
+- StateGraph 在 task 已 `DISPATCHED/RUNNING` 时返回 `RUNNING`，不再等待长时间 Agent 进程；下一轮只通过原 dispatch 对账，不重复派发。
+- 小型项目的 Agent 执行超时、dispatch lease、manager 唤醒和监控宽限期统一封顶为 300 秒；外部传入 301 秒以上的配置会 fail-closed，runner 不再额外增加 5 秒等待。Agent JSON 契约测试工具采用相同上限。
+- Manager 规则增加人工应急恢复边界：即使用户批准恢复，也只能调用 `dispatch-reconcile`，不得直接执行 `openclaw.cmd`、手工写 SQLite、伪造状态或跳过 test/review/release 阶段。
+- Manager 会话策略增加 `summary_only` 用户可见输出约束，禁止逐工具播报、源码探查、session tail 和模型思考过程。
+
+#### 原因（Why）
+
+- 实机对话显示，Windows 下同步 `spawn('openclaw', ..., shell:true)` 被宿主进程终止后，Agent session 可能继续运行，但 Orchestrator 无法完成结果摄取；本次曾在人工批准的应急边界内由 Manager 旁路调用 `openclaw.cmd`，随后手工维护数据库和推进阶段。该批准只解释历史处置，不构成正式运行链路的权限；新链路必须通过 detached runner 和 `dispatch-reconcile` 恢复。
+
+#### 验证（Tests）
+
+- 新增异步 dispatch → launcher result → reconcile → completion 闭环测试。
+- 新增 Windows 显式 `.cmd` 启动器测试、StateGraph 非阻塞 `RUNNING` 测试和 Manager summary-only policy 测试。
+- 新增 launcher 缺失时保持 `RECOVERY_REQUIRED`、不伪造成功/失败的回归测试；实机验证显式 `ComSpec` spawn `openclaw.cmd --version` 返回 0。
+- 完整回归（`npm test`）：128 项通过，0 失败；`git diff --check` 通过；本轮暂未提交 Git commit。
+
 ### Manager 紧凑上下文视图（2026-08-11）
 
 #### 变更（Changed）

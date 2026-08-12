@@ -24,6 +24,13 @@ function setup() {
   return { database, supervision, workflowId };
 }
 
+test('wake adapter rejects a manager timeout above five minutes', () => {
+  assert.throws(
+    () => createWakeAdapter({ controlDatabase: {}, supervision: {}, enabled: false, timeoutSeconds: 301 }),
+    /between 1 and 300 seconds/u,
+  );
+});
+
 test('wake adapter audits, verifies manager session and records delivered receipt', async () => {
   const value = setup();
   const calls = [];
@@ -37,19 +44,38 @@ test('wake adapter audits, verifies manager session and records delivered receip
     assert.equal(result[0].wake.status, 'DELIVERED');
     assert.equal(value.supervision.wakeOutbox().length, 0);
     assert.equal(calls.length, 2);
-    assert.ok(calls[1].includes('SUPERVISION_REQUEST SUP-wake-adapter\nRun Control Kernel audit, query the bound workflow/task/dispatch and original session, then claim and process this request. Do not retry or spawn until the original session is confirmed FAILED or LOST.'));
+    const message = calls[1][calls[1].indexOf('--message') + 1];
+    assert.match(message, /^SUPERVISION_REQUEST SUP-wake-adapter/u);
+    assert.match(message, /manager_context=/u);
+    assert.match(message, /"workflow_id":"WF-wake-adapter"/u);
   } finally { value.database.close(); }
 });
 
-test('wake adapter fails closed without configured manager session key', async () => {
+test('wake adapter fails closed when no manager session can be discovered', async () => {
   const value = setup();
   try {
     const adapter = createWakeAdapter({ controlDatabase: value.database, supervision: value.supervision, enabled: true,
-      managerSessionKey: null, runner: async () => { throw new Error('runner must not be called'); },
+      managerSessionKey: null, runner: async () => ({ exitCode: 0, stdout: '{"sessions":[]}', stderr: '', timedOut: false }),
       now: () => new Date('2026-08-06T14:00:10.000Z') });
     const result = await adapter.scan();
     assert.equal(result[0].wake.status, 'FAILED');
-    assert.equal(result[0].wake.last_error, 'MANAGER_SESSION_KEY_REQUIRED');
+    assert.equal(result[0].wake.last_error, 'MANAGER_SESSION_NOT_FOUND');
+  } finally { value.database.close(); }
+});
+
+test('wake adapter starts a fresh manager session after the configured soft budget', async () => {
+  const value = setup();
+  const calls = [];
+  try {
+    const runner = async (_command, args) => { calls.push(args); return args[0] === 'sessions'
+      ? { exitCode: 0, stdout: JSON.stringify({ sessions: [{ key: 'agent:manager-agent:main', totalTokens: 120000 }] }), stderr: '', timedOut: false }
+      : { exitCode: 0, stdout: '{"ok":true}', stderr: '', timedOut: false }; };
+    const adapter = createWakeAdapter({ projectRoot: ROOT, controlDatabase: value.database, supervision: value.supervision,
+      enabled: true, managerSessionKey: null, runner, now: () => new Date('2026-08-06T14:00:10.000Z') });
+    const result = await adapter.scan();
+    assert.equal(result[0].wake.status, 'DELIVERED');
+    assert.ok(calls[1].includes('--session-id'));
+    assert.equal(calls[1].includes('--session-key'), false);
   } finally { value.database.close(); }
 });
 

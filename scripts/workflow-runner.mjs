@@ -35,7 +35,9 @@ export async function runWorkflowTurn({ projectRoot: projectRootInput, databaseP
     if (afterRevision !== null && (!Number.isInteger(Number(afterRevision)) || Number(afterRevision) < 0)) {
       throw Object.assign(new Error('afterRevision must be a non-negative integer'), { code: 'GRAPH_AFTER_REVISION_INVALID' });
     }
-    if (afterRevision !== null && current.revision <= Number(afterRevision)) {
+    // ACTIVE workflows may have new launcher/task evidence without a workflow
+    // revision change. Only stable stop conditions are safe to short-circuit.
+    if (afterRevision !== null && current.condition !== 'ACTIVE' && current.revision <= Number(afterRevision)) {
       const result = {
         schema_version: 1,
         graph_run_id: graphRunId,

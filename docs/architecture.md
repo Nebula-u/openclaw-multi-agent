@@ -4,11 +4,11 @@
 
 ## 核心结论
 
-项目以 SQLite Control Kernel v2 作为 workflow、task、run、dispatch、审批和监督事实的唯一当前状态源。OpenClaw Agent 负责执行已分配任务；本地 Orchestrator 负责确定性派发和结果接收；Monitor 只读观察，不直接修改控制状态。
+项目以 SQLite Control Kernel v2 作为 workflow、task、run、dispatch、审批和监督事实的唯一当前状态源。OpenClaw Agent 负责执行已分配任务；本地 Orchestrator 负责确定性派发和结果接收；Supervisor Core 负责 reconcile、续跑和 manager wake，公开的 Monitor HTTP 接口保持只读。
 
 ```text
 OpenClaw Agent 层
-  manager-agent ──> StateGraph Runner ──> Orchestrator ──> sessions_spawn ──> 工作 Agent
+  manager-agent ──> StateGraph Runner ──> Orchestrator ──> detached launcher ──> 工作 Agent
                          │                    │
                          └──────────┬─────────┘
                                     ▼
@@ -17,11 +17,11 @@ OpenClaw Agent 层
                          │
               ┌──────────┴──────────┐
               ▼                     ▼
-       只读 v2 投影              Monitor / Dashboard
-    runtime/control/v2/**       只读查询与监督请求
+       只读 v2 投影           Supervisor Core / Dashboard
+    runtime/control/v2/**       内部续跑 / 公开只读查询
 ```
 
-StateGraph Runner 是轻量执行层，不是新的状态数据库。每轮先审计并读取 Control DB，只执行一个有界动作；所有 workflow mutation 仍提交给 Control Kernel reducer，task 派发仍由本地 Orchestrator 完成。`WAITING_HUMAN`、`HOLD` 和进程重启后均结束当前 Graph 调用，下次运行从 SQLite 重建，不依赖 LangGraph checkpoint。
+StateGraph Runner 是轻量执行层，不是新的状态数据库。每轮先审计并读取 Control DB，只执行一个有界动作；所有 workflow mutation 仍提交给 Control Kernel reducer，task 派发仍由本地 Orchestrator 完成。Supervisor Core 在 durable launcher 结果出现后自动 reconcile，并连续执行有限个确定性 Graph turn；到 `NEEDS_TASK`、`WAITING_HUMAN` 或 `HOLD` 时停止并按需唤醒 manager。进程重启后从 SQLite 重建，不依赖 LangGraph checkpoint。
 
 ## 权威边界
 
