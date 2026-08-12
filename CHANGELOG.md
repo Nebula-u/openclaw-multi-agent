@@ -2,6 +2,14 @@
 
 ## [Unreleased] - 2026-08-07
 
+### 通用静态模型配置与协议清理（2026-08-12）
+
+- 保留 Agent package 当前默认模型，不触发已安装 Agent 的隐式换模。
+- 将模型覆盖接口收敛为通用 `agent-models.example.json`，支持每个 Agent 静态配置不同 `provider/model`，禁止运行时自主选模。
+- 新增 OpenAI Chat Completions provider 模板：128k context、49,152 输出上限和 `max_completion_tokens` 字段，不含凭据。
+- Manager 上下文软阈值调整为 76,800，单个持久 session 累计 token 上限为 200k；两者不被当作单次请求窗口。
+- 删除厂商专属路由/provider 样例、Responses 协议内容及对应测试锁定；JSON 清洗、Ajv、失败证据链保持 provider 无关。
+
 ### 轻量 StateGraph、持久 Supervisor 与 Agent 会话控制台（2026-08-12）
 
 - StateGraph 使用 `control.db` 内的 SQLite checkpointer，Supervisor 可从 checkpoint 恢复并以固定代码续跑，只在有限决策点唤醒 Manager。

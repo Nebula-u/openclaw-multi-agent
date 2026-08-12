@@ -12,6 +12,7 @@
 - Agent JSON/JSONL 只能写入 `<artifact_root>/.agent-raw/**`；本地代码统一清洗、Ajv 校验、原子发布最终文件。
 - JSON 解析、路径安全或 Schema 校验失败时，本地代码保留原始暂存文件，并写入 `.orchestrator-ingest/*.failure.json` 和 `.orchestrator-ingest/validation-errors.jsonl`。
 - Monitor 不提供写入、重试、催办或与 Agent 交互的入口；可显示全部已创建 Agent、持久 session 和完整 user/assistant 文本，但不展示思考、工具调用、工具结果、prompt、凭据、路径和控制细节。
+- 模型通过配置按 Agent 静态选择；Agent 无权自行切换。通用 provider 模板使用 OpenAI Chat Completions、128k 上下文和 49,152 输出上限，Manager 单 session 累计 token 上限为 200k。
 
 ## 前置条件
 
@@ -214,6 +215,19 @@ openclaw gateway status
 ```
 
 apply 前会把 OpenClaw 配置备份到 `runtime/control/config-snapshots/`。以上更新流程不调用 `scripts/reinstall-agents.ps1`，也不调用 `openclaw agents delete`；只有明确需要删除并重建 Agent 时才使用重装脚本。
+
+### 按 Agent 静态配置模型
+
+当前 package 中的默认模型保持不变。需要切换时复制 `config/agent-models.example.json`，分别填写各 Agent 的 `provider/model`，然后在 dry-run 和 apply 中加入同一个模型配置路径：
+
+```powershell
+Copy-Item '.\config\agent-models.example.json' '.\config\agent-models.json'
+pwsh -NoProfile -File '.\scripts\install.ps1' `
+  -RuntimeRoot '.\runtime' `
+  -ModelConfig '.\config\agent-models.json'
+```
+
+Linux 对应使用 `--model-config config/agent-models.json`。Provider 模板见 `config/openai-provider.example.json`；凭据必须由 OpenClaw auth/profile 管理。不存在运行时自动路由或 Agent 自主切换。完整说明见 [模型配置与静态路由](docs/model-routing.md)。
 
 ## 将 Monitor 部署为 Linux 服务
 
