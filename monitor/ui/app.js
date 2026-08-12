@@ -68,10 +68,10 @@
   function addFeed(event) { if (event.type === 'activity' && event.payload?.event_type !== 'session.assistant_output') return; state.feed.unshift(event); state.feed = state.feed.slice(0,200); renderFeed(); }
   function renderFeed() { const filter = $('feed-filter').value; const events = state.feed.filter((event) => filter === 'all' || event.type === filter || (filter === 'health' && event.type === 'monitor-health'));
     $('event-feed').innerHTML = events.length ? events.map((event) => `<li class="event-row"><time>${formatTime(event.timestamp)}</time><b>${escapeHtml(event.type)}</b><p>${escapeHtml(summaryOf(event))}</p></li>`).join('') : '<li class="empty-state">当前筛选没有事件</li>'; }
-  async function openTask(task) { const dialog = $('task-dialog'); let dialogue = []; try { dialogue = (await request(`/api/tasks/${encodeURIComponent(task.task_id)}/activity`)).dialogue; } catch (_) { dialogue = []; }
+  function openTask(task) { const dialog = $('task-dialog');
     $('task-detail').innerHTML = `<span class="eyebrow">${escapeHtml(task.task_id)}</span><h2 class="detail-title">${escapeHtml(task.title || task.task_type)}</h2><div class="detail-grid">
       ${[['STATUS',task.status],['HEALTH',task.health?.health || 'UNKNOWN'],['AGENT',task.assigned_agent],['ATTEMPT',`${task.attempt || 0}/${task.max_attempts || '—'}`]].map(([label,value]) => `<div class="detail-cell"><span>${label}</span><strong>${escapeHtml(value)}</strong></div>`).join('')}</div>
-      <h3>USER-VISIBLE DIALOGUE</h3><ul class="activity-list">${dialogue.length ? dialogue.slice(0,20).map((item) => `<li>${escapeHtml(item.summary)}<br><small>${escapeHtml(item.agent_id)} · ${formatTime(item.timestamp)}</small></li>`).join('') : '<li>暂无可展示的 Agent 对话</li>'}</ul>`;
+      <p class="detail-hint">完整对话已统一收敛到 Agent Conversations。请在左侧选择 <b>${escapeHtml(task.assigned_agent || '对应 Agent')}</b>，并切换关联 session。</p>`;
     dialog.showModal(); }
   function selectWorkflow(id) { state.selectedId = id; renderSelected(); connectStream(); }
   function connectStream() { state.source?.close(); const workflow = selected(); if (!workflow) return; const after = Number(localStorage.getItem(`monitor.seq.${workflow.workflow_id}`) || 0);

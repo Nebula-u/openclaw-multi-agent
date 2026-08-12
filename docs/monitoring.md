@@ -20,6 +20,8 @@ npm run supervisor:start
 - `GET /api/workflows/:workflowId/stream?after=<seq>`
 - `GET /api/tasks/:taskId`
 - `GET /api/tasks/:taskId/activity`（仅用户安全对话）
-- `GET /api/agents/:agentId/activity`（仅用户安全对话）
+- `GET /api/agents`（全部已创建 Agent，包括未激活和已结束）
+- `GET /api/agents/:agentId/sessions`（持久 session 索引）
+- `GET /api/agents/:agentId/sessions/:sessionId/messages`（仅 user/assistant 安全文本）
 
 服务仅接受 loopback 和允许的 Origin。Monitor 数据库可删除后由本地采集器重建，不能用于恢复或修改 `control.db`。没有 dispatch 的 OpenClaw 会话不会被归属到 workflow，因此不会出现在看板中。

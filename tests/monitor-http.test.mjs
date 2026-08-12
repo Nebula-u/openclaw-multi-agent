@@ -103,16 +103,3 @@ test('monitor rejects unknown origins and exposes no public mutation endpoint', 
   } finally { await value.close(); }
 });
 
-test('monitor exposes only user-safe dialogue sourced by local collectors', async () => {
-  const value = await setup();
-  try {
-    value.monitor.telemetry.addEvent({
-      schema_version: 1, event_id: 'MEVT-monitor-dialogue', workflow_id: WORKFLOW_ID, task_id: null, run_id: null, session_id: 'session-1',
-      topic: 'agent.activity', event_type: 'session.assistant_output', producer: 'session-tailer', source: 'SESSION_TAILER',
-      timestamp: '2026-08-06T10:00:02.000Z', payload: { agent_id: 'manager-agent', summary: 'Control state is healthy' },
-      meta: { redacted: true, inferred: true, confidence: 'MEDIUM' },
-    });
-    const history = await (await fetch(`${value.base}/api/agents/manager-agent/activity`)).json();
-    assert.equal(history.dialogue[0].summary, 'Control state is healthy');
-  } finally { await value.close(); }
-});

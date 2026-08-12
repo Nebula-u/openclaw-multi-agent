@@ -217,24 +217,10 @@ export function createMonitorServer(config, { database: providedDatabase = null,
         const task = tasks.get(decodeURIComponent(taskMatch[1]));
         return sendJson(response, task ? 200 : 404, task ? { ok: true, task: publicTask({ ...task, health: telemetry.health(task.task_id), dispatches: tasks.dispatches(task.task_id).map((item) => ({ ...item.intent, status: item.status, updated_at: item.receipt?.recorded_at ?? item.completion?.completed_at ?? item.intent.created_at })) }) } : { ok: false, error: 'TASK_NOT_FOUND' }, cors);
       }
-      const taskActivity = path.match(/^\/api\/tasks\/([^/]+)\/activity$/u);
-      if (request.method === 'GET' && taskActivity) {
-        const taskId = decodeURIComponent(taskActivity[1]);
-        const dialogue = telemetry.events({ limit: 500 }).filter((event) => event.task_id === taskId && event.event_type === 'session.assistant_output')
-          .map((event) => ({ agent_id: event.payload.agent_id, summary: event.payload.summary, timestamp: event.timestamp }));
-        return sendJson(response, 200, { ok: true, dialogue }, cors);
-      }
       const taskHealth = path.match(/^\/api\/tasks\/([^/]+)\/health$/u);
       if (request.method === 'GET' && taskHealth) {
         const health = telemetry.health(decodeURIComponent(taskHealth[1]));
         return sendJson(response, health ? 200 : 404, health ? { ok: true, health } : { ok: false, error: 'HEALTH_NOT_FOUND' }, cors);
-      }
-      const agentActivity = path.match(/^\/api\/agents\/([^/]+)\/activity$/u);
-      if (request.method === 'GET' && agentActivity) {
-        const agentId = decodeURIComponent(agentActivity[1]);
-        const dialogue = telemetry.events({ limit: 500 }).filter((event) => event.payload.agent_id === agentId && event.event_type === 'session.assistant_output')
-          .map((event) => ({ task_id: event.task_id, summary: event.payload.summary, timestamp: event.timestamp }));
-        return sendJson(response, 200, { ok: true, dialogue }, cors);
       }
       return sendJson(response, 404, { ok: false, error: 'NOT_FOUND' }, cors);
     } catch (error) {
