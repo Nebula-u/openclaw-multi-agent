@@ -53,6 +53,38 @@ async function turn(value, suffix = 'run') {
   });
 }
 
+test('active StateGraph does not skip launcher/task evidence merely because the revision is unchanged', async () => {
+  const value = fixture('revision-gate');
+  try {
+    const result = await runWorkflowTurn({
+      projectRoot: ROOT,
+      databasePath: value.databasePath,
+      workflowId: value.workflowId,
+      graphRunId: `GR-revision-${randomUUID()}`,
+      afterRevision: 1,
+    });
+    assert.equal(result.ok, true);
+    assert.equal(result.result.status, 'PROGRESSED');
+    assert.equal(result.result.stop_reason, null);
+    assert.equal(result.result.before_revision, 1);
+    assert.equal(result.result.after_revision, 2);
+  } finally { value.close(); }
+});
+
+test('StateGraph still short-circuits an unchanged durable stop condition', async () => {
+  const value = fixture('revision-stable-hold');
+  try {
+    const { db, controls } = value.open();
+    let revision;
+    try { revision = controls.apply(command(value.workflowId, 'HOLD', 1)).state.revision; }
+    finally { db.close(); }
+    const result = await runWorkflowTurn({ projectRoot: ROOT, databasePath: value.databasePath,
+      workflowId: value.workflowId, graphRunId: `GR-hold-${randomUUID()}`, afterRevision: revision });
+    assert.equal(result.result.status, 'WAITING_FOR_CHANGE');
+    assert.equal(result.result.stop_reason, 'NO_NEW_CONTROL_REVISION');
+  } finally { value.close(); }
+});
+
 test('StateGraph advances active INTAKE through the standard path using Control Kernel', async () => {
   const value = fixture('intake');
   try {
@@ -207,6 +239,23 @@ test('task dispatch refreshes workflow revision when the worker requests human a
   assert.equal(state.status, 'WAITING_HUMAN');
   assert.equal(state.control.condition, 'WAITING_HUMAN');
   assert.equal(state.afterRevision, 4);
+});
+
+test('StateGraph returns RUNNING after asynchronous dispatch without waiting for worker completion', async () => {
+  const task = { task_id: 'TASK-graph-async', run_id: 'RUN-graph-async', task_type: 'REQUIREMENTS', assigned_agent: 'requirement-agent', status: 'READY' };
+  const state = await invokeStub(stubAdapter({
+    phase: 'REQUIREMENTS',
+    task,
+    dispatchEffect: ({ task: currentTask, control }) => ({
+      task: { ...currentTask, status: 'DISPATCHED' },
+      control,
+      result: { ok: true, status: 'STARTED' },
+    }),
+  }));
+  assert.equal(state.status, 'RUNNING');
+  assert.equal(state.stopReason, 'TASK_DISPATCHED');
+  assert.equal(state.action, null);
+  assert.equal(state.control.revision, 3);
 });
 
 test('FINAL_REPORT completes only from a recomputed release decision bound to the candidate', async () => {

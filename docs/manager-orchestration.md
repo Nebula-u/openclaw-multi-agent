@@ -41,10 +41,13 @@ Demo 快速路径不是默认路径。Manager 必须先提交 `WAIT_HUMAN`，在
 2. `task-validate`：验证上下文包、规则快照、依赖、绝对路径、worktree 和 `structured_outputs`。
 3. `dispatch-prepare`：事务化记录派发 intent，并将 task 置为 `DISPATCHED`，写入 outbox。
 4. 本地 Orchestrator 从 READY task 固定派生 `agentId`、session key 和 intent，不接受 Agent 自选目标。
-5. 真实 session 返回后，依次记录 `dispatch-receipt`：`SENT`、`ACKNOWLEDGED`、`RUNNING`。
-6. Agent 只能写入 `artifact_root/.agent-raw/**`；Orchestrator 负责摄取、清洗、Schema 校验和原子发布。
+5. `dispatch` 只启动独立的本地 Agent runner，持久化 launcher/status/stdout/stderr/result locator，并立即返回 `STARTED`；Windows 由 runner 显式调用 `ComSpec`/`openclaw.cmd`，不使用同步 `shell:true`；它不等待长时间 Agent 进程。
+6. `dispatch-reconcile --dispatch-id <id>` 或下一轮 `workflow-run` 只对账原 dispatch，按 `SENT → ACKNOWLEDGED → RUNNING` 记录真实生命周期，然后摄取结果。
+7. Agent 只能写入 `artifact_root/.agent-raw/**`；Orchestrator 负责摄取、清洗、Schema 校验和原子发布。
 
-PENDING dispatch intent 代表需要查询真实 session 后对账，不代表可以无条件重派。
+当前小型项目执行策略由 `config/agent-execution-policy.json` 固定：Agent 进程超时和 dispatch lease 均不得超过 300 秒。Manager 唤醒、启动检测、工具运行宽限期及 Agent 契约测试调用采用相同的 300 秒硬上限；配置或命令行显式传入更大值时直接拒绝，不自动放宽。
+
+PENDING dispatch intent 或 `DISPATCHED/RUNNING` task 代表需要查询原 launcher/session 后对账，不代表可以无条件重派。若是旧版 dispatch 且没有 launcher locator，`dispatch-reconcile` 只返回 `RECOVERY_REQUIRED`，不会根据聊天记录或残留产物伪造 completion；必须重新建立新的受控 run。即使用户批准应急恢复，也只能调用 `dispatch-reconcile`，不能直接调用 `openclaw.cmd` 或手工写 SQLite。
 
 ## 4. 结果接收与阶段推进
 
@@ -74,11 +77,17 @@ Control Kernel 负责计算 `phase + condition + outcome`，Manager 不自行计
 新 Manager 会话先查询：
 
 ```powershell
-node scripts/control-kernel.mjs snapshot --project-root .
+node scripts/orchestrator.mjs manager-context --project-root . --workflow-id <WF-...> --estimated-tokens <n>
+node scripts/orchestrator.mjs dispatch-reconcile --project-root . --dispatch-id <DSP-...>
+node scripts/control-kernel.mjs snapshot --project-root . --workflow-id <WF-...> --view manager
 node scripts/control-kernel.mjs audit --project-root .
 node scripts/control-kernel.mjs approval-list --project-root . --status PENDING
 node scripts/control-kernel.mjs dispatch-outbox --project-root .
 ```
+
+`--view manager` 是面向 Manager 的紧凑只读上下文：只包含当前 workflow、活动 task、待审批、待处理 dispatch 和最新事件；历史 task、完整 dispatch receipt、completion payload、raw log 与历史事件必须按需通过 artifact/evidence 引用读取，不得默认注入 Manager 会话。
+
+`manager-context` 将静态会话预算与紧凑 snapshot 合并为一次确定性读取。达到 120k soft budget 时返回 `START_NEW_MANAGER_SESSION`；新会话只使用返回的 `prompt_context` 和必要 artifact locator 恢复，不复制旧聊天历史。调用方暂时无法提供 token 估算时返回 `MEASURE_CONTEXT`，不得据此假定预算充足。Manager 用户可见输出采用 summary-only 协议，不展示逐工具进度、源码探查、session 尾部或模型思考。
 
 按 audit 结果处理：
 
@@ -96,6 +105,8 @@ Manager 可以通过以下命令请求本地 StateGraph 执行一个有界编排
 ```powershell
 node scripts/orchestrator.mjs workflow-run --project-root . --workflow-id <workflow-id>
 ```
+
+调用方若已保存上次观察到的 Control Kernel `revision`，可追加 `--after-revision <n>`。当数据库没有比该 revision 更新的事实时，Runner 返回 `WAITING_FOR_CHANGE`，不会启动本轮 Graph；这只是事件/修订版本保护，不改变任何合法边，也不替代正常 StateGraph 路由。
 
 StateGraph 根据 Control DB 的 `phase + condition` 路由，复用现有 task validation、dispatch、result ingestion 和 transition command。动态路由依次经过安全守卫、结构化结果分类、阶段策略、状态机合法边校验和命令构建五层；五层共享同一轮读取的事实，不产生额外持久状态。它不会创建缺少上下文的 task package：当前阶段没有已注册 task 时返回 `NEEDS_TASK`；审批、HOLD、运行中 task 和终态均立即停止。失败分诊只有在结构化结果给出精确合法阶段，或调用方显式传入 `--target-phase` 时才推进。
 

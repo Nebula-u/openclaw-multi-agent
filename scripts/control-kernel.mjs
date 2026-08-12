@@ -54,7 +54,10 @@ function main() {
       emit({ ok: true, command: 'init', database: databasePath, schema_version: 2 });
     } else if (command === 'apply') {
       const input = JSON.parse(readFileSync(resolve(required(options, 'command-file')), 'utf8'));
-      emit(repository.apply({ ...input, actor: authority.actor }));
+      const applied = repository.apply({ ...input, actor: authority.actor });
+      const cancellation = input.command_type === 'CANCEL'
+        ? tasks.cancelWorkflow({ workflow_id: input.workflow_id, occurred_at: input.occurred_at, reason: input.reason }) : null;
+      emit(cancellation ? { ...applied, cancellation } : applied);
     } else if (command === 'get') {
       const workflowId = required(options, 'workflow-id');
       const state = repository.get(workflowId);
@@ -65,7 +68,10 @@ function main() {
     } else if (command === 'active') {
       emit({ ok: true, command: 'active', workflows: repository.workflows({ activeOnly: true }) });
     } else if (command === 'snapshot') {
-      emit({ ok: true, command: 'snapshot', snapshot: createControlSnapshot(database, { workflowId: options['workflow-id'] ?? null }) });
+      emit({ ok: true, command: 'snapshot', snapshot: createControlSnapshot(database, {
+        workflowId: options['workflow-id'] ?? null,
+        view: options.view ?? 'full',
+      }) });
     } else if (command === 'project') {
       const runtimeRoot = resolve(required(options, 'runtime-root'));
       emit({ ...exportControlProjections(database, runtimeRoot), command: 'project' });
@@ -114,7 +120,8 @@ function main() {
     } else if (command === 'approval-resolve') {
       const response = JSON.parse(readFileSync(resolve(required(options, 'response-file')), 'utf8'));
       const resolved = repository.resolveApproval(response, { actor: authority.actor });
-      const task = response.task_id ? tasks.resumeHumanTask({ task_id: response.task_id, decision_id: response.decision_id, occurred_at: response.decided_at }) : null;
+      const task = response.task_id ? tasks.resumeHumanTask({ task_id: response.task_id, decision_id: response.decision_id,
+        outcome: response.outcome, occurred_at: response.decided_at }) : null;
       emit({ ...resolved, task });
     } else if (command === 'supervision-request') {
       emit(supervision.request(JSON.parse(readFileSync(resolve(required(options, 'request-file')), 'utf8'))));

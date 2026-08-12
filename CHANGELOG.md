@@ -2,6 +2,79 @@
 
 ## [Unreleased] - 2026-08-07
 
+### Orchestrator Windows 派发恢复与 Manager 旁路收敛（2026-08-11）
+
+#### 变更（Changed）
+
+- Windows 下的 OpenClaw 启动改为显式使用 `ComSpec` 调用 `openclaw.cmd`，通过 `/d /s /c` 和 `windowsVerbatimArguments` 传递参数，不再依赖 Node 的 `shell:true`；统一传递 `--thinking off --verbose off`。新增独立 Agent runner，将 stdout、stderr、启动状态和进程结果持久化到当前 dispatch 的 `.orchestrator` 目录。
+- `orchestrator.mjs dispatch` 改为非阻塞启动，立即返回 `STARTED`；新增 `dispatch-reconcile --dispatch-id`，只对账原有 dispatch、摄取结构化产物并写入 completion，避免宿主命令超时后留下无法恢复的 `RUNNING` 状态。
+- launcher locator 在 Control Kernel 准备事务前持久化，缩小“已登记 dispatch 但没有恢复定位信息”的崩溃窗口；移除旧的同步 Agent spawn/ingestion 路径，所有正式 dispatch 统一走 detached runner。
+- 对历史上没有 launcher 证据的 dispatch，`dispatch-reconcile` 返回 `RECOVERY_REQUIRED`，不凭聊天记录、session transcript 或残留文件伪造 completion，也不擅自标记失败；后续必须重新建立受控、可审计的 run。
+- StateGraph 在 task 已 `DISPATCHED/RUNNING` 时返回 `RUNNING`，不再等待长时间 Agent 进程；下一轮只通过原 dispatch 对账，不重复派发。
+- 小型项目的 Agent 执行超时、dispatch lease、manager 唤醒和监控宽限期统一封顶为 300 秒；外部传入 301 秒以上的配置会 fail-closed，runner 不再额外增加 5 秒等待。Agent JSON 契约测试工具采用相同上限。
+- Manager 规则增加人工应急恢复边界：即使用户批准恢复，也只能调用 `dispatch-reconcile`，不得直接执行 `openclaw.cmd`、手工写 SQLite、伪造状态或跳过 test/review/release 阶段。
+- Manager 会话策略增加 `summary_only` 用户可见输出约束，禁止逐工具播报、源码探查、session tail 和模型思考过程。
+
+#### 原因（Why）
+
+- 实机对话显示，Windows 下同步 `spawn('openclaw', ..., shell:true)` 被宿主进程终止后，Agent session 可能继续运行，但 Orchestrator 无法完成结果摄取；本次曾在人工批准的应急边界内由 Manager 旁路调用 `openclaw.cmd`，随后手工维护数据库和推进阶段。该批准只解释历史处置，不构成正式运行链路的权限；新链路必须通过 detached runner 和 `dispatch-reconcile` 恢复。
+
+#### 验证（Tests）
+
+- 新增异步 dispatch → launcher result → reconcile → completion 闭环测试。
+- 新增 Windows 显式 `.cmd` 启动器测试、StateGraph 非阻塞 `RUNNING` 测试和 Manager summary-only policy 测试。
+- 新增 launcher 缺失时保持 `RECOVERY_REQUIRED`、不伪造成功/失败的回归测试；实机验证显式 `ComSpec` spawn `openclaw.cmd --version` 返回 0。
+- 完整回归（`npm test`）：128 项通过，0 失败；`git diff --check` 通过；本轮暂未提交 Git commit。
+
+### Manager 紧凑上下文视图（2026-08-11）
+
+#### 变更（Changed）
+
+- `control-kernel snapshot` 新增 `--view manager`，提供面向 Manager 的紧凑 workflow 上下文。
+- 紧凑视图只保留当前状态、活动 task、待审批、待处理 dispatch 和最新事件；历史 task、完整 receipt、completion payload、raw log 与历史事件改为按需读取。
+- 不改变 SQLite Control Kernel 的权威状态、事件链、审计和完整 snapshot 视图。
+
+#### 验证（Tests）
+
+- 新增 Manager 紧凑 snapshot 回归测试，确认历史与大 payload 不进入默认 Manager 上下文。
+
+### 控制面重复读取保护（2026-08-11）
+
+#### 变更（Changed）
+
+- StateGraph adapter 使用紧凑只读 snapshot；不再把完整历史 task/dispatch payload 放入 Graph state。
+- `workflow-run` 新增可选 `--after-revision`：没有新的 Control Kernel revision 时返回 `WAITING_FOR_CHANGE`，不启动本轮 Graph。
+- Local Orchestrator 对结构化输出 Schema validator 做进程内复用，并按 Schema 文件修改时间自动失效；不改变 ingestion 语义。
+
+#### 验证（Tests）
+
+- 新增无新 revision 时不启动 Graph 的回归测试。
+
+### 静态 Flash 模型分级与 Manager 会话预算（2026-08-11）
+
+#### 变更（Changed）
+
+- Requirement、Test、Release 和生成的 Dialogue Agent 固定使用 `deepseek-v4-flash`；Manager、Architect、Developer、Review 保留 `deepseek-v4-pro`。
+- 模型只在 package/安装配置阶段静态确定，本轮不增加按 task、token 或失败状态动态选模。
+- Manager 会话软预算从上下文窗口的 80%/160k 下调到 60%/120k，默认 thinking 从 `high` 下调到 `medium`。
+- Manager 默认只读取 `--view manager` 紧凑 snapshot；完整 Control Kernel snapshot、历史 task、receipt、completion payload 和 raw log 改为按 locator 读取。
+
+#### 验证（Tests）
+
+- 新增静态模型分级和 Manager 会话策略测试，防止 Flash/Pro 分工及上下文排除规则漂移。
+
+### Manager 会话轮换入口（2026-08-11）
+
+#### 新增（Added）
+
+- Local Orchestrator 新增 `manager-context` 命令，将 120k 静态软预算判断与紧凑 Control Kernel snapshot 合并为一次确定性读取。
+- 达到软预算时返回 `START_NEW_MANAGER_SESSION`；新会话只恢复紧凑 `prompt_context`，不复制旧聊天历史。
+- 未提供 token 估算时返回 `MEASURE_CONTEXT`，避免把未知用量误判为预算充足。
+
+#### 验证（Tests）
+
+- 新增预算内继续、达到预算轮换和未知用量三种 Manager 会话回归测试。
+
 ### 轻量 LangGraph StateGraph 编排层（2026-08-10）
 
 #### 新增（Added）

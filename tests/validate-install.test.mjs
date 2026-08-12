@@ -24,7 +24,7 @@ const PWSH_AVAILABLE = spawnSync('pwsh', ['-NoProfile', '-Command', 'exit 0'], {
   encoding: 'utf8',
 }).status === 0;
 
-test('installers materialize an explicit empty worker delegation allowlist', () => {
+test('installers materialize an explicit worker delegation allowlist', () => {
   const powershell = readFileSync(join(ROOT, 'scripts', 'install.ps1'), 'utf8');
   const bash = readFileSync(join(ROOT, 'scripts', 'install.sh'), 'utf8');
   assert.match(powershell, /\$currentHasSubagents -and \$allowMatches/u);

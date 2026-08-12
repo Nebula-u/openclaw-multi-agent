@@ -12,6 +12,7 @@ import { connectGatewayLlmClient } from './gateway-llm-client.mjs';
 import { LLM_SCENARIOS } from './llm-scenarios.mjs';
 import { runLlmCase } from './llm-runner.mjs';
 import { PROJECT_ROOT, assertRuntimeGuardReady } from './runtime-guard-client.mjs';
+import { MAX_AGENT_TIMEOUT_MS, validateAgentTimeoutMs } from './timeout-policy.mjs';
 
 const DEFAULT_OUTPUT_ROOT = join(PROJECT_ROOT, 'artifacts', 'agent-llm-json');
 
@@ -140,7 +141,7 @@ export async function collectLlmRun({
   scenarios = LLM_SCENARIOS,
   outputRoot = DEFAULT_OUTPUT_ROOT,
   runId: requestedRunId = runId(),
-  timeoutMs = 600000,
+  timeoutMs = MAX_AGENT_TIMEOUT_MS,
   concurrency = 1,
   repetitions = 2,
   connectionBatchSize = 40,
@@ -148,6 +149,7 @@ export async function collectLlmRun({
   runCaseImpl = runLlmCase,
   onProgress = () => {},
 } = {}) {
+  timeoutMs = validateAgentTimeoutMs(timeoutMs);
   assertRuntimeGuardReady();
   if (!Number.isInteger(concurrency) || concurrency < 1) throw new Error('并发数必须为正整数。');
   if (!Number.isInteger(repetitions) || repetitions < 1) throw new Error('重复次数必须为正整数。');
@@ -225,7 +227,7 @@ function parseArgs(argv) {
     else if (token === '--output-root') result.outputRoot = argv[++index];
     else throw new Error(`未知参数：${token}`);
   }
-  if (!Number.isFinite(result.timeoutMs ?? 600000) || (result.timeoutMs ?? 600000) <= 0) throw new Error('--timeout-seconds 必须为正数。');
+  validateAgentTimeoutMs(result.timeoutMs ?? MAX_AGENT_TIMEOUT_MS, '--timeout-seconds');
   return result;
 }
 

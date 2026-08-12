@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "command_id": "CMD-BOOTSTRAP-todo-app-001",
+  "workflow_id": "WF-todo-app",
+  "expected_revision": 0,
+  "command_type": "BOOTSTRAP",
+  "actor": "local-orchestrator",
+  "occurred_at": "2026-08-11T03:07:00.000Z",
+  "reason": "创建 Todo App Web 应用工作流 - 用户请求单用户本地存储精美设计的 Todolist",
+  "candidate_commit": null,
+  "payload": {
+    "contract_set_id": "todo-app-v1.0",
+    "agent_bundle_id": "5ea60658a5c6eb8ff7fa5ec07628f8752333ffd197cf0c1afe9f077e44e621b5"
+  }
+}

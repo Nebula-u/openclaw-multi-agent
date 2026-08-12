@@ -75,6 +75,11 @@ export function createGraphNodes({ adapter, policy, machine }) {
         task = adapter.latestTask(state.workflowId, state.phaseSpec.task_type);
         control = adapter.getWorkflow(state.workflowId);
       }
+      if (task && ['DISPATCHED', 'RUNNING'].includes(task.status) && typeof adapter.reconcile === 'function') {
+        adapter.reconcile(task.task_id);
+        task = adapter.latestTask(state.workflowId, state.phaseSpec.task_type);
+        control = adapter.getWorkflow(state.workflowId);
+      }
       const refreshed = taskState(adapter, task, control);
       const route = routed({
         kind: state.phaseSpec.kind === 'triage' ? 'triage' : 'task',

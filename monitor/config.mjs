@@ -8,6 +8,12 @@ function integer(value, fallback) {
   return parsed;
 }
 
+function boundedSeconds(value, fallback, name) {
+  const parsed = integer(value, fallback);
+  if (parsed > 300) throw new Error(`${name} must not exceed 300 seconds`);
+  return parsed;
+}
+
 function boolean(value, fallback) {
   if (value === undefined || value === null || value === '') return fallback;
   if (typeof value === 'boolean') return value;
@@ -67,14 +73,16 @@ export function loadMonitorConfig(overrides = {}) {
     requestBodyLimit: integer(overrides.requestBodyLimit ?? fileConfig.request_body_limit, 1024 * 1024),
     watchdogEnabled: boolean(overrides.watchdogEnabled ?? fileConfig.watchdog_enabled, true),
     watchdogShadowMode: boolean(overrides.watchdogShadowMode ?? fileConfig.watchdog_shadow_mode, true),
-    heartbeatStaleSeconds: integer(overrides.heartbeatStaleSeconds ?? fileConfig.heartbeat_stale_seconds, 180),
-    possiblyStalledSeconds: integer(overrides.possiblyStalledSeconds ?? fileConfig.possibly_stalled_seconds, 300),
-    startingTimeoutSeconds: integer(overrides.startingTimeoutSeconds ?? fileConfig.starting_timeout_seconds, 120),
-    toolRunningGraceSeconds: integer(overrides.toolRunningGraceSeconds ?? fileConfig.tool_running_grace_seconds, 900),
+    heartbeatStaleSeconds: boundedSeconds(overrides.heartbeatStaleSeconds ?? fileConfig.heartbeat_stale_seconds, 180, 'heartbeat_stale_seconds'),
+    possiblyStalledSeconds: boundedSeconds(overrides.possiblyStalledSeconds ?? fileConfig.possibly_stalled_seconds, 300, 'possibly_stalled_seconds'),
+    startingTimeoutSeconds: boundedSeconds(overrides.startingTimeoutSeconds ?? fileConfig.starting_timeout_seconds, 120, 'starting_timeout_seconds'),
+    toolRunningGraceSeconds: boundedSeconds(overrides.toolRunningGraceSeconds ?? fileConfig.tool_running_grace_seconds, 300, 'tool_running_grace_seconds'),
     supervisionCooldownSeconds: integer(overrides.supervisionCooldownSeconds ?? fileConfig.supervision_cooldown_seconds, 300),
-    managerWakeEnabled: boolean(overrides.managerWakeEnabled ?? fileConfig.manager_wake_enabled, false),
+    managerWakeEnabled: boolean(overrides.managerWakeEnabled ?? fileConfig.manager_wake_enabled, true),
     managerSessionKey: overrides.managerSessionKey ?? process.env.MANAGER_SESSION_KEY ?? fileConfig.manager_session_key ?? null,
-    managerWakeTimeoutSeconds: integer(overrides.managerWakeTimeoutSeconds ?? fileConfig.manager_wake_timeout_seconds, 60),
+    managerWakeTimeoutSeconds: boundedSeconds(overrides.managerWakeTimeoutSeconds ?? fileConfig.manager_wake_timeout_seconds, 60, 'manager_wake_timeout_seconds'),
+    workflowContinuationEnabled: boolean(overrides.workflowContinuationEnabled ?? fileConfig.workflow_continuation_enabled, true),
+    workflowContinuationMaxTurns: integer(overrides.workflowContinuationMaxTurns ?? fileConfig.workflow_continuation_max_turns, 8),
     telemetryMaxEvents: integer(overrides.telemetryMaxEvents ?? fileConfig.telemetry_max_events, 100000),
     activityRetentionDays: integer(overrides.activityRetentionDays ?? fileConfig.activity_retention_days, 30),
     maintenanceIntervalMs: integer(overrides.maintenanceIntervalMs ?? fileConfig.maintenance_interval_ms, 3600000),

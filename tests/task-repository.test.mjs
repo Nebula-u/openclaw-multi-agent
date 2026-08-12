@@ -248,3 +248,47 @@ test('controlled retry requires terminal failed dispatch and creates a new immut
       context_manifest_path_abs: join(value.directory, 'third', 'context.json') }), (error) => error.code === 'TASK_RETRY_SOURCE_INVALID');
   } finally { value.close(); }
 });
+
+test('workflow cancellation cascades to active tasks and dispatches without deleting evidence', () => {
+  const value = setup();
+  try {
+    const dispatch = readyAndRunning(value);
+    const controls = createControlRepository(ROOT, value.database);
+    controls.apply({ schema_version: 1, command_id: `CMD-${randomUUID()}`, workflow_id: WORKFLOW_ID,
+      expected_revision: 1, command_type: 'CANCEL', actor: 'local-orchestrator',
+      occurred_at: '2026-08-05T08:04:00.000Z', reason: 'user cancelled workflow', payload: {} });
+    const cancelled = value.tasks.cancelWorkflow({ workflow_id: WORKFLOW_ID,
+      occurred_at: '2026-08-05T08:04:00.000Z', reason: 'user cancelled workflow' });
+    assert.equal(cancelled.cancelled.length, 1);
+    assert.equal(value.tasks.get(value.task.task_id).status, 'CANCELLED');
+    const storedDispatch = value.tasks.getDispatch(dispatch.dispatch_id);
+    assert.equal(storedDispatch.status, 'LOST');
+    assert.equal(storedDispatch.completion.error_code, 'WORKFLOW_CANCELLED');
+    assert.equal(value.tasks.getRun(value.task.run_id).task.artifact_root_abs, value.task.artifact_root_abs);
+    assert.equal(auditControlDatabase(value.database).ok, true, JSON.stringify(auditControlDatabase(value.database)));
+  } finally { value.close(); }
+});
+
+test('NEEDS_REWORK creates a new controlled run instead of redispatching the completed run', () => {
+  const value = setup();
+  try {
+    const dispatch = readyAndRunning(value);
+    writeValidOutputs(value, 'NEEDS_REWORK');
+    const ingested = value.tasks.ingestCompletion(complete(value, dispatch));
+    assert.equal(ingested.task.status, 'NEEDS_REWORK');
+    assert.equal(value.tasks.getDispatch(dispatch.dispatch_id).status, 'SUCCEEDED');
+    const nextArtifact = join(value.directory, 'artifacts-rework');
+    const nextWorktree = join(value.directory, 'worktree-rework');
+    const nextTask = { ...value.task, run_id: 'RUN-task-kernel-rework-2', attempt: 2, status: 'CREATED',
+      artifact_root_abs: nextArtifact, worktree_path_abs: nextWorktree,
+      context_manifest_path_abs: join(nextArtifact, 'context-manifest.json'), allowed_write_paths_abs: [nextWorktree],
+      structured_outputs: value.task.structured_outputs.map((output) => ({ ...output,
+        path_abs: join(nextArtifact, 'output', output.path_abs.split(/[\\/]/u).at(-1)) })),
+      created_at: '2026-08-05T08:12:00.000Z', updated_at: '2026-08-05T08:12:00.000Z' };
+    const retried = value.tasks.retry(nextTask);
+    assert.equal(retried.event.from_status, 'NEEDS_REWORK');
+    assert.equal(retried.task.run_id, nextTask.run_id);
+    assert.equal(value.tasks.dispatches(value.task.task_id).length, 1, 'old completed dispatch remains immutable');
+    assert.equal(auditControlDatabase(value.database).ok, true, JSON.stringify(auditControlDatabase(value.database)));
+  } finally { value.close(); }
+});

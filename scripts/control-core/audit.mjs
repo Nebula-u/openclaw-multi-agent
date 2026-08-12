@@ -70,8 +70,9 @@ function auditTasks(database, errors) {
     // establish an Agent session (for example, spawn openclaw -> ENOENT).
     // failDispatch deliberately marks that outbox entry FAILED.  Error codes
     // from the operating system are not necessarily ORCHESTRATOR_* codes.
-    const localExecutionFailure = completion?.status === 'FAILED'
-      && (!receipt || /^(?:ORCHESTRATOR_|TASK_OUTPUT_|TASK_OUTPUT_INGESTION_)/u.test(String(completion.error_code ?? '')));
+    const localExecutionFailure = (completion?.status === 'FAILED'
+      && (!receipt || /^(?:ORCHESTRATOR_|TASK_OUTPUT_|TASK_OUTPUT_INGESTION_)/u.test(String(completion.error_code ?? ''))))
+      || (completion?.status === 'LOST' && completion.error_code === 'WORKFLOW_CANCELLED');
     const expectedOutboxStatus = localExecutionFailure ? 'FAILED' : receipt ? 'DELIVERED' : 'PENDING';
     if (!outbox || outbox.status !== expectedOutboxStatus) {
       errors.push({ code: 'DISPATCH_OUTBOX_MISMATCH', dispatch_id: row.dispatch_id, outbox_status: outbox?.status ?? null });

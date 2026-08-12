@@ -153,43 +153,65 @@ Agent 只可写 `.agent-raw` 暂存文件，不能写最终 `output/*.json`。�
 
 ## 安装或更新 Agent
 
-源码规则变更后，需要重新同步 runtime Agent。该脚本只处理 workspace 与 agentDir 和本项目 manifest 精确匹配的 7 个项目 Agent；不会处理 `main`、其他项目 Agent 或未注册的 `dialogue-agent`。
+源码中的 Agent 提示、规则、模板或受管配置变更后，优先使用幂等同步更新，**不删除、不重装现有 Agent**。普通 `install.ps1` / `install.sh` 会校验 Agent ID 与 workspace 路径：现有且兼容的 Agent 显示为 `KEEP`，不会执行 `openclaw agents add`；随后只同步 workspace、共享规则、模板和受管配置。脚本只处理本项目 manifest 声明的 7 个 Agent，不处理 `main`、其他项目 Agent 或未注册的 `dialogue-agent`。
 
-Windows（PowerShell，删除并重装已有项目 Agent）：
+更新前应确认没有正在运行的 workflow/task，再停止 Gateway。必须先执行 dry-run：7 个项目 Agent 都应显示为现有兼容项；如果出现 `ADD`、路径冲突或同名冲突，应停止并核对 runtime 路径，不要继续 apply。
+
+### Windows PowerShell：原地更新，不重装
+
+在项目根目录执行：
 
 ```powershell
-# 先停止 Gateway，并查看计划
+# 1. 确认没有运行中的任务，然后停止 Gateway
 openclaw gateway stop
-pwsh -NoProfile -File scripts/reinstall-agents.ps1 -RuntimeRoot runtime
 
-# 备份 → 删除已验证 Agent/runtime → 重装 → 校验
-pwsh -NoProfile -File scripts/reinstall-agents.ps1 `
-  -GatewayStopped -Apply -Yes -RuntimeRoot runtime
+# 2. Dry-run
+pwsh -NoProfile -File ".\scripts\install.ps1" `
+  -RuntimeRoot ".\runtime"
 
-# 启动并确认 Gateway
+# 3. 确认全部为 KEEP 后执行原地更新
+pwsh -NoProfile -File ".\scripts\install.ps1" `
+  -Apply -Yes -RuntimeRoot ".\runtime"
+
+# 4. 校验同步结果并重新启动 Gateway
+openclaw config validate --json
+node ".\scripts\runtime-bundle.mjs" verify `
+  --project-root "." --runtime-root ".\runtime"
+node ".\scripts\orchestrator.mjs" init --project-root "."
 openclaw gateway start
 openclaw gateway status
 ```
 
-Linux（Bash，首次安装或幂等同步；该脚本不会删除已有 Agent）：
+只更新指定 Agent 时，Windows 可在 dry-run 和 apply 命令中同时加入例如 `-AgentIds 'manager-agent,architect-agent'`；两次命令的 Agent 范围必须一致。
+
+### Linux 服务器：原地更新，不重装
+
+在项目根目录执行：
 
 ```bash
-# Linux：先在项目根目录安装 npm 依赖，再查看安装计划
-npm install
-bash scripts/install.sh --runtime-root runtime
+project_root="$(pwd -P)"
+runtime_root="$project_root/runtime"
+install_script="$project_root/scripts/install.sh"
 
-# Linux：写入 OpenClaw 配置并安装/同步项目 Agent
-bash scripts/install.sh --apply --yes --runtime-root runtime
+# 1. 确认没有运行中的任务，然后停止 Gateway
+openclaw gateway stop
 
-# Linux：验证安装、初始化控制面并启动 Gateway
-bash scripts/validate-install.sh
-PROJECT_ROOT="$(pwd -P)"
-node "$PROJECT_ROOT/scripts/orchestrator.mjs" init --project-root "$PROJECT_ROOT"
+# 2. Dry-run：所有已安装项目 Agent 都应是兼容项，不应计划创建新 Agent
+bash "$install_script" --runtime-root "$runtime_root"
+
+# 3. 原地同步 workspace、规则、模板与受管配置；不会删除或重建现有 Agent
+bash "$install_script" --apply --yes --runtime-root "$runtime_root"
+
+# 4. 校验同步结果并重新启动 Gateway
+openclaw config validate --json
+node "$project_root/scripts/runtime-bundle.mjs" verify \
+  --project-root "$project_root" --runtime-root "$runtime_root"
+node "$project_root/scripts/orchestrator.mjs" init --project-root "$project_root"
 openclaw gateway start
 openclaw gateway status
 ```
 
-备份位于 `runtime/control/reinstall-backups/<timestamp>/`。普通 `install.ps1` 不会删除已有 Agent；重装脚本要求显式 `-GatewayStopped`，且路径不匹配即拒绝删除。
+apply 前会把 OpenClaw 配置备份到 `runtime/control/config-snapshots/`。以上更新流程不调用 `scripts/reinstall-agents.ps1`，也不调用 `openclaw agents delete`；只有明确需要删除并重建 Agent 时才使用重装脚本。
 
 ## 将 Monitor 部署为 Linux 服务
 

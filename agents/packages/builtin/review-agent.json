@@ -11,7 +11,7 @@
   "runtime_subdir": "agents/review-agent",
   "role": "worker",
   "capabilities": ["code.review", "test.review", "security.review"],
-  "model": "",
+  "model": "deepseek/deepseek-v4-pro",
   "delegation": { "callable_by_manager": true, "allow_agents": [] },
   "sandbox_mode": null,
   "assembly": { "include_common_rules": true, "include_templates": false },
