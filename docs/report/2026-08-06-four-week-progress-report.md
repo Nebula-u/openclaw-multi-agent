@@ -59,7 +59,7 @@
 | 任务分配 | 部分完成 | Control Kernel 已提供 task 注册、校验、查询、dispatch prepare/receipt/outbox 与 result ingest；派发前校验上下文身份、输入哈希、依赖、路径、Agent policy 和结构化输出声明。 | 真实 `sessions_spawn` 仍需收束为不可绕过的统一编排 API，并补 `agentId` 预检、计划持久化回执和实机演练。 |
 | Requirement → Architect | 机制完成，实机待验 | Requirement/Architect 角色、审批评估、架构变更 Gate、上下文与规则快照、HOLD/恢复机制均已具备。 | 尚未提交一条新的真实需求到架构业务 workflow 作为验收样本。 |
 | Developer 简单功能开发 | 基础样例存在，v2 待验 | 第一周 Demo 已有本地 branch/worktree/commit；v2 task 验证能约束 worktree、输入和结构化结果。 | 需要新建受控小程序任务，让 Developer 在 v2 工作流中实际提交代码，再由后续 Agent 验收。 |
-| 上下文管理 | 基本完成 | Manager 有 context identity、规则快照、input hash、task package、文件化恢复和 80% 会话软预算；模型路由已统一到 DeepSeek V4 Pro Chat Completions。 | 尚未完成按 run 记录 token/cost 的完整台账；需防止 Manager 直接携带过量历史。 |
+| 上下文管理 | 基本完成 | Manager 有 context identity、规则快照、input hash、task package、文件化恢复和会话软预算；模型通过配置按 Agent 静态选择。 | 尚未完成按 run 记录 token/cost 的完整台账；需防止 Manager 直接携带过量历史。 |
 | 审批机制 | 核心完成 | approval request/response、审批评估、风险 Gate、HOLD、恢复与作用域绑定已实现。 | 应在统一 dispatch 状态机中强制执行，覆盖大架构变更和大范围代码修改的真实场景。 |
 
 ### 第二周交付成熟度
