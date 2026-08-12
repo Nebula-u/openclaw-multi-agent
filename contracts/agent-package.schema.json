@@ -67,12 +67,15 @@
           "additionalProperties": false,
           "properties": {
             "image": { "type": "string", "minLength": 1 },
+            "workdir": { "type": "string", "minLength": 1 },
             "network": { "type": "string", "minLength": 1 },
             "readOnlyRoot": { "type": "boolean" },
             "capDrop": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
             "pidsLimit": { "type": "integer", "exclusiveMinimum": 0 },
             "memory": { "type": ["string", "number"] },
-            "cpus": { "type": "number", "exclusiveMinimum": 0 }
+            "cpus": { "type": "number", "exclusiveMinimum": 0 },
+            "dangerouslyAllowExternalBindSources": { "type": "boolean" },
+            "dangerouslyAllowReservedContainerTargets": { "type": "boolean" }
           }
         }
       }

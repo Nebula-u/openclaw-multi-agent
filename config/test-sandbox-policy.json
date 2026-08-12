@@ -14,12 +14,15 @@
   "elevated_enabled": false,
   "docker": {
     "image": "openclaw-test-node:22-slim",
+    "workdir": "/workspace",
     "network": "none",
     "read_only_root": true,
     "cap_drop": ["ALL"],
     "pids_limit": 256,
     "memory": "2g",
-    "cpus": 2
+    "cpus": 2,
+    "dangerously_allow_external_bind_sources": true,
+    "dangerously_allow_reserved_container_targets": false
   },
   "mounts": {
     "worktree": { "container_path": "/worktree", "mode": "rw" },

@@ -16,6 +16,14 @@
 - `command-record`、`result` 和 `release-decision` 契约新增 `SANDBOXED_DOCKER` 与 sandbox 运行时字段，同时保留 `UNSANDBOXED_LOCAL` 以兼容历史 artifact。
 - 新 test-agent 运行记录后续必须由 attestation 证明 Docker sandbox；本轮尚未接入 dispatch 生命周期。
 
+### 强制 test-agent Docker sandbox（Round 3，2026-08-12）
+
+- 将 OpenClaw 命令解析、Windows 参数传递和进程树终止抽到独立 `process-utils.mjs`，消除 sandbox runtime 与 Agent runner 的循环依赖；Windows 下可直接调用已解析的 OpenClaw Node entry，避免 JSON bind 参数被 `cmd` 破坏。
+- Orchestrator 现在在 test-agent 派发前生成每次运行的 sandbox lease，执行动态 bind 的 dry-run、配置应用、session recreate、`sandbox explain` 和 Docker inspect；任一步失败都阻断派发，不回退到宿主机执行。
+- 每次运行只挂载 worktree、只读 input、staged raw output 和 raw logs；输入 manifest、task 和声明的输入文件会复制到容器可见路径，并在复制前校验 SHA-256。容器内统一使用 `/worktree`、`/input`、`/agent-raw`、`/raw-logs` 和 `/workspace`。
+- test-agent 进程结束时强制验证容器身份、镜像、工作目录、network、只读根、capDrop、资源限制和挂载，再清理 session 并恢复原有 bind；结果缺少 `SANDBOXED_DOCKER` 或 attestation 会被 Orchestrator 拒绝。
+- 新增命令边界 mock 测试、容器路径 staging 测试和 prepare/verify/restore 闭环测试；定向结果为 sandbox runtime 6/6、Orchestrator 10/10、Runtime Guard self-check 35 contracts/10 templates。Windows 上组合测试进程未正常退出，未将其计为通过；Docker Desktop Linux Engine 当前不可用，因此真实 Docker E2E 仍待环境恢复后执行。
+
 ### 通用静态模型配置与协议清理（2026-08-12）
 
 - 保留 Agent package 当前默认模型，不触发已安装 Agent 的隐式换模。
