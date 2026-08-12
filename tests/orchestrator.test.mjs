@@ -80,17 +80,17 @@ async function dispatchAndReconcile(value, runner) {
   });
 }
 
-test('execution policy rejects timeout or lease values above the five-minute small-project ceiling', () => {
-  assert.deepEqual(resolveExecutionPolicy(ROOT, 'ARCHITECTURE'), { timeoutSeconds: 300, leaseSeconds: 300 });
+test('execution policy rejects timeout or lease values above the fifteen-minute Agent ceiling', () => {
+  assert.deepEqual(resolveExecutionPolicy(ROOT, 'ARCHITECTURE'), { timeoutSeconds: 900, leaseSeconds: 900 });
   assert.throws(
-    () => resolveExecutionPolicy(ROOT, 'ARCHITECTURE', { timeoutSeconds: 301 }),
+    () => resolveExecutionPolicy(ROOT, 'ARCHITECTURE', { timeoutSeconds: 901 }),
     (error) => error.code === 'ORCHESTRATOR_EXECUTION_POLICY_INVALID',
   );
   assert.throws(
-    () => resolveExecutionPolicy(ROOT, 'ARCHITECTURE', { leaseSeconds: 301 }),
+    () => resolveExecutionPolicy(ROOT, 'ARCHITECTURE', { leaseSeconds: 901 }),
     (error) => error.code === 'ORCHESTRATOR_EXECUTION_POLICY_INVALID',
   );
-  assert.throws(() => validateAgentTimeoutSeconds(301), /between 1 and 300 seconds/u);
+  assert.throws(() => validateAgentTimeoutSeconds(901), /between 1 and 900 seconds/u);
 });
 
 test('local Orchestrator derives worker, session, receipts and completion from one READY task', async () => {
@@ -117,11 +117,11 @@ test('local Orchestrator derives worker, session, receipts and completion from o
     });
     assert.equal(result.ok, true, JSON.stringify(result));
     assert.equal(request.agentId, AGENT);
-    assert.equal(request.timeoutSeconds, 300);
+    assert.equal(request.timeoutSeconds, 900);
     assert.match(request.messagePath, /\.orchestrator/u);
     const launcher = JSON.parse(readFileSync(started.launcher.launcher_path_abs, 'utf8'));
-    assert.equal(launcher.timeout_seconds, 300);
-    assert.equal(launcher.lease_seconds, 300);
+    assert.equal(launcher.timeout_seconds, 900);
+    assert.equal(launcher.lease_seconds, 900);
     const database = openControlDatabase(value.databasePath);
     try {
       const tasks = createTaskRepository(ROOT, database);

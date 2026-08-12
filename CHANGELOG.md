@@ -2,6 +2,28 @@
 
 ## [Unreleased] - 2026-08-07
 
+### 通用静态模型配置与协议清理（2026-08-12）
+
+- 保留 Agent package 当前默认模型，不触发已安装 Agent 的隐式换模。
+- 将模型覆盖接口收敛为项目根 `.env`，支持每个 Agent 静态配置不同 `provider/model`；旧 `agent-models.json` 仅保留为兼容回退，禁止运行时自主选模。
+- 新增 OpenAI Chat Completions provider 模板：128k context、49,152 输出上限和 `max_completion_tokens` 字段，不含凭据。
+- Manager 上下文软阈值调整为 76,800，单个持久 session 累计 token 上限为 200k；两者不被当作单次请求窗口。
+- 删除厂商专属路由/provider 样例、Responses 协议内容及对应测试锁定；JSON 清洗、Ajv、失败证据链保持 provider 无关。
+
+### `.env` 更新与 Gateway reload 流程（2026-08-12）
+
+- 明确项目根 `.env` 由安装器和 Node 控制面按需读取，OpenClaw Gateway/Monitor 不会自动监视 `.env` 文件变化。
+- 更新 Agent 模型、provider、上下文或输出限制时，流程统一为 `install.ps1` / `install.sh` dry-run → apply → `config validate` / runtime bundle verify → `openclaw gateway restart --safe`；不再要求每次执行 `orchestrator.mjs init`。
+- 明确 dry-run 可在 Gateway 运行时执行；apply 前仍须确认没有活动 workflow/task。仅修改 Manager soft budget 等控制面参数无需 Gateway 重启；修改 `MONITOR_*` 后需单独重启 Monitor 服务。
+- 修复 PowerShell 安装器在完全幂等同步时将空变更列表误判为缺失参数的问题；`install.ps1 -Apply` 现在允许模型目录和 Agent 配置均已一致的无变更路径正常完成。
+
+### 轻量 StateGraph、持久 Supervisor 与 Agent 会话控制台（2026-08-12）
+
+- StateGraph 使用 `control.db` 内的 SQLite checkpointer，Supervisor 可从 checkpoint 恢复并以固定代码续跑，只在有限决策点唤醒 Manager。
+- Agent 执行、dispatch lease、工具宽限和 JSON 契约调用上限统一为 900 秒；Manager wake 与健康检测保持短周期。
+- Monitor 新增全部 Agent、session 索引和安全对话 API；控制台左侧显示所有已创建 Agent，右侧支持 session 切换和完整 user/assistant 历史。
+- 删除旧的任务/Agent 摘要 activity HTTP 路径，保留健康判定和 SSE 所需 session tailer，以及 Control Kernel、回执、审批、投影恢复等兼容边界。
+
 ### Orchestrator Windows 派发恢复与 Manager 旁路收敛（2026-08-11）
 
 #### 变更（Changed）
@@ -11,7 +33,7 @@
 - launcher locator 在 Control Kernel 准备事务前持久化，缩小“已登记 dispatch 但没有恢复定位信息”的崩溃窗口；移除旧的同步 Agent spawn/ingestion 路径，所有正式 dispatch 统一走 detached runner。
 - 对历史上没有 launcher 证据的 dispatch，`dispatch-reconcile` 返回 `RECOVERY_REQUIRED`，不凭聊天记录、session transcript 或残留文件伪造 completion，也不擅自标记失败；后续必须重新建立受控、可审计的 run。
 - StateGraph 在 task 已 `DISPATCHED/RUNNING` 时返回 `RUNNING`，不再等待长时间 Agent 进程；下一轮只通过原 dispatch 对账，不重复派发。
-- 小型项目的 Agent 执行超时、dispatch lease、manager 唤醒和监控宽限期统一封顶为 300 秒；外部传入 301 秒以上的配置会 fail-closed，runner 不再额外增加 5 秒等待。Agent JSON 契约测试工具采用相同上限。
+- Agent 执行超时、dispatch lease、Agent 工具运行宽限期和 Agent JSON 契约测试统一封顶为 900 秒；外部传入 901 秒以上的配置会 fail-closed。Manager 唤醒与健康检测保持更短的独立上限。
 - Manager 规则增加人工应急恢复边界：即使用户批准恢复，也只能调用 `dispatch-reconcile`，不得直接执行 `openclaw.cmd`、手工写 SQLite、伪造状态或跳过 test/review/release 阶段。
 - Manager 会话策略增加 `summary_only` 用户可见输出约束，禁止逐工具播报、源码探查、session tail 和模型思考过程。
 
@@ -54,7 +76,7 @@
 
 #### 变更（Changed）
 
-- Requirement、Test、Release 和生成的 Dialogue Agent 固定使用 `deepseek-v4-flash`；Manager、Architect、Developer、Review 保留 `deepseek-v4-pro`。
+- Requirement、Test、Release 和生成的 Dialogue Agent 使用轻量模型；Manager、Architect、Developer、Review 使用高能力模型。该历史分级现已由通用静态 per-Agent 配置替代。
 - 模型只在 package/安装配置阶段静态确定，本轮不增加按 task、token 或失败状态动态选模。
 - Manager 会话软预算从上下文窗口的 80%/160k 下调到 60%/120k，默认 thinking 从 `high` 下调到 `medium`。
 - Manager 默认只读取 `--view manager` 紧凑 snapshot；完整 Control Kernel snapshot、历史 task、receipt、completion payload 和 raw log 改为按 locator 读取。
@@ -430,7 +452,7 @@
 
 #### 改动了什么
 
-- 将 `deepseek` 与 `mydeep` 路由下的 `deepseek-v4-pro`、`deepseek-v4-flash` 的显式 `maxTokens` 统一设为 `49152`，并为每个自定义模型声明 `compat.maxTokensField: "max_tokens"`。
+- 将当时自定义模型的显式 `maxTokens` 统一设为 `49152`。当前通用 OpenAI Chat Completions 模板继续保持该输出上限。
 - 该配置覆盖 OpenClaw 模型目录中 Pro 的 8192 和 Flash 的 16384 隐式输出上限，应用于当前注册的 `manager-agent`、`requirement-agent`、`architect-agent`、`developer-agent`、`review-agent`、`test-agent`、`release-agent`。
 
 #### 为什么要改
@@ -452,7 +474,7 @@
 
 #### 验证
 
-- 2026-08-05 已在当前 OpenClaw 环境预演并执行完整卸载和重建：仅处理 `manager-agent`、`requirement-agent`、`architect-agent`、`developer-agent`、`review-agent`、`test-agent`、`release-agent`；未安装或更改 `dialogue-agent`。随后以 `config/agent-models.deepseek-routing.example.json` 恢复这些 Agent 的原有 DeepSeek V4 Pro 路由。
+- 2026-08-05 已在当前 OpenClaw 环境预演并执行完整卸载和重建：仅处理 7 个内置项目 Agent，未安装或更改 `dialogue-agent`。本轮改造后改用通用 `config/agent-models.example.json` 进行显式静态覆盖。
 - `openclaw config validate --json` 通过；`openclaw agents list --json` 为平台 `main` 加上述 7 个项目 Agent。
 - `runtime-bundle.mjs verify` 通过（105 entries，SHA-256 `da0fa5ddba12449a9077ffed06f4b3514062f18d209c4d3f310131e1826f3a3d`）；Control Kernel audit 为 `CONSISTENT`。
 - `npm run test:runtime-bundle`（3 项）和 `node --test tests/validate-install.test.mjs`（2 项）通过。
@@ -640,20 +662,20 @@
 - `task.json` 新增 `structured_outputs[]`。Manager 必须声明跨 Agent JSON/JSONL 的产出路径、Schema、格式、是否必需和产出 Agent；完成任务由 Guard 再次以 Ajv 校验声明产物。
 - 新增 `config/manager-session-policy.json`，保持 `thinking=high` 和 200k 模型窗口，同时将 Manager 会话软预算设为 80%（160k token），达到预算后从文件化状态创建新会话恢复。
 - 已将运行中的 `WF-ef1c5f87-93c5-4ec7-a074-3dea54831ca1` 正式隔离为 `QUARANTINED`，保留原始控制面、artifact 与 Guard 错误证据，不再参与恢复。
-- 清除了 `manager-agent` 父会话及当时两个 TUI 会话遗留的 `providerOverride`、`modelOverride` 与 `modelOverrideSource`。这些会话级字段曾将 Manager 的实际调用模型固定为 DeepSeek。
+- 清除了 `manager-agent` 父会话及当时两个 TUI 会话遗留的 `providerOverride`、`modelOverride` 与 `modelOverrideSource`。这些会话级字段曾将 Manager 的实际调用模型固定为旧 provider。
 - 保持 OpenClaw Agent 配置的 Manager 默认模型为 `newapi-responses/gpt-5.6-luna`，未改动其余 6 个项目 Agent、平台 `main` Agent、模型凭据或历史工作流会话。
 - 规定后续项目改动须在用户完成检查/验收后，同步更新本文件、`README.md` 与 `docs/current-progress-assessment.md`，记录变更、验证结果、完成状态与遗留风险。
-- 7 个 Agent 的项目配置与路由样例统一改为官方 `deepseek/deepseek-v4-pro` + Chat Completions API；不再将任何默认 Agent 路由到 Responses API。
+- 7 个 Agent 的项目配置统一使用 Chat Completions API；当前仅保留通用 OpenAI Chat Completions provider 模板。
 - JSON/JSONL LLM 回复链路新增保守清洗：去 BOM、去唯一 Markdown fence、或从唯一解释性前后缀中提取完整 JSON/JSONL；多个候选一律拒绝猜测，并记录原始/清洗 SHA-256 与转换元数据。
 - 新增 enum、type、schema drift、输出截断和空 content 的固定重写模板；所有类别共用首次调用之外最多两次的同会话重试预算。核心 `result`、`task` 与 JSON 校验错误契约为身份、状态、枚举、结构化产物和错误字段增加了描述。
-- 新增 `docs/llm-json-recovery.md`，记录清洗边界、两段可复核模板和 DeepSeek JSON Output 的官方要求与当前 Gateway 限制。本项实现与文档为待用户验收状态。
+- 新增 `docs/llm-json-recovery.md`，记录厂商无关的清洗边界和两段可复核模板。
 
 ### 为什么要改
 
 - 历史 workflow 在 manifest、输入哈希、任务事件和 worktree 路径上发生不一致，导致 Guard 正确 fail-closed；此前缺少派发前预检与可审计的隔离出口。
 - 同一 Manager 会话持续携带完整工具日志和失败记录，造成 token 消耗与流中断风险；当前实际使用未触及 200k 上限，因此扩大窗口不能解决问题。
 - 既有 Ajv 校验未把所有任务声明的结构化产物纳入控制面复检。
-- `openclaw models status --agent manager-agent --check` 显示的 Agent 默认模型已正确配置为 Luna，但 TUI 创建的新会话会继承父会话保存的 DeepSeek 覆盖，导致界面和实际调用与项目模型路由不一致。
+- `openclaw models status --agent manager-agent --check` 显示 Agent 默认模型正确，但 TUI 新会话会继承父会话保存的旧模型覆盖，导致界面和实际调用不一致。
 - 仅修正运行时配置不足以防止会话层覆盖重新造成误判；项目状态、用户可见操作说明和变更历史也需要在验收后保持一致。
 
 ### 改后的效果
@@ -662,10 +684,10 @@
 - 无法在不篡改不可变历史的前提下修复的 workflow 可以被隔离并从恢复索引移除；新任务必须从新的 workflow 重建。
 - 已声明 JSON/JSONL 产物在完成时必须通过其受信任 contract；聊天文本和 Markdown 摘要不能单独推动状态。
 - Manager 在 160k token 时换新会话并由 `recovery-check` 从文件恢复，避免用扩大窗口掩盖上下文累积。
-- 重新启动 Manager TUI 后，新会话会使用 `newapi-responses/gpt-5.6-luna`，不再继承 `deepseek/deepseek-v4-flash`。
+- 重新启动 Manager TUI 后，新会话不再继承旧模型覆盖。
 - 已存在的历史会话和工作流产物保留原始记录；本次只移除了会改变后续调用路由的覆盖字段。
 - 后续状态不会在未完成用户检查时提前标记为已验证；验收后将由三份项目文档共同反映实际状态。
-- 配置样例与路由文档已统一到 DeepSeek V4 Pro Chat Completions，避免当前 Gateway 的 Responses 路径限制影响 Agent 调用。
+- 配置样例与路由文档已统一到通用 Chat Completions 配置。
 - 格式错误不再依赖模型自我修复：已知包装问题可确定性清除，enum/type 不合法、schema drift 和截断会获得精确诊断并 fail-closed；两次重写后仍失败保留全链路证据。
 
 ### 验证
@@ -673,8 +695,8 @@
 - `npm test` 通过：82 项 Runtime Guard 测试通过，2 项因当前 Windows 会话无符号链接权限跳过；离线 LLM harness 8 项和安装验证 2 项通过。
 - `check-workflow` 已对被隔离 workflow 返回 `effective_status=QUARANTINED`、`state_revision=9`、`event_count=9`。
 - Manager 父会话及相关 TUI 会话均已确认不存在 provider/model override。
-- `openclaw config validate` 已验证当前 OpenClaw 配置；7 个 Agent 的有效模型统一为 `deepseek/deepseek-v4-pro`。
-- 待本次变更完成后运行 `npm test`、`git diff --check` 与安装校验；真实 DeepSeek 调用不在本地离线测试中执行。
+- `openclaw config validate` 已验证当时 OpenClaw 配置；当前改造不修改 7 个 Agent package 的默认模型字段。
+- 待本次变更完成后运行 `npm test`、`git diff --check` 与安装校验；真实外部模型调用不在本地离线测试中执行。
 
 ## [0.2.2] - 2026-07-30
 

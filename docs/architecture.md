@@ -1,6 +1,6 @@
 # 总体架构：Control Kernel v2
 
-> 文档日期：2026-08-10
+> 文档日期：2026-08-12
 
 ## 核心结论
 
@@ -12,8 +12,10 @@ OpenClaw Agent 层
                          │                    │
                          └──────────┬─────────┘
                                     ▼
-                  Control Kernel v2
+                  SQLite durable core
                     runtime/control/control.db
+                 ┌──────────┴──────────┐
+       workflow/task/dispatch facts   LangGraph checkpoints
                          │
               ┌──────────┴──────────┐
               ▼                     ▼
@@ -21,11 +23,12 @@ OpenClaw Agent 层
     runtime/control/v2/**       内部续跑 / 公开只读查询
 ```
 
-StateGraph Runner 是轻量执行层，不是新的状态数据库。每轮先审计并读取 Control DB，只执行一个有界动作；所有 workflow mutation 仍提交给 Control Kernel reducer，task 派发仍由本地 Orchestrator 完成。Supervisor Core 在 durable launcher 结果出现后自动 reconcile，并连续执行有限个确定性 Graph turn；到 `NEEDS_TASK`、`WAITING_HUMAN` 或 `HOLD` 时停止并按需唤醒 manager。进程重启后从 SQLite 重建，不依赖 LangGraph checkpoint。
+StateGraph Runner 是轻量执行层，不建立第二个数据库。每轮先审计并读取业务事实，只执行一个有界动作；所有 workflow mutation 仍提交给固定 reducer，task 派发仍由本地 Orchestrator 完成。Graph checkpoint 和 pending writes 也落在同一个 `control.db`，以 `workflow_id` 作为 `thread_id`。Supervisor Core 在 durable launcher 结果出现后自动 reconcile，并连续执行有限个确定性 Graph turn；只在 `NEEDS_TASK`、`HOLD` 或 `FAILED` 等需要判断的位置唤醒 Manager。进程重启后先恢复 checkpoint，再以业务事实校正状态。
 
 ## 权威边界
 
 - `runtime/control/control.db` 是 workflow/task/run/dispatch/approval 的唯一当前事实源。
+- `langgraph_checkpoints` 与 `langgraph_checkpoint_writes` 只保存 Graph 续跑信息，不替代业务事实表。
 - `config/control-state-machine-v2.json` 是新 workflow 的状态机；reducer 根据命令计算下一状态。
 - `runtime/control/v2/**` 是数据库派生的只读投影，删除或漂移后可由 `recover` 重建，不能反向写回数据库。
 - `active_workflows` 是 SQLite view，不再维护一份可写的活动数组。
@@ -65,7 +68,7 @@ Control Kernel 的 `result-ingest` 还会按 task 固定的 `structured_outputs`
 ```text
 runtime/
 ├── control/
-│   ├── control.db                         # v2 唯一当前状态源
+│   ├── control.db                         # 业务事实 + LangGraph checkpoint
 │   ├── v2/                                # 可删除重建的只读投影
 │   │   ├── active-workflows.json
 │   │   └── workflows/<workflow-id>/{workflow.json,events.jsonl,projection.json}

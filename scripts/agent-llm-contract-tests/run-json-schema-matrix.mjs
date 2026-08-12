@@ -302,7 +302,7 @@ function usage() {
     '  --scenario <name>          Run one or more stable scenario names; repeatable.',
     '  --run-id <id>              Safe output/session run identifier.',
     '  --output-root <path>       Output root (default: artifacts/agent-json-schema-matrix).',
-    '  --timeout-seconds <n>      Per-call timeout in seconds (default/max: 300).',
+    '  --timeout-seconds <n>      Per-call timeout in seconds (default/max: 900).',
     '  --help                     Print this help.',
   ].join('\n');
 }

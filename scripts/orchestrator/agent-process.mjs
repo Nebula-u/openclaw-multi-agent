@@ -6,7 +6,7 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { atomicWriteJson } from '../runtime-core/atomic-store.mjs';
 
-export const MAX_AGENT_TIMEOUT_SECONDS = 300;
+export const MAX_AGENT_TIMEOUT_SECONDS = 900;
 
 export function validateAgentTimeoutSeconds(value) {
   const timeoutSeconds = Number(value);

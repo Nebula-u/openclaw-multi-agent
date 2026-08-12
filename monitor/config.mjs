@@ -1,5 +1,6 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
+import { loadProjectEnvironment } from '../scripts/config/dotenv.mjs';
 
 function integer(value, fallback) {
   if (value === undefined || value === null || value === '') return fallback;
@@ -8,9 +9,9 @@ function integer(value, fallback) {
   return parsed;
 }
 
-function boundedSeconds(value, fallback, name) {
+function boundedSeconds(value, fallback, name, maximum = 300) {
   const parsed = integer(value, fallback);
-  if (parsed > 300) throw new Error(`${name} must not exceed 300 seconds`);
+  if (parsed > maximum) throw new Error(`${name} must not exceed ${maximum} seconds`);
   return parsed;
 }
 
@@ -27,22 +28,6 @@ function readConfig(path) {
   return JSON.parse(readFileSync(path, 'utf8'));
 }
 
-function readEnvironmentFile(path) {
-  if (!existsSync(path)) return {};
-  const values = {};
-  for (const rawLine of readFileSync(path, 'utf8').split(/\r?\n/u)) {
-    const line = rawLine.trim();
-    if (!line || line.startsWith('#')) continue;
-    const separator = line.indexOf('=');
-    if (separator <= 0) continue;
-    const name = line.slice(0, separator).trim();
-    let value = line.slice(separator + 1).trim();
-    if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) value = value.slice(1, -1);
-    values[name] = value;
-  }
-  return values;
-}
-
 function expandEnvironment(value) {
   if (typeof value !== 'string') return value;
   return value.replace(/%([A-Za-z_][A-Za-z0-9_]*)%/gu, (_, name) => process.env[name] ?? `%${name}%`)
@@ -51,8 +36,8 @@ function expandEnvironment(value) {
 
 export function loadMonitorConfig(overrides = {}) {
   const projectRoot = resolve(overrides.projectRoot ?? process.env.OPENCLAW_PROJECT_ROOT ?? process.cwd());
-  const localEnvironment = readEnvironmentFile(join(projectRoot, '.env'));
-  const environment = (name) => process.env[name] ?? localEnvironment[name];
+  const localEnvironment = loadProjectEnvironment(projectRoot);
+  const environment = (name) => localEnvironment[name];
   const fileConfig = readConfig(overrides.configPath ?? process.env.MONITOR_CONFIG_PATH);
   const runtimeRoot = resolve(overrides.runtimeRoot ?? environment('OPENCLAW_RUNTIME_ROOT') ?? fileConfig.runtime_root ?? join(projectRoot, 'runtime'));
   const allowedOrigins = overrides.allowedOrigins ?? fileConfig.allowed_origins
@@ -76,7 +61,7 @@ export function loadMonitorConfig(overrides = {}) {
     heartbeatStaleSeconds: boundedSeconds(overrides.heartbeatStaleSeconds ?? fileConfig.heartbeat_stale_seconds, 180, 'heartbeat_stale_seconds'),
     possiblyStalledSeconds: boundedSeconds(overrides.possiblyStalledSeconds ?? fileConfig.possibly_stalled_seconds, 300, 'possibly_stalled_seconds'),
     startingTimeoutSeconds: boundedSeconds(overrides.startingTimeoutSeconds ?? fileConfig.starting_timeout_seconds, 120, 'starting_timeout_seconds'),
-    toolRunningGraceSeconds: boundedSeconds(overrides.toolRunningGraceSeconds ?? fileConfig.tool_running_grace_seconds, 300, 'tool_running_grace_seconds'),
+    toolRunningGraceSeconds: boundedSeconds(overrides.toolRunningGraceSeconds ?? fileConfig.tool_running_grace_seconds, 900, 'tool_running_grace_seconds', 900),
     supervisionCooldownSeconds: integer(overrides.supervisionCooldownSeconds ?? fileConfig.supervision_cooldown_seconds, 300),
     managerWakeEnabled: boolean(overrides.managerWakeEnabled ?? fileConfig.manager_wake_enabled, true),
     managerSessionKey: overrides.managerSessionKey ?? process.env.MANAGER_SESSION_KEY ?? fileConfig.manager_session_key ?? null,

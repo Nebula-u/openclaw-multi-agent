@@ -28,6 +28,42 @@ function Read-JsonFile {
   }
 }
 
+function Read-DotEnv {
+  param([Parameter(Mandatory)][string]$ProjectRoot)
+  $values = @{}
+  $path = Join-Path $ProjectRoot '.env'
+  if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { return $values }
+  foreach ($rawLine in (Get-Content -LiteralPath $path)) {
+    $line = ([string]$rawLine).Trim()
+    if (-not $line -or $line.StartsWith('#')) { continue }
+    if ($line -notmatch '^(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$') { continue }
+    $value = $Matches[2].Trim()
+    if ($value.Length -ge 2 -and (($value.StartsWith('"') -and $value.EndsWith('"')) -or ($value.StartsWith("'") -and $value.EndsWith("'")))) {
+      $value = $value.Substring(1, $value.Length - 2)
+    }
+    $values[$Matches[1]] = $value
+  }
+  return $values
+}
+
+function Get-ProjectEnvironmentValue {
+  param(
+    [Parameter(Mandatory)][hashtable]$DotEnv,
+    [Parameter(Mandatory)][string]$Name,
+    [string]$Default = ''
+  )
+  $processValue = [Environment]::GetEnvironmentVariable($Name)
+  if ($null -ne $processValue -and $processValue -ne '') { return [string]$processValue }
+  if ($DotEnv.ContainsKey($Name) -and $null -ne $DotEnv[$Name] -and [string]$DotEnv[$Name] -ne '') { return [string]$DotEnv[$Name] }
+  return $Default
+}
+
+function Test-ProjectEnvironmentKey {
+  param([Parameter(Mandatory)][hashtable]$DotEnv, [Parameter(Mandatory)][string]$Name)
+  $processValue = [Environment]::GetEnvironmentVariable($Name)
+  return (($null -ne $processValue -and $processValue -ne '') -or ($DotEnv.ContainsKey($Name) -and [string]$DotEnv[$Name] -ne ''))
+}
+
 function ConvertFrom-OpenClawJsonOutput {
   param(
     [Parameter(Mandatory)][AllowEmptyString()][string]$Output,
@@ -90,6 +126,7 @@ function Get-AgentPackages {
   if ($manifestPaths.Count -eq 0) { throw '未发现任何 Agent package manifest。' }
 
   $modelOverrides = $null
+  $dotEnv = Read-DotEnv -ProjectRoot $projectAbs
   if ($ModelConfig) {
     $modelPath = if ([System.IO.Path]::IsPathRooted($ModelConfig)) {
       Get-NormalizedPath $ModelConfig
@@ -143,6 +180,7 @@ function Get-AgentPackages {
     }
 
     $model = if ($m.PSObject.Properties.Name -contains 'model') { [string]$m.model } else { '' }
+    $envModelKey = 'OPENCLAW_AGENT_' + $id.Replace('-', '_').ToUpperInvariant() + '_MODEL'
     if ($modelOverrides -and $modelOverrides.PSObject.Properties.Name -contains 'agents') {
       $agentProperty = $modelOverrides.agents.PSObject.Properties[$id]
       if ($agentProperty -and $agentProperty.Value -and $agentProperty.Value.PSObject.Properties.Name -contains 'model') {
@@ -150,6 +188,29 @@ function Get-AgentPackages {
         if ($override) { $model = $override }
       }
     }
+    $processModel = [Environment]::GetEnvironmentVariable($envModelKey)
+    $fileModel = if ($dotEnv.ContainsKey($envModelKey)) { [string]$dotEnv[$envModelKey] } else { '' }
+    $globalProcessModel = [Environment]::GetEnvironmentVariable('OPENCLAW_LLM_MODEL')
+    $globalFileModel = if ($dotEnv.ContainsKey('OPENCLAW_LLM_MODEL')) { [string]$dotEnv.OPENCLAW_LLM_MODEL } else { '' }
+    if ($processModel) { $model = $processModel }
+    elseif ($fileModel) { $model = $fileModel }
+    elseif ($globalProcessModel) { $model = $globalProcessModel }
+    elseif ($globalFileModel) { $model = $globalFileModel }
+
+    $agentPrefix = 'OPENCLAW_AGENT_' + $id.Replace('-', '_').ToUpperInvariant() + '_'
+    $provider = Get-ProjectEnvironmentValue -DotEnv $dotEnv -Name ($agentPrefix + 'PROVIDER') -Default (Get-ProjectEnvironmentValue -DotEnv $dotEnv -Name 'OPENCLAW_LLM_PROVIDER')
+    if ($model -match '/') { $provider = $model.Split('/', 2)[0] }
+    $providerPrefix = if ($provider) { 'OPENCLAW_PROVIDER_' + $provider.Replace('-', '_').ToUpperInvariant() + '_' } else { '' }
+    $api = Get-ProjectEnvironmentValue -DotEnv $dotEnv -Name ($agentPrefix + 'API') -Default (Get-ProjectEnvironmentValue -DotEnv $dotEnv -Name ($providerPrefix + 'API') -Default (Get-ProjectEnvironmentValue -DotEnv $dotEnv -Name 'OPENCLAW_LLM_API' -Default 'openai-completions'))
+    $baseUrl = Get-ProjectEnvironmentValue -DotEnv $dotEnv -Name ($agentPrefix + 'BASE_URL') -Default (Get-ProjectEnvironmentValue -DotEnv $dotEnv -Name ($providerPrefix + 'BASE_URL') -Default (Get-ProjectEnvironmentValue -DotEnv $dotEnv -Name 'OPENCLAW_LLM_BASE_URL' -Default 'https://api.openai.com/v1'))
+    $contextWindowTokens = [int64](Get-ProjectEnvironmentValue -DotEnv $dotEnv -Name ($agentPrefix + 'CONTEXT_WINDOW_TOKENS') -Default (Get-ProjectEnvironmentValue -DotEnv $dotEnv -Name 'OPENCLAW_LLM_CONTEXT_WINDOW_TOKENS' -Default '128000'))
+    $maxOutputTokens = [int64](Get-ProjectEnvironmentValue -DotEnv $dotEnv -Name ($agentPrefix + 'MAX_OUTPUT_TOKENS') -Default (Get-ProjectEnvironmentValue -DotEnv $dotEnv -Name 'OPENCLAW_LLM_MAX_OUTPUT_TOKENS' -Default '49152'))
+    $maxTokensField = Get-ProjectEnvironmentValue -DotEnv $dotEnv -Name ($agentPrefix + 'MAX_TOKENS_FIELD') -Default (Get-ProjectEnvironmentValue -DotEnv $dotEnv -Name 'OPENCLAW_LLM_MAX_TOKENS_FIELD' -Default 'max_completion_tokens')
+    if ($contextWindowTokens -le 0 -or $maxOutputTokens -le 0) { throw "Agent '$id' 的 context/max output 必须为正整数。" }
+    $qualifiedModel = $model -match '/'
+    $globalTransport = (-not $qualifiedModel) -or ($provider -eq 'openai')
+    $apiExplicit = (Test-ProjectEnvironmentKey -DotEnv $dotEnv -Name ($agentPrefix + 'API')) -or (($providerPrefix) -and (Test-ProjectEnvironmentKey -DotEnv $dotEnv -Name ($providerPrefix + 'API'))) -or ($globalTransport -and (Test-ProjectEnvironmentKey -DotEnv $dotEnv -Name 'OPENCLAW_LLM_API'))
+    $baseUrlExplicit = (Test-ProjectEnvironmentKey -DotEnv $dotEnv -Name ($agentPrefix + 'BASE_URL')) -or (($providerPrefix) -and (Test-ProjectEnvironmentKey -DotEnv $dotEnv -Name ($providerPrefix + 'BASE_URL'))) -or ($globalTransport -and (Test-ProjectEnvironmentKey -DotEnv $dotEnv -Name 'OPENCLAW_LLM_BASE_URL'))
 
     $sandbox = $null
     if ($m.PSObject.Properties.Name -contains 'sandbox_mode' -and $null -ne $m.sandbox_mode) { $sandbox = [string]$m.sandbox_mode }
@@ -171,6 +232,14 @@ function Get-AgentPackages {
       role = [string]$m.role
       capabilities = @($m.capabilities | ForEach-Object { [string]$_ })
       model = $model
+      provider = $provider
+      api = $api
+      base_url = $baseUrl
+      context_window_tokens = $contextWindowTokens
+      max_output_tokens = $maxOutputTokens
+      max_tokens_field = $maxTokensField
+      transport_api_explicit = [bool]$apiExplicit
+      transport_base_url_explicit = [bool]$baseUrlExplicit
       callable_by_manager = [bool]$m.delegation.callable_by_manager
       allow_agents = @($m.delegation.allow_agents | ForEach-Object { [string]$_ })
       require_agent_id = if ($m.delegation.PSObject.Properties.Name -contains 'require_agent_id') { [bool]$m.delegation.require_agent_id } else { $false }

@@ -112,13 +112,65 @@ function Get-AgentIndex {
 }
 
 function Set-OpenClawJson {
-  param([string]$Path, $Value, [System.Collections.Generic.List[string]]$Changes)
+  param([string]$Path, $Value, [AllowEmptyCollection()][System.Collections.Generic.List[string]]$Changes)
   $json = $Value | ConvertTo-Json -Depth 10 -Compress
   $dry = Invoke-OpenClaw @('config','set',$Path,$json,'--strict-json','--dry-run')
   if ($dry.ExitCode -ne 0) { throw "config set dry-run 失败：$Path`n$($dry.Output)" }
   $write = Invoke-OpenClawMutation @('config','set',$Path,$json,'--strict-json')
   if ($write.ExitCode -ne 0) { throw "config set 写入失败：$Path`n$($write.Output)" }
   $Changes.Add("set $Path")
+}
+
+function Sync-ModelCatalog {
+  param(
+    [Parameter(Mandatory)]$Packages,
+    [Parameter(Mandatory)][AllowEmptyCollection()][System.Collections.Generic.List[string]]$Changes
+  )
+  $seen = @{}
+  $providers = @{}
+  foreach ($p in @($Packages)) {
+    if (-not $p.model -or $p.model -notmatch '^([^/]+)/(.+)$') { continue }
+    $provider = [string]$Matches[1]; $modelId = [string]$Matches[2]
+    if (-not $providers.ContainsKey($provider)) {
+      $providers[$provider] = $p
+      $providerConfig = Get-OpenClawJsonListWithRetry -OcArgs @('config','get',"models.providers.$provider",'--json') -Description "Provider $provider 输出"
+      if ($p.transport_api_explicit -and [string]$providerConfig.api -ne [string]$p.api) { Set-OpenClawJson -Path "models.providers.$provider.api" -Value ([string]$p.api) -Changes $Changes }
+      if ($p.transport_base_url_explicit -and [string]$providerConfig.baseUrl -ne [string]$p.base_url) { Set-OpenClawJson -Path "models.providers.$provider.baseUrl" -Value ([string]$p.base_url) -Changes $Changes }
+    } else {
+      $providerPrior = $providers[$provider]
+      if (($p.transport_api_explicit -or $providerPrior.transport_api_explicit) -and [string]$p.api -ne [string]$providerPrior.api) { throw "Provider '$provider' 在 .env 中出现不一致的 API 配置。" }
+      if (($p.transport_base_url_explicit -or $providerPrior.transport_base_url_explicit) -and [string]$p.base_url -ne [string]$providerPrior.base_url) { throw "Provider '$provider' 在 .env 中出现不一致的 base URL 配置。" }
+    }
+    $key = "$provider/$modelId"
+    if ($seen.ContainsKey($key)) {
+      $prior = $seen[$key]
+      if ($prior.context_window_tokens -ne $p.context_window_tokens -or $prior.max_output_tokens -ne $p.max_output_tokens -or $prior.max_tokens_field -ne $p.max_tokens_field) {
+        throw "模型 '$key' 被多个 Agent 使用，但 .env 为其设置了不同的 context/max output/token 字段；请统一配置或使用不同模型。"
+      }
+      continue
+    }
+    $seen[$key] = $p
+    $models = @(Get-OpenClawJsonListWithRetry -OcArgs @('config','get',"models.providers.$provider.models",'--json') -Description "模型目录 $provider 输出")
+    $modelIndex = -1
+    for ($i = 0; $i -lt $models.Count; $i++) { if ([string]$models[$i].id -eq $modelId) { $modelIndex = $i; break } }
+    if ($modelIndex -lt 0) { throw "OpenClaw 模型目录中不存在 '$key'，无法将 .env 的 LLM 限制应用到实际调用。" }
+    $model = $models[$modelIndex]
+    if ([int64]$model.contextWindow -ne [int64]$p.context_window_tokens) {
+      Set-OpenClawJson -Path "models.providers.$provider.models[$modelIndex].contextWindow" -Value ([int64]$p.context_window_tokens) -Changes $Changes
+    }
+    if ([int64]$model.maxTokens -ne [int64]$p.max_output_tokens) {
+      Set-OpenClawJson -Path "models.providers.$provider.models[$modelIndex].maxTokens" -Value ([int64]$p.max_output_tokens) -Changes $Changes
+    }
+    $compat = [ordered]@{}
+    if ($model.PSObject.Properties.Name -contains 'compat' -and $model.compat) {
+      foreach ($property in $model.compat.PSObject.Properties) { $compat[$property.Name] = $property.Value }
+    }
+    $currentField = if ($compat.Contains('maxTokensField')) { [string]$compat['maxTokensField'] } else { '' }
+    if ($currentField -ne [string]$p.max_tokens_field) {
+      $compat.maxTokensField = [string]$p.max_tokens_field
+      Set-OpenClawJson -Path "models.providers.$provider.models[$modelIndex].compat" -Value $compat -Changes $Changes
+    }
+  }
 }
 
 function Restore-ConfigOnFailure {
@@ -221,6 +273,14 @@ foreach ($p in $RegisteredPackages) {
     workspace_abs = $p.workspace
     agentDir_abs = $p.agentDir
     model = $p.model
+    provider = $p.provider
+    api = $p.api
+    base_url = $p.base_url
+    context_window_tokens = $p.context_window_tokens
+    max_output_tokens = $p.max_output_tokens
+    max_tokens_field = $p.max_tokens_field
+    transport_api_explicit = $p.transport_api_explicit
+    transport_base_url_explicit = $p.transport_base_url_explicit
     capabilities = @($p.capabilities)
     register = $p.register
     active = $p.active
@@ -285,6 +345,7 @@ try {
       }
     }
   }
+  Sync-ModelCatalog -Packages $RegisteredPackages -Changes $changes
 
   foreach ($p in $RegisteredPackages) {
     if ($ExistingIds -contains $p.id) { continue }

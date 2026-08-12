@@ -32,14 +32,6 @@ JSON_REWRITE_REQUEST kind=OUTPUT_TRUNCATED retry=2/2.
 
 实际模板实现位于 `scripts/agent-json-harness/json-repair-prompts.mjs`；该模块同时覆盖空 content、JSON parse error 与 schema drift。
 
-## DeepSeek JSON Output
+## Provider 无关边界
 
-DeepSeek 官方文档：<https://api-docs.deepseek.com/zh-cn/guides/json_mode>。当调用路径支持请求级参数时，对单 JSON 对象使用：
-
-```json
-{"response_format":{"type":"json_object"}}
-```
-
-同一 prompt 必须含 `json` 并包含输出形态示例；合理设置 `max_tokens` 防截断。JSON Output 不是 JSON Schema structured output，不能替代 Ajv。DeepSeek 也明确提示其有概率返回空 `content`，所以空输出仍计入上述两次重试预算。
-
-截至本仓库已核对的 OpenClaw Gateway 版本，`chat.send` 没有请求级 `responseFormat` 字段，不能把 JSON mode 假装成已启用。待 Gateway 支持透传后，限于最终单 JSON 契约调用开启；工具调用、普通分析、Markdown 摘要与 JSONL 不使用它。
+项目不向模型请求附加结构化输出模式。所有模型回复都经过相同的原文留存、确定性清洗、Ajv 校验和失败证据链。空 content 是通用失败类型，不关联特定厂商；纯工具调用无文本仍是有效中间状态。

@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
-import { resolve } from 'node:path';
+import { join, resolve } from 'node:path';
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import test from 'node:test';
 import { createControlRepository, openControlDatabase } from '../scripts/control-core/repository.mjs';
 import { createMonitorServer } from '../monitor/server.mjs';
@@ -8,7 +11,7 @@ import { createMonitorServer } from '../monitor/server.mjs';
 const ROOT = resolve(import.meta.dirname, '..');
 const WORKFLOW_ID = 'WF-monitor-http';
 
-async function setup() {
+async function setup(overrides = {}) {
   const database = openControlDatabase(':memory:');
   const controls = createControlRepository(ROOT, database);
   controls.apply({
@@ -19,7 +22,7 @@ async function setup() {
   });
   const monitor = createMonitorServer({
     projectRoot: ROOT, databasePath: ':memory:', host: '127.0.0.1', port: 0, token: 'test-token',
-    allowedOrigins: ['null'], reconcileIntervalMs: 20, sseRetention: 100, requestBodyLimit: 65536,
+    allowedOrigins: ['null'], reconcileIntervalMs: 20, sseRetention: 100, requestBodyLimit: 65536, ...overrides,
   }, { database });
   const address = await monitor.start();
   return { monitor, database, base: `http://127.0.0.1:${address.port}`, close: () => monitor.close() };
@@ -41,6 +44,27 @@ test('monitor HTTP exposes health, workflows and workflow snapshot', async () =>
     const missing = await fetch(`${value.base}/api/workflows/WF-missing/snapshot`);
     assert.equal(missing.status, 404);
   } finally { await value.close(); }
+});
+
+test('monitor exposes persistent agent sessions and safe conversation messages', async () => {
+  const sessionRoot = await mkdtemp(join(tmpdir(), 'monitor-http-sessions-'));
+  mkdirSync(join(sessionRoot, 'architect-agent', 'sessions'), { recursive: true });
+  writeFileSync(join(sessionRoot, 'architect-agent', 'sessions', 'sessions.json'), JSON.stringify({
+    key: { sessionId: 'session-http', status: 'done', totalTokens: 99, updatedAt: Date.now() },
+  }));
+  writeFileSync(join(sessionRoot, 'architect-agent', 'sessions', 'session-http.jsonl'), JSON.stringify({
+    type: 'message', timestamp: '2026-08-12T00:00:00Z', message: { role: 'assistant', content: [{ type: 'text', text: '架构已经完成' }] },
+  }));
+  const value = await setup({ sessionRoot });
+  try {
+    const agents = await (await fetch(`${value.base}/api/agents`)).json();
+    assert.ok(agents.agents.some((item) => item.agent_id === 'architect-agent'));
+    const sessions = await (await fetch(`${value.base}/api/agents/architect-agent/sessions`)).json();
+    assert.equal(sessions.sessions[0].total_tokens, 99);
+    const messages = await (await fetch(`${value.base}/api/agents/architect-agent/sessions/session-http/messages`)).json();
+    assert.equal(messages.messages[0].text, '架构已经完成');
+    assert.equal((await fetch(`${value.base}/api/agents/architect-agent/sessions/missing/messages`)).status, 404);
+  } finally { await value.close(); await rm(sessionRoot, { recursive: true, force: true }); }
 });
 
 test('monitor remains reachable while reporting a degraded control audit', async () => {
@@ -79,16 +103,3 @@ test('monitor rejects unknown origins and exposes no public mutation endpoint', 
   } finally { await value.close(); }
 });
 
-test('monitor exposes only user-safe dialogue sourced by local collectors', async () => {
-  const value = await setup();
-  try {
-    value.monitor.telemetry.addEvent({
-      schema_version: 1, event_id: 'MEVT-monitor-dialogue', workflow_id: WORKFLOW_ID, task_id: null, run_id: null, session_id: 'session-1',
-      topic: 'agent.activity', event_type: 'session.assistant_output', producer: 'session-tailer', source: 'SESSION_TAILER',
-      timestamp: '2026-08-06T10:00:02.000Z', payload: { agent_id: 'manager-agent', summary: 'Control state is healthy' },
-      meta: { redacted: true, inferred: true, confidence: 'MEDIUM' },
-    });
-    const history = await (await fetch(`${value.base}/api/agents/manager-agent/activity`)).json();
-    assert.equal(history.dialogue[0].summary, 'Control state is healthy');
-  } finally { await value.close(); }
-});

@@ -1,4 +1,4 @@
-export const MAX_AGENT_TIMEOUT_MS = 300_000;
+export const MAX_AGENT_TIMEOUT_MS = 900_000;
 
 export function validateAgentTimeoutMs(value, label = 'Agent timeout') {
   const timeoutMs = Number(value);

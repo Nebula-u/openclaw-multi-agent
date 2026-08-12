@@ -9,6 +9,7 @@ import { createWorkflowGraphAdapter } from './orchestrator/workflow-graph/contro
 import { buildWorkflowGraph } from './orchestrator/workflow-graph/graph.mjs';
 import { loadWorkflowGraphPolicy } from './orchestrator/workflow-graph/phase-policy.mjs';
 import { createGraphResultValidator, graphRunResult } from './orchestrator/workflow-graph/result.mjs';
+import { SqliteCheckpointSaver } from './orchestrator/sqlite-checkpointer.mjs';
 
 function errorResult({ graphRunId, workflowId, error }) {
   return {
@@ -61,8 +62,12 @@ export async function runWorkflowTurn({ projectRoot: projectRootInput, databaseP
     }
     const { policy, machine } = loadWorkflowGraphPolicy(projectRoot);
     const adapter = createWorkflowGraphAdapter({ projectRoot, databasePath, database, runner, clock });
-    const graph = buildWorkflowGraph({ adapter, policy, machine });
-    const state = await graph.invoke({ workflowId, graphRunId, requestedTargetPhase }, { recursionLimit: 20 });
+    const checkpointer = new SqliteCheckpointSaver(database);
+    const graph = buildWorkflowGraph({ adapter, policy, machine }, { checkpointer });
+    const state = await graph.invoke({ workflowId, graphRunId, requestedTargetPhase }, {
+      recursionLimit: 20,
+      configurable: { thread_id: workflowId, checkpoint_ns: 'workflow' },
+    });
     const result = graphRunResult(state);
     const validate = createGraphResultValidator(projectRoot);
     if (!validate(result)) throw Object.assign(new Error('workflow graph produced an invalid run result'), { code: 'GRAPH_RESULT_SCHEMA_INVALID', details: validate.errors });

@@ -30,9 +30,11 @@ function fixture() {
 test('manager context keeps the session below the configured soft budget', () => {
   const database = fixture();
   try {
-    const value = createManagerSessionContext({ projectRoot: ROOT, database, workflowId: WORKFLOW_ID, estimatedTokens: 90000 });
+    const value = createManagerSessionContext({ projectRoot: ROOT, database, workflowId: WORKFLOW_ID, estimatedTokens: 50000 });
     assert.equal(value.session_policy.action, 'CONTINUE');
-    assert.equal(value.session_policy.remaining_soft_budget_tokens, 30000);
+    assert.equal(value.session_policy.remaining_soft_budget_tokens, 26800);
+    assert.equal(value.session_policy.model_context_window_tokens, 128000);
+    assert.equal(value.session_policy.max_session_tokens, 200000);
     assert.equal(value.prompt_context.view, 'manager-context');
     assert.equal(value.session_policy.visible_output.mode, 'summary_only');
   } finally { database.close(); }
@@ -41,7 +43,7 @@ test('manager context keeps the session below the configured soft budget', () =>
 test('manager context requires a new session at the soft budget', () => {
   const database = fixture();
   try {
-    const value = createManagerSessionContext({ projectRoot: ROOT, database, workflowId: WORKFLOW_ID, estimatedTokens: 120000 });
+    const value = createManagerSessionContext({ projectRoot: ROOT, database, workflowId: WORKFLOW_ID, estimatedTokens: 76800 });
     assert.equal(value.session_policy.action, 'START_NEW_MANAGER_SESSION');
     assert.equal(value.session_policy.remaining_soft_budget_tokens, 0);
     assert.equal(value.prompt_context.omitted.historical_events, true);

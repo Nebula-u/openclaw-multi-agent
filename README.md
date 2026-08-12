@@ -6,12 +6,13 @@
 
 ## 当前功能
 
-- Control DB 是 workflow、task、run、dispatch、receipt 和 completion 的唯一事实源。
-- 轻量 LangGraph `StateGraph` 作为可选执行编排层，每次从 Control DB 重建状态并只推进一个稳定动作；它不保存第二份 workflow 状态。
+- `runtime/control/control.db` 同时保存业务控制事实和 LangGraph checkpoint：业务表是 workflow/task/run/dispatch 的唯一事实源，checkpoint 表只保存 Graph 续跑位置和 pending writes。
+- 轻量 LangGraph `StateGraph` 是确定性执行编排层；固定代码负责状态分类、合法边校验、派发与续跑，Manager 只在 `NEEDS_TASK`、`HOLD`、`FAILED` 等有限决策点介入。
 - 本地 Orchestrator 从已验证 task 固定派生目标 Agent、session 和派发回执；Agent 不可自行派发或改状态。
 - Agent JSON/JSONL 只能写入 `<artifact_root>/.agent-raw/**`；本地代码统一清洗、Ajv 校验、原子发布最终文件。
 - JSON 解析、路径安全或 Schema 校验失败时，本地代码保留原始暂存文件，并写入 `.orchestrator-ingest/*.failure.json` 和 `.orchestrator-ingest/validation-errors.jsonl`。
-- Monitor 不提供写入、重试、催办或与 Agent 交互的入口；不展示思考、工具调用、session、路径和控制细节。
+- Monitor 不提供写入、重试、催办或与 Agent 交互的入口；可显示全部已创建 Agent、持久 session 和完整 user/assistant 文本，但不展示思考、工具调用、工具结果、prompt、凭据、路径和控制细节。
+- 模型通过配置按 Agent 静态选择；Agent 无权自行切换。通用 provider 模板使用 OpenAI Chat Completions、128k 上下文和 49,152 输出上限，Manager 单 session 累计 token 上限为 200k。
 
 ## 前置条件
 
@@ -86,7 +87,7 @@ node $Orchestrator init --project-root $ProjectRoot
 npm run supervisor:start
 ```
 
-另开浏览器打开 `monitor/ui/index.html`。默认 Supervisor API 为 `http://127.0.0.1:4319`。
+另开浏览器打开 `monitor/ui/index.html`。默认 Supervisor API 为 `http://127.0.0.1:4319`。控制台左侧列出所有已创建 Agent（包括未激活或已结束），右侧可切换 session 并查看持久化的 user/assistant 对话历史。
 
 启动前检查：
 
@@ -114,7 +115,9 @@ node $Orchestrator workflow-run `
   --workflow-id WF-example
 ```
 
-每次调用最多提交一个 workflow transition。动态路由依次经过安全守卫、结构化结果分类、阶段策略、合法边校验和命令构建五层。返回 `NEEDS_TASK`、`WAITING_HUMAN`、`HOLD`、`RUNNING` 或 `TERMINAL` 时应停止，并根据 Control DB 中的事实准备任务、处理审批或恢复流程。StateGraph 不启用独立 checkpointer；重新调用时从 SQLite 和已校验 artifact 恢复。
+每次调用最多提交一个 workflow transition。动态路由依次经过安全守卫、结构化结果分类、阶段策略、合法边校验和命令构建五层。返回 `NEEDS_TASK`、`WAITING_HUMAN`、`HOLD`、`RUNNING` 或 `TERMINAL` 时应停止，并根据 Control DB 中的事实准备任务、处理审批或恢复流程。StateGraph 使用同一个 `control.db` 中的 SQLite checkpointer；Supervisor 可按 `workflow_id` 恢复 checkpoint 并继续有界 Graph turn。
+
+工作 Agent 的单次进程、dispatch lease、工具执行宽限与 JSON 契约调用统一上限为 **900 秒**。Manager wake 和健康检测保留较短上限，以便监督流程及时响应。
 
 ## Agent 角色
 
@@ -155,32 +158,34 @@ Agent 只可写 `.agent-raw` 暂存文件，不能写最终 `output/*.json`。�
 
 源码中的 Agent 提示、规则、模板或受管配置变更后，优先使用幂等同步更新，**不删除、不重装现有 Agent**。普通 `install.ps1` / `install.sh` 会校验 Agent ID 与 workspace 路径：现有且兼容的 Agent 显示为 `KEEP`，不会执行 `openclaw agents add`；随后只同步 workspace、共享规则、模板和受管配置。脚本只处理本项目 manifest 声明的 7 个 Agent，不处理 `main`、其他项目 Agent 或未注册的 `dialogue-agent`。
 
-更新前应确认没有正在运行的 workflow/task，再停止 Gateway。必须先执行 dry-run：7 个项目 Agent 都应显示为现有兼容项；如果出现 `ADD`、路径冲突或同名冲突，应停止并核对 runtime 路径，不要继续 apply。
+`.env` 只会在安装器或 Node 控制面读取时加载；正在运行的 OpenClaw Gateway 和 Monitor 不会自动监视文件变化。更换模型、provider、上下文窗口或输出上限时，必须执行一次安装器 `apply`，让值同步到 OpenClaw 的持久配置；完成后需要让 Gateway 重新加载配置。仅修改 Manager soft budget 等控制面参数时，不需要 Gateway 重启，但下一次 `orchestrator.mjs` / Monitor 进程启动或读取时才会生效。
+
+更新前应确认没有正在运行的 workflow/task。dry-run 不修改 Gateway，可以在 Gateway 运行时执行；apply 前再决定是否暂停任务。7 个项目 Agent 都应显示为现有兼容项；如果出现 `ADD`、路径冲突或同名冲突，应停止并核对 runtime 路径，不要继续 apply。项目没有额外的 `daemon` 更新命令：OpenClaw 使用 Gateway 服务，Monitor 是独立的 Supervisor 进程或 systemd 服务。
 
 ### Windows PowerShell：原地更新，不重装
 
 在项目根目录执行：
 
 ```powershell
-# 1. 确认没有运行中的任务，然后停止 Gateway
-openclaw gateway stop
-
-# 2. Dry-run
+# 1. 编辑 .env 后先 dry-run（Gateway 可保持运行）
 pwsh -NoProfile -File ".\scripts\install.ps1" `
   -RuntimeRoot ".\runtime"
 
-# 3. 确认全部为 KEEP 后执行原地更新
+# 2. 确认没有运行中的任务、全部为 KEEP 后执行原地更新
 pwsh -NoProfile -File ".\scripts\install.ps1" `
   -Apply -Yes -RuntimeRoot ".\runtime"
 
-# 4. 校验同步结果并重新启动 Gateway
+# 3. 校验同步结果（install.ps1 已执行 config validate）
 openclaw config validate --json
 node ".\scripts\runtime-bundle.mjs" verify `
   --project-root "." --runtime-root ".\runtime"
-node ".\scripts\orchestrator.mjs" init --project-root "."
-openclaw gateway start
+
+# 4. 让 Gateway 安全重新加载新的 Agent/model 配置
+openclaw gateway restart --safe
 openclaw gateway status
 ```
+
+`orchestrator.mjs init` 只在首次部署或 capability 文件缺失时执行，不属于每次 `.env` 更新步骤。若当前 Gateway 版本不支持安全重启，才使用 `openclaw gateway stop`、确认停止后 `openclaw gateway start`。
 
 只更新指定 Agent 时，Windows 可在 dry-run 和 apply 命令中同时加入例如 `-AgentIds 'manager-agent,architect-agent'`；两次命令的 Agent 范围必须一致。
 
@@ -193,25 +198,39 @@ project_root="$(pwd -P)"
 runtime_root="$project_root/runtime"
 install_script="$project_root/scripts/install.sh"
 
-# 1. 确认没有运行中的任务，然后停止 Gateway
-openclaw gateway stop
-
-# 2. Dry-run：所有已安装项目 Agent 都应是兼容项，不应计划创建新 Agent
+# 1. 编辑 .env 后先 dry-run（Gateway 可保持运行）
 bash "$install_script" --runtime-root "$runtime_root"
 
-# 3. 原地同步 workspace、规则、模板与受管配置；不会删除或重建现有 Agent
+# 2. 确认没有运行中的任务、全部为 KEEP 后原地同步；不会删除或重建现有 Agent
 bash "$install_script" --apply --yes --runtime-root "$runtime_root"
 
-# 4. 校验同步结果并重新启动 Gateway
+# 3. 校验同步结果（install.sh 已执行 config validate）
 openclaw config validate --json
 node "$project_root/scripts/runtime-bundle.mjs" verify \
   --project-root "$project_root" --runtime-root "$runtime_root"
-node "$project_root/scripts/orchestrator.mjs" init --project-root "$project_root"
-openclaw gateway start
+
+# 4. 让 Gateway 安全重新加载新的 Agent/model 配置
+openclaw gateway restart --safe
 openclaw gateway status
 ```
 
+`orchestrator.mjs init` 只在首次部署或 capability 文件缺失时执行，不属于每次 `.env` 更新步骤。若当前 Gateway 版本不支持安全重启，才使用 `openclaw gateway stop`、确认停止后 `openclaw gateway start`。
+
 apply 前会把 OpenClaw 配置备份到 `runtime/control/config-snapshots/`。以上更新流程不调用 `scripts/reinstall-agents.ps1`，也不调用 `openclaw agents delete`；只有明确需要删除并重建 Agent 时才使用重装脚本。
+
+### 按 Agent 静态配置模型
+
+项目根目录 `.env` 是实际读取的模型与 LLM 预算配置。当前 package 默认模型已同步写入 `.env`；需要切换时直接修改对应 Agent 的 `OPENCLAW_AGENT_*_MODEL`，然后按上面的 dry-run/apply/restart 流程更新，不需要让 Agent 自行切换。
+
+例如只切换 Architect 的模型：
+
+```dotenv
+OPENCLAW_AGENT_ARCHITECT_AGENT_MODEL=provider/model-id
+```
+
+保存 `.env` 后，按上面的 Windows 或 Linux dry-run → apply → Gateway safe restart 流程执行。Linux 对应入口是 `bash scripts/install.sh --runtime-root runtime`。`.env` 中公共 LLM 配置包括 OpenAI Chat Completions、128k 上下文、49,152 输出上限和 200k session 上限；需要差异时使用 `OPENCLAW_AGENT_<ID>_*` 覆盖。apply 时安装器会把上下文、输出上限和 token 字段同步到实际 OpenClaw 模型目录。凭据必须由 OpenClaw auth/profile 管理。完整说明见 [模型配置与静态路由](docs/model-routing.md)。
+
+如果修改的是 Monitor 自身的 `MONITOR_*`、runtime 路径或端口变量，还要重启 Monitor：Windows 前台运行时停止原 `npm run supervisor:start` 后重新启动；Linux systemd 部署使用 `sudo systemctl restart openclaw-monitor.service`。只修改 Agent LLM 配置不要求重启 Monitor。
 
 ## 将 Monitor 部署为 Linux 服务
 

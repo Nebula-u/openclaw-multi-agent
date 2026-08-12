@@ -1,9 +1,5 @@
 {
   "schema_version": 1,
-  "model_context_window_tokens": 200000,
-  "soft_budget_percent": 60,
-  "soft_budget_tokens": 120000,
-  "thinking_level": "medium",
   "on_soft_budget_reached": "start_new_manager_session",
   "visible_output": {
     "mode": "summary_only",

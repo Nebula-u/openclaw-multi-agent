@@ -24,10 +24,10 @@ const EXPECTED_SCHEMAS = [
   'task.schema.json',
 ];
 
-test('Agent harness timeouts are capped at five minutes', () => {
-  assert.equal(MAX_AGENT_TIMEOUT_MS, 300000);
-  assert.equal(validateAgentTimeoutMs(300000), 300000);
-  assert.throws(() => validateAgentTimeoutMs(300001), /no more than 300000ms/u);
+test('Agent harness timeouts are capped at fifteen minutes', () => {
+  assert.equal(MAX_AGENT_TIMEOUT_MS, 900000);
+  assert.equal(validateAgentTimeoutMs(900000), 900000);
+  assert.throws(() => validateAgentTimeoutMs(900001), /no more than 900000ms/u);
 });
 
 test('LLM 场景矩阵覆盖每份契约的 5 个不同需求', () => {

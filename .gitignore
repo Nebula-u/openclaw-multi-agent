@@ -36,8 +36,10 @@ node_modules/
 *.p12
 .env
 .env.*
+!.env
 !.env.example
 secrets.json
+.env
 
 # ---- Logs ----
 *.log

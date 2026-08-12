@@ -2,7 +2,7 @@ import { END, START, StateGraph } from '@langchain/langgraph';
 import { createGraphNodes } from './nodes.mjs';
 import { WorkflowGraphState } from './state.mjs';
 
-export function buildWorkflowGraph(dependencies) {
+export function buildWorkflowGraph(dependencies, { checkpointer = undefined } = {}) {
   const nodes = createGraphNodes(dependencies);
   return new StateGraph(WorkflowGraphState)
     .addNode('load_control_state', nodes.loadControlState)
@@ -28,5 +28,5 @@ export function buildWorkflowGraph(dependencies) {
     .addConditionalEdges('handle_final', (state) => state.route, { apply: 'apply_transition', finish: 'finish' })
     .addEdge('apply_transition', 'finish')
     .addEdge('finish', END)
-    .compile();
+    .compile({ checkpointer });
 }
