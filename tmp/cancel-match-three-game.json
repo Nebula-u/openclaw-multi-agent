@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "command_id": "CMD-CANCEL-match-three-game-001",
+  "workflow_id": "WF-match-three-game",
+  "expected_revision": 2,
+  "command_type": "CANCEL",
+  "actor": "local-orchestrator",
+  "occurred_at": "2026-08-12T07:24:00.000Z",
+  "reason": "用户要求停止本轮消消乐开发工作流",
+  "candidate_commit": null,
+  "payload": {}
+}

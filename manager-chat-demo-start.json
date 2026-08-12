@@ -1,0 +1,9 @@
+EMBEDDED FALLBACK: Gateway agent timed out; running embedded agent with fresh session gateway-fallback-e67e22e5-7d20-47cb-947c-6046fdbb45ae: GatewayTransportError: gateway timeout after 330000ms
+Gateway target: ws://127.0.0.1:18789
+Source: local loopback
+Config: C:\Users\liuxu\.openclaw\openclaw.json
+Bind: loopback
+[plugins] plugins.allow is empty; discovered non-bundled plugins may auto-load: deepseek (C:\Users\liuxu\.openclaw\npm\projects\openclaw-deepseek-provider-2481ed984b\node_modules\@openclaw\deepseek-provider\dist\index.js), parallel (C:\Users\liuxu\.openclaw\npm\projects\openclaw-parallel-plugin-609efe5372\node_modules\@openclaw\parallel-plugin\dist\index.js). To trust them explicitly, set plugins.allow in openclaw.json (e.g. "plugins": { "allow": ["deepseek", "parallel"] }). Run 'openclaw plugins list --enabled --verbose' or 'openclaw plugins inspect deepseek', 'openclaw plugins inspect parallel' to confirm plugin ids.
+[agent/embedded] [trace:embedded-run] startup stages: runId=gateway-fallback-e67e22e5-7d20-47cb-947c-6046fdbb45ae sessionId=gateway-fallback-e67e22e5-7d20-47cb-947c-6046fdbb45ae phase=attempt-dispatch totalMs=7967 stages=workspace:0ms@0ms,runtime-plugins:5200ms@5200ms,hooks:2ms@5202ms,model-resolution:1783ms@6985ms,auth:977ms@7962ms,context-engine:1ms@7963ms,attempt-workspace:1ms@7964ms,attempt-prompt:0ms@7964ms,attempt-runtime-plan:3ms@7967ms,attempt-dispatch:0ms@7967ms
+[agents/tool-policy] tool policy removed 5 tool(s) via tools.profile (coding): agents_list, gateway, message, nodes, tts
+[provider-transport-fetch] [model-fetch] start provider=gpt api=openai-completions model=gpt-5.6-luna method=POST url=https://newapi.yeako-node3.xyz/v1/chat/completions timeoutMs=undefined proxy=none policy=custom

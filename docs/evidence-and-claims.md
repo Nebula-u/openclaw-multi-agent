@@ -77,7 +77,7 @@
 | `attempt` | 第几次尝试（从 1 开始） |
 | `invoked_by_agent` | 发起命令的 Agent ID |
 | `task_id` / `run_id` | 归属的 task / run |
-| `isolation_mode` | 本阶段固定 `UNSANDBOXED_LOCAL` |
+| `isolation_mode` | 新 `test-agent` run 固定 `SANDBOXED_DOCKER`；历史 artifact 可为 `UNSANDBOXED_LOCAL` |
 | `redactions_applied` | 是否对日志做过脱敏（bool） |
 
 ### 落盘规则
@@ -114,7 +114,7 @@
 ## 8. 校验和与事件链
 
 - 每个 run 的关键产物写入 `checksums.sha256`，用系统原生工具计算（如 PowerShell `Get-FileHash`、`sha256sum`、`shasum -a 256`），**不用** Python 脚本。
-- Control Kernel v2 的事件使用 SHA-256 哈希链（`previous_event_hash` → `event_hash`）；`runtime/control/v2/**/events.jsonl` 是可重建的只读投影，不能作为控制状态写入源。
+- 新 test-agent 的命令证据必须能回到 sandbox attestation；缺少运行时身份、挂载或资源边界证据时不得把执行标为 `SANDBOXED_DOCKER`。Control Kernel v2 的事件使用 SHA-256 哈希链（`previous_event_hash` → `event_hash`）；`runtime/control/v2/**/events.jsonl` 是可重建的只读投影，不能作为控制状态写入源。
 
 ## 9. 相关文件
 

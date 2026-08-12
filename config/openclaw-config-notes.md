@@ -58,14 +58,14 @@ pwsh -NoProfile -File scripts/reinstall-agents.ps1 -Apply -Yes -RuntimeRoot runt
     "requireAgentId": true        // 要求派发时显式 agentId
   },
   "sandbox": {
-    "mode": "off"            // "off" | "non-main" | "all"（本项目 test-agent 用 "off"）
+    "mode": "off"            // "off" | "non-main" | "all"
   }
 }
 ```
 
 - **manager-agent**：`subagents.allowAgents` 由 package catalog 中 `register=true`、`active=true`、`callable_by_manager=true` 的工作 Agent 自动计算；`requireAgentId: true`；`delegationMode: "prefer"`。
 - **工作 Agent**：默认 `subagents.allowAgents = []`（禁止再派生）；生成 Agent 也使用该默认值。
-- **test-agent**：`sandbox.mode = "off"`（本阶段无沙箱的显式声明；不配置 Docker backend / mount / sandbox 网络）。
+- **test-agent**：必须为 `sandbox.mode = "all"`、`backend = "docker"`、`scope = "session"`、`workspaceAccess = "none"`、Docker `network = "none"`、`readOnlyRoot = true`、`capDrop = ["ALL"]`；运行时由 Orchestrator 为每个 test run 注入精确 bind mounts。
 
 ## 4. 原生跨 Agent 会话调度（实测存在于 schema / 工具面）
 
@@ -83,7 +83,7 @@ pwsh -NoProfile -File scripts/reinstall-agents.ps1 -Apply -Yes -RuntimeRoot runt
 ## 6. 明确不做
 
 - 不执行 `openclaw doctor --fix`。
-- 不安装 Docker、不启用 sandbox 作为测试前置。
+- 不安装 Docker；启用 test-agent sandbox 前必须由部署侧提供可用 Docker Engine，Orchestrator 不可在 sandbox 失败时回退到宿主机执行。
 - 不删除/重置用户既有 Agent、认证、会话或 workspace。
 
 ## 7. 本轮工具结果预算

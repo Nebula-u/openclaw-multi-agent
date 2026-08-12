@@ -113,9 +113,9 @@ openclaw config set "agents.list[3].subagents" '{"delegationMode":"prefer","requ
 |-------|--------------------------|-----------------------------|------------------------------|-----------------|
 | `manager-agent` | active/callable package 自动集合 | `true` | `prefer` | （不特设） |
 | 工作 Agent | `[]`（默认禁止再派生） | — | — | package 可声明 |
-| `test-agent`（额外） | `[]` | — | — | `off`（显式声明本阶段无沙箱） |
+| `test-agent`（额外） | `[]` | — | — | `all`（显式强制 Docker sandbox） |
 
-> 若当前版本不支持等价的 `sandbox.mode=off`，安装**必须停止**并在 `docs/compatibility-report.md` 说明，不得静默继承可能启用 sandbox 的全局默认值。
+> 若当前版本不支持 `sandbox.mode=all` 或项目要求的 Docker backend/session scope/workspace access 配置，安装**必须停止**并在 `docs/compatibility-report.md` 说明，不得静默回退宿主机执行或继承未知默认值。
 
 ## 8. 跨 Agent 会话工具（manager-agent 独有）
 

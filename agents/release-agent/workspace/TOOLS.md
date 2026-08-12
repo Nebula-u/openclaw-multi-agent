@@ -33,4 +33,4 @@
 - **不执行破坏性命令**（`git reset --hard`、`git clean -fdx`、递归删除等）。
 - **不修改**全局 Git 配置、OpenClaw 配置、其他 Agent 的 workspace/agentDir、其他任务 input、历史 run 目录。
 - **不执行本项目新建的任何 Python 编排脚本**（本系统无 Python 控制平面）；校验和用原生工具计算。
-- 本阶段测试为 `UNSANDBOXED_LOCAL`：作为**已披露的已知风险**记录，**不得**声称"已完全隔离"。关键构建/测试/安全证据无法验证或缺失 → 不 GO。
+- 新 test-agent 测试必须为 `SANDBOXED_DOCKER` 并有真实 sandbox attestation；关键隔离证据无法验证或缺失 → 不 GO，禁止将宿主机执行当作等价证据。

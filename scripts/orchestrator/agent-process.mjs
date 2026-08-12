@@ -1,10 +1,12 @@
 #!/usr/bin/env node
 
-import { spawn, spawnSync } from 'node:child_process';
-import { mkdirSync, createWriteStream } from 'node:fs';
+import { spawn } from 'node:child_process';
+import { mkdirSync, createWriteStream, readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { atomicWriteJson } from '../runtime-core/atomic-store.mjs';
+import { cleanupTestSandboxSession, verifySandboxRuntime } from './sandbox-runtime.mjs';
+import { openClawSpawnSpec, terminateProcessTree } from './process-utils.mjs';
 
 export const MAX_AGENT_TIMEOUT_SECONDS = 900;
 
@@ -26,67 +28,7 @@ function parseArgs(argv) {
   return options;
 }
 
-export function openClawCommand() {
-  if (process.platform === 'win32') {
-    return {
-      file: process.env.ComSpec || 'cmd.exe',
-      executable: process.env.OPENCLAW_COMMAND || 'openclaw.cmd',
-      shell: false,
-      windows_verbatim_arguments: true,
-    };
-  }
-  return { file: process.env.OPENCLAW_COMMAND || 'openclaw', executable: process.env.OPENCLAW_COMMAND || 'openclaw', shell: false };
-}
-
-function windowsCommandLine(executable, args) {
-  // The outer quotes are required by `cmd /c` when the command itself is a
-  // quoted path. `windowsVerbatimArguments` keeps cmd.exe from receiving
-  // Node's backslash-escaped quotes as literal characters.
-  const values = [executable, ...args].map((value) => {
-    const text = String(value);
-    if (text.includes('"') || /[\r\n]/u.test(text)) throw new Error('OpenClaw command arguments cannot contain quotes or newlines');
-    return `"${text}"`;
-  });
-  return `"${values.join(' ')}"`;
-}
-
-export function openClawSpawnSpec(args) {
-  const command = openClawCommand();
-  if (process.platform !== 'win32') return {
-    file: command.file,
-    args,
-    options: { shell: false },
-  };
-  return {
-    file: command.file,
-    args: ['/d', '/s', '/c', windowsCommandLine(command.executable, args)],
-    options: { shell: false, windowsVerbatimArguments: true },
-  };
-}
-
-export function terminateProcessTree(pid, { platform = process.platform, run = spawnSync,
-  kill = process.kill.bind(process), schedule = setTimeout } = {}) {
-  if (!Number.isInteger(Number(pid)) || Number(pid) <= 0) return { ok: false, reason: 'PID_INVALID' };
-  if (platform === 'win32') {
-    const result = run('taskkill.exe', ['/PID', String(pid), '/T', '/F'], {
-      windowsHide: true, shell: false, encoding: 'utf8',
-    });
-    // taskkill returns 128 when the process exited between observation and
-    // termination. Treat that race as a successful terminal outcome.
-    return { ok: result.status === 0 || result.status === 128, status: result.status, error: result.error?.message ?? null };
-  }
-  try {
-    kill(-Number(pid), 'SIGTERM');
-    const force = schedule(() => {
-      try { kill(-Number(pid), 'SIGKILL'); } catch { /* process group already exited */ }
-    }, 2000);
-    force.unref?.();
-    return { ok: true, status: null, error: null };
-  } catch (error) {
-    if (error.code === 'ESRCH') return { ok: true, status: null, error: null };
-    return { ok: false, status: null, error: error.message };
-  }
-}
+export { openClawCommand, openClawSpawnSpec, terminateProcessTree } from './process-utils.mjs';
 
 function writeMarker(path, value) {
   mkdirSync(dirname(path), { recursive: true });
@@ -94,7 +36,7 @@ function writeMarker(path, value) {
 }
 
 export function runOpenClawProcess({ agentId, sessionId, messagePath, timeoutSeconds = MAX_AGENT_TIMEOUT_SECONDS,
-  stdoutPath, stderrPath, statusPath, resultPath } = {}) {
+  stdoutPath, stderrPath, statusPath, resultPath, sandboxLeasePath = null } = {}) {
   timeoutSeconds = validateAgentTimeoutSeconds(timeoutSeconds);
   const args = ['agent', '--agent', agentId, '--session-id', sessionId, '--message-file', messagePath,
     '--thinking', 'off', '--verbose', 'off', '--timeout', String(timeoutSeconds), '--json'];
@@ -107,29 +49,45 @@ export function runOpenClawProcess({ agentId, sessionId, messagePath, timeoutSec
   let finished = false;
   let child;
 
-  const finish = (value) => {
+  const finish = async (value) => {
     if (finished) return;
     finished = true;
     stdout.end();
     stderr.end();
+    let sandboxAttestation = null;
+    let sandboxError = null;
+    if (sandboxLeasePath) {
+      try {
+        const lease = JSON.parse(readFileSync(sandboxLeasePath, 'utf8'));
+        if (value.state === 'SUCCEEDED') sandboxAttestation = await verifySandboxRuntime({ lease });
+        await cleanupTestSandboxSession({ lease, leasePath: sandboxLeasePath });
+      } catch (error) {
+        sandboxError = error;
+      }
+    }
+    const finalValue = sandboxError ? {
+      ...value, state: 'FAILED', error_code: sandboxError.code ?? 'SANDBOX_FINALIZATION_FAILED',
+      error_message: sandboxError.message, timed_out: Boolean(value.timed_out),
+    } : value;
     writeMarker(resultPath, {
       schema_version: 1,
-      state: value.state,
+      state: finalValue.state,
       agent_id: agentId,
       session_id: sessionId,
       started_at: startedAt,
       finished_at: new Date().toISOString(),
-      exit_code: value.exit_code ?? null,
-      signal: value.signal ?? null,
-      timed_out: Boolean(value.timed_out ?? timedOut),
-      error_code: value.error_code ?? null,
-      error_message: value.error_message ?? null,
+      exit_code: finalValue.exit_code ?? null,
+      signal: finalValue.signal ?? null,
+      timed_out: Boolean(finalValue.timed_out ?? timedOut),
+      error_code: finalValue.error_code ?? null,
+      error_message: finalValue.error_message ?? null,
+      sandbox_attestation: sandboxAttestation,
       stdout_path_abs: stdoutPath,
       stderr_path_abs: stderrPath,
     });
     writeMarker(statusPath, {
       schema_version: 1,
-      state: value.state,
+      state: finalValue.state,
       agent_id: agentId,
       session_id: sessionId,
       pid: child?.pid ?? null,
@@ -154,7 +112,7 @@ export function runOpenClawProcess({ agentId, sessionId, messagePath, timeoutSec
       stdio: ['ignore', 'pipe', 'pipe'],
     });
   } catch (error) {
-    finish({ state: 'FAILED', error_code: error.code || 'OPENCLAW_SPAWN_FAILED', error_message: error.message });
+    void finish({ state: 'FAILED', error_code: error.code || 'OPENCLAW_SPAWN_FAILED', error_message: error.message });
     return;
   }
 
@@ -177,11 +135,11 @@ export function runOpenClawProcess({ agentId, sessionId, messagePath, timeoutSec
   }));
   child.once('error', (error) => {
     clearTimeout(timeout);
-    finish({ state: 'FAILED', error_code: error.code || 'OPENCLAW_PROCESS_ERROR', error_message: error.message });
+    void finish({ state: 'FAILED', error_code: error.code || 'OPENCLAW_PROCESS_ERROR', error_message: error.message });
   });
   child.once('close', (exitCode, signal) => {
     clearTimeout(timeout);
-    finish({
+    void finish({
       state: exitCode === 0 && !signal && !timedOut ? 'SUCCEEDED' : 'FAILED',
       exit_code: exitCode,
       signal,
@@ -207,6 +165,7 @@ async function main() {
     stderrPath: required('stderr-path'),
     statusPath: required('status-path'),
     resultPath: required('result-path'),
+    sandboxLeasePath: options['sandbox-lease-path'] ? required('sandbox-lease-path') : null,
   });
 }
 

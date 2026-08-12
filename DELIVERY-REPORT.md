@@ -20,7 +20,7 @@
 | `agents/` | 42 | 7 个 Agent 的 workspace（各 AGENTS/SOUL/TOOLS/IDENTITY + rules/ 占位）+ `common/` 6 份共享规则 + manager 的 templates/ 占位 |
 | `contracts/` | 12 | JSON Schema 契约（task、workflow、evidence、gate-result、approval-request/response、result、command-record、context-manifest、acceptance-criteria、review-findings、release-decision） |
 | `templates/` | 14 | workflow.json、task.json、context-manifest.json、result.json、evidence.jsonl、command-records.jsonl 及 7 份阶段报告 + context.md + final-report.md 模板 |
-| `docs/` | 15 | 架构、原生集成、编排、上下文与规则传递、工作流、契约、状态与恢复、Git worktree、证据与断言、人工审批、Gate 清单、无沙箱测试策略、兼容性报告、故障排查、威胁模型 |
+| `docs/` | 16 | 架构、原生集成、编排、上下文与规则传递、工作流、契约、状态与恢复、Git worktree、证据与断言、人工审批、Gate 清单、沙箱测试策略、无沙箱历史策略、兼容性报告、故障排查、威胁模型 |
 | `config/` | 4 | default-policy.yaml、project-config.example.yaml、agent-models.example.json、openclaw-config-notes.md |
 | `scripts/` | 7 | install.ps1/.sh、validate-install.ps1/.sh、restore-openclaw-config.ps1/.sh、preflight-probe.sh |
 | `examples/` | 3 | demo-request.md、demo-policy.yaml、demo-project-config.yaml |
@@ -55,7 +55,7 @@
 
 ## 4. 环境受限（environment-blocked）
 
-1. **无沙箱（本阶段既定）**：`test-agent sandbox.mode=off`，每次测试将记录 `isolation_mode=UNSANDBOXED_LOCAL`。**未提供真实隔离**——已在 `docs/unsandboxed-test-policy.md`、`threat-model.md` 作为已知风险明确说明。
+1. **真实 Docker E2E 尚未完成**：新 `test-agent` run 已由策略、安装包和 Orchestrator 强制使用 `SANDBOXED_DOCKER`，但当前 Docker Desktop Linux Engine 不可用，因此真实容器 dispatch、镜像 digest 与 runtime attestation 尚未实测；禁止以 `UNSANDBOXED_LOCAL` 回退。
 2. **`doctor --lint` exit 1**：既有环境 lint 状态，**非**本项目引入，按规则**未**修复（不运行 `doctor --fix`）。
 3. **环境自述与实际不符**：会话环境 prompt 声称 macOS / `/Users/lm72wx`，实际为 Windows 路径；某子代理对 `/Users/lm72wx` 的一次探测被权限分类器拦截，已改用只读工具绕过，**无功能影响**。
 

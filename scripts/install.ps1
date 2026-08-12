@@ -287,6 +287,8 @@ foreach ($p in $RegisteredPackages) {
     subagents_allow = @(if ($p.role -eq 'manager') { $ManagerAllow } else { $p.allow_agents })
     require_agent_id = ($p.role -eq 'manager' -and $p.require_agent_id)
     sandbox_mode = $p.sandbox_mode
+    sandbox_config = $p.sandbox_config
+    tools_config = $p.tools_config
   }
 }
 
@@ -400,9 +402,13 @@ try {
       if ($currentAgent.PSObject.Properties.Name -contains 'sandbox' -and $currentAgent.sandbox -and $currentAgent.sandbox.PSObject.Properties.Name -contains 'mode') {
         $currentSandboxMode = [string]$currentAgent.sandbox.mode
       }
-      if ($currentSandboxMode -ne $p.sandbox_mode) {
-        Set-OpenClawJson -Path "agents.list[$idx].sandbox" -Value ([ordered]@{ mode = $p.sandbox_mode }) -Changes $changes
+      if ($currentSandboxMode -ne $p.sandbox_mode -or $p.sandbox_config) {
+        $desiredSandbox = if ($p.sandbox_config) { $p.sandbox_config } else { [ordered]@{ mode = $p.sandbox_mode } }
+        Set-OpenClawJson -Path "agents.list[$idx].sandbox" -Value $desiredSandbox -Changes $changes
       }
+    }
+    if ($p.tools_config) {
+      Set-OpenClawJson -Path "agents.list[$idx].tools" -Value $p.tools_config -Changes $changes
     }
   }
 

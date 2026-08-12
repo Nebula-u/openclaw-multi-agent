@@ -41,7 +41,24 @@
   "decisions_required": [],
   "recommended_next_action": "<PLACEHOLDER: 建议的下一步动作>",
   "git_status_after_completion": "<PLACEHOLDER: 完成后 git status 摘要>",
-  "isolation_mode": "UNSANDBOXED_LOCAL",
+  "isolation_mode": "SANDBOXED_DOCKER",
+  "sandbox_attestation": {
+    "schema_version": 1,
+    "provider": "openclaw",
+    "backend": "docker",
+    "mode": "all",
+    "scope": "session",
+    "runtime_id": "PLACEHOLDER_SANDBOX_RUNTIME_ID",
+    "container_id": "PLACEHOLDER_CONTAINER_ID",
+    "image": "openclaw-test-node:22-slim",
+    "image_digest": "PLACEHOLDER_IMAGE_DIGEST",
+    "network": "none",
+    "workspace_access": "none",
+    "read_only_root": true,
+    "cap_drop": ["ALL"],
+    "host_execution": false,
+    "verified_at": "2026-01-01T00:00:00Z"
+  },
   "self_validation": {
     "preflight_passed": false,
     "checks": [

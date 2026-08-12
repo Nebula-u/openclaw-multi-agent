@@ -36,6 +36,7 @@
     "known_issues": { "type": "array", "items": { "type": "string" } },
     "rollback_plan_present": { "type": "boolean" },
     "ops_handoff_present": { "type": "boolean" },
-    "isolation_mode": { "type": "string", "enum": ["UNSANDBOXED_LOCAL"] }
+    "isolation_mode": { "type": "string", "enum": ["UNSANDBOXED_LOCAL", "SANDBOXED_DOCKER"] },
+    "sandbox_attestation_ref": { "type": ["string", "null"] }
   }
 }

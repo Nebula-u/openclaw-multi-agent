@@ -29,7 +29,11 @@
     "invoked_by_agent": { "type": "string" },
     "task_id": { "type": "string", "pattern": "^TASK-" },
     "run_id": { "type": "string", "pattern": "^RUN-" },
-    "isolation_mode": { "type": "string", "enum": ["UNSANDBOXED_LOCAL"] },
+    "isolation_mode": { "type": "string", "enum": ["UNSANDBOXED_LOCAL", "SANDBOXED_DOCKER"] },
+    "sandbox_runtime_id": { "type": ["string", "null"] },
+    "sandbox_cwd_abs": { "type": ["string", "null"] },
+    "host_cwd_abs": { "type": ["string", "null"] },
+    "sandbox_attestation_ref": { "type": ["string", "null"] },
     "redactions_applied": { "type": "boolean" }
   }
 }

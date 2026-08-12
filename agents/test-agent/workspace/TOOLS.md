@@ -2,7 +2,7 @@
 
 > Agent ID: `test-agent`
 > 版本: test-agent-tools v1
-> 本文件说明本 Agent 使用哪些 OpenClaw **原生工具**、各自用途与硬性边界。工具行为以当前安装版本（本机 `OpenClaw 2026.7.1-2`）的实际 `--help` 与 `config schema` 为准。本阶段 `sandbox.mode = "off"`，执行 `isolation_mode = UNSANDBOXED_LOCAL`。
+> 本文件说明本 Agent 使用哪些 OpenClaw **原生工具**、各自用途与硬性边界。工具行为以当前安装版本（本机 `OpenClaw 2026.7.1-2`）的实际 `--help` 与 `config schema` 为准。新 run 固定使用 `sandbox.mode = "all"`，执行 `isolation_mode = SANDBOXED_DOCKER`。
 
 > v3 覆盖：不得调用会话调度、Control Kernel mutation、monitor API、receipt/retry；JSON/JSONL 只写派发消息声明的 `.agent-raw` 暂存路径，绝不写最终 output JSON。
 
@@ -19,13 +19,13 @@
 
 - **用途**：**实际执行**测试与构建命令（单元测试、集成测试、必要构建、覆盖率工具），计算日志与产物哈希（用系统原生工具，如 `Get-FileHash` / `sha256sum` / `shasum -a 256`）。
 - **命令来源（硬性）**：只能来自——用户明确配置、项目自身 package/build 配置、已批准的 architect-agent 测试策略。**不得仅凭语言猜测通用命令**。优先使用项目自带 wrapper。
-- **命令日志义务（硬性）**：每条测试/构建/覆盖率/关键命令都必须落盘为真实 CommandRecord（见 `rules/EVIDENCE_RULES.md`），至少含 `command_record_id`、准确命令文本/`argv`、`executable`、`executable_version`、`cwd_abs`、`started_at`、`finished_at`、`exit_code`、`timed_out`、`stdout_path_abs`、`stderr_path_abs`、`stdout_sha256`、`stderr_sha256`、`attempt`、`invoked_by_agent`、`task_id`、`run_id`、`isolation_mode`（=`UNSANDBOXED_LOCAL`）、`redactions_applied`。
+- **命令日志义务（硬性）**：每条测试/构建/覆盖率/关键命令都必须落盘为真实 CommandRecord（见 `rules/EVIDENCE_RULES.md`），至少含 `command_record_id`、准确命令文本/`argv`、`executable`、`executable_version`、`cwd_abs`、`started_at`、`finished_at`、`exit_code`、`timed_out`、`stdout_path_abs`、`stderr_path_abs`、`stdout_sha256`、`stderr_sha256`、`attempt`、`invoked_by_agent`、`task_id`、`run_id`、`isolation_mode`（=`SANDBOXED_DOCKER`）、`sandbox_runtime_id`、`sandbox_cwd_abs`、`sandbox_attestation_ref`、`redactions_applied`。
   - stdout / stderr 必须保存为 `raw-logs/` 下**独立原始文件**，保留真实退出码与绝对 `cwd`。
   - **重试生成新日志与新 CommandRecord，绝不覆盖或删除第一次失败**；首次失败后重试成功须标记**潜在 flaky**。
   - 未执行的检查标记 `NOT_EXECUTED` / `UNKNOWN`；覆盖率工具未真实产出数据时不得编造覆盖率。
   - 严禁编造 stdout/stderr、退出码、工具版本、found/passed/failed/skipped/error 数量。
 - **绝对 cwd 规则**：所有命令必须显式在**绝对路径**（被分配 worktree）下执行。**禁止依赖当前工作目录**，禁止相对运行时路径（如 `./repo`、`../worktree`）——即使会话从 `C:\Windows\System32` 启动也必须正确定位。
-- **无沙箱执行约束（本阶段）**：直接在本地 worktree 运行测试。**默认禁止**：网络、依赖安装、系统配置修改、服务启动、计划任务、注册表修改、访问凭证目录。来源不可信、可能执行任意安装/破坏性行为的测试**先请人工审批**。**不得执行本项目新建的任何 Python 编排脚本**；若目标业务项目本身是 Python 项目，可执行**该业务项目自身**的测试/构建命令。
+- **沙箱执行约束（硬性）**：测试只能在 OpenClaw Docker sandbox 内运行，容器工作目录为 `/workspace`，仅使用 `/worktree`、`/input`、`/agent-raw`、`/raw-logs` 和 `/workspace`。Docker Engine、动态挂载、有效配置或 runtime attestation 任一失败即 `BLOCKED`；禁止宿主机回退。**默认禁止**：网络、依赖安装、系统配置修改、服务启动、计划任务、注册表修改、访问凭证目录。来源不可信、可能执行任意安装/破坏性行为的测试**先请人工审批**。**不得执行本项目新建的任何 Python 编排脚本**；若目标业务项目本身是 Python 项目，可执行**该业务项目自身**的测试/构建命令。
 
 ## 3. 本地 Git 工具（仅限被分配 worktree，仅测试代码）
 
@@ -49,4 +49,4 @@
 
 - 默认**不联网**、**不安装**软件或依赖、**不访问凭证/密钥**、**不启动服务**、**不执行远程 Git**、不改系统配置/注册表/计划任务。
 - 任何上述需求都属人工审批节点：返回 `HUMAN_DECISION_REQUIRED`，交 manager-agent 处理，不自行开启。
-- 本阶段执行无 sandbox，必须记录 `isolation_mode = UNSANDBOXED_LOCAL` 及风险，**不得声称"已完全隔离"**。
+- 新 run 必须记录 `isolation_mode = SANDBOXED_DOCKER` 及真实 sandbox attestation；不得把缺失 attestation 的执行记录为成功，也不得声称未验证的容器属性已满足。
