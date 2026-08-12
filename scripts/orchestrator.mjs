@@ -6,7 +6,7 @@ import { pathToFileURL } from 'node:url';
 import { createControlRepository, openControlDatabase } from './control-core/repository.mjs';
 import { createTaskRepository } from './control-core/task-repository.mjs';
 import { defaultCapabilityPath, initializeLocalAuthority } from './control-core/local-authority.mjs';
-import { dispatchReadyTask } from './orchestrator/service.mjs';
+import { reconcileDispatch, startReadyTask, terminateWorkflowLaunchers } from './orchestrator/service.mjs';
 import { createManagerSessionContext } from './orchestrator/manager-context.mjs';
 import { runWorkflowTurn } from './workflow-runner.mjs';
 
@@ -42,8 +42,13 @@ async function main() {
         note: 'Keep this file readable only by the local Orchestrator service account; direct Control Kernel mutations require OPENCLAW_CONTROL_CAPABILITY.' });
     }
     if (command === 'dispatch') {
-      const value = await dispatchReadyTask({ projectRoot, databasePath, taskId: required(options, 'task-id'),
-        timeoutSeconds: Number(options['timeout-seconds'] ?? 900), leaseSeconds: Number(options['lease-seconds'] ?? 900) });
+      const value = await startReadyTask({ projectRoot, databasePath, taskId: required(options, 'task-id'),
+        timeoutSeconds: options['timeout-seconds'] == null ? null : Number(options['timeout-seconds']),
+        leaseSeconds: options['lease-seconds'] == null ? null : Number(options['lease-seconds']) });
+      return emit(value, value.ok ? 0 : 1);
+    }
+    if (command === 'dispatch-reconcile') {
+      const value = reconcileDispatch({ projectRoot, databasePath, dispatchId: required(options, 'dispatch-id') });
       return emit(value, value.ok ? 0 : 1);
     }
     if (command === 'workflow-run') {
@@ -71,13 +76,22 @@ async function main() {
       }
       if (command === 'apply') {
         const input = JSON.parse(readFileSync(resolve(required(options, 'command-file')), 'utf8'));
-        return emit(controls.apply({ ...input, actor: 'local-orchestrator' }));
+        const applied = controls.apply({ ...input, actor: 'local-orchestrator' });
+        if (input.command_type !== 'CANCEL') return emit(applied);
+        const cancellation = tasks.cancelWorkflow({ workflow_id: input.workflow_id,
+          occurred_at: input.occurred_at, reason: input.reason });
+        const terminated_launchers = terminateWorkflowLaunchers({ projectRoot, databasePath, workflowId: input.workflow_id });
+        return emit({ ...applied, cancellation, terminated_launchers });
       }
       if (command === 'task-register') {
         const input = JSON.parse(readFileSync(resolve(required(options, 'task-file')), 'utf8'));
         return emit(tasks.register(input));
       }
       if (command === 'task-validate') return emit(tasks.validatePackage(required(options, 'task-id'), options['occurred-at']));
+      if (command === 'task-retry') {
+        const input = JSON.parse(readFileSync(resolve(required(options, 'task-file')), 'utf8'));
+        return emit(tasks.retry(input));
+      }
       if (command === 'approval-request') {
         const input = JSON.parse(readFileSync(resolve(required(options, 'request-file')), 'utf8'));
         return emit(controls.requestApproval(input, { actor: 'local-orchestrator' }));
@@ -116,10 +130,11 @@ async function main() {
           };
         }
         const resolved = controls.resolveApproval(response, { actor: 'local-orchestrator' });
-        const task = response.task_id ? tasks.resumeHumanTask({ task_id: response.task_id, decision_id: response.decision_id, occurred_at: response.decided_at }) : null;
+        const task = response.task_id ? tasks.resumeHumanTask({ task_id: response.task_id, decision_id: response.decision_id,
+          outcome: response.outcome, occurred_at: response.decided_at }) : null;
         return emit({ ...resolved, task });
       }
-      throw new Error('usage: orchestrator.mjs <init|manager-context|apply|task-register|task-validate|dispatch|workflow-run|demo-fast-request|approval-request|approval-list|approval-resolve --response-file <abs>|--decision-id <id> --outcome <...> --chosen-option-id <id> --raw-user-reply <text> --decided-by human:<id>> [options]');
+      throw new Error('usage: orchestrator.mjs <init|manager-context|apply|task-register|task-validate|task-retry|dispatch|dispatch-reconcile|workflow-run|demo-fast-request|approval-request|approval-list|approval-resolve --response-file <abs>|--decision-id <id> --outcome <...> --chosen-option-id <id> --raw-user-reply <text> --decided-by human:<id>> [options]');
     } finally { database.close(); }
   } catch (error) {
     emit({ ok: false, command, errors: [{ code: error.code ?? 'ORCHESTRATOR_ERROR', message: error.message, ...error.details }] }, 1);

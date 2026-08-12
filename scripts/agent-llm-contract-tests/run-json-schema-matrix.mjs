@@ -7,6 +7,7 @@ import { pathToFileURL } from 'node:url';
 
 import { connectGatewayLlmClient } from '../agent-json-harness/gateway-llm-client.mjs';
 import { classifyLlmFailure } from '../agent-json-harness/json-repair-prompts.mjs';
+import { MAX_AGENT_TIMEOUT_MS, validateAgentTimeoutMs } from '../agent-json-harness/timeout-policy.mjs';
 import { PROJECT_ROOT, assertRuntimeGuardReady, validateLlmResponse } from '../agent-json-harness/runtime-guard-client.mjs';
 import {
   JSON_SCHEMA_AGENT_SCENARIOS,
@@ -15,7 +16,7 @@ import {
 } from './json-schema-test-scenarios.mjs';
 
 export const DEFAULT_OUTPUT_ROOT = join(PROJECT_ROOT, 'artifacts', 'agent-json-schema-matrix');
-export const DEFAULT_TIMEOUT_MS = 600000;
+export const DEFAULT_TIMEOUT_MS = MAX_AGENT_TIMEOUT_MS;
 
 function runId() {
   return `matrix-${new Date().toISOString().replace(/[:.]/gu, '-').replace('Z', 'Z')}`;
@@ -162,7 +163,7 @@ function writeSummary(runRoot, summary) {
 function validateOptions({ scenarios, repetitions, timeoutMs }) {
   if (!Array.isArray(scenarios) || scenarios.length === 0) throw new Error('至少需要一个 JSON Schema 测试场景。');
   if (!Number.isInteger(repetitions) || repetitions < 1) throw new Error('重复次数必须为正整数。');
-  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) throw new Error('超时时间必须为正数。');
+  validateAgentTimeoutMs(timeoutMs, '超时时间');
   for (const scenario of scenarios) {
     if (!scenario.name || !scenario.schemaFile || !scenario.agentId || !Array.isArray(scenario.prompts) || scenario.prompts.length === 0) {
       throw new Error(`测试场景结构不完整：${JSON.stringify(scenario)}`);
@@ -299,7 +300,7 @@ function usage() {
     '  --scenario <name>          Run one or more stable scenario names; repeatable.',
     '  --run-id <id>              Safe output/session run identifier.',
     '  --output-root <path>       Output root (default: artifacts/agent-json-schema-matrix).',
-    '  --timeout-seconds <n>      Per-call timeout in seconds (default: 600).',
+    '  --timeout-seconds <n>      Per-call timeout in seconds (default/max: 300).',
     '  --help                     Print this help.',
   ].join('\n');
 }
@@ -315,9 +316,7 @@ function parseArgs(argv) {
     else if (token === '--timeout-seconds') result.timeoutMs = Number(argv[++index]) * 1000;
     else throw new Error(`未知参数：${token}`);
   }
-  if (!result.help && result.timeoutMs !== undefined && (!Number.isFinite(result.timeoutMs) || result.timeoutMs <= 0)) {
-    throw new Error('--timeout-seconds 必须为正数。');
-  }
+  if (!result.help && result.timeoutMs !== undefined) validateAgentTimeoutMs(result.timeoutMs, '--timeout-seconds');
   return result;
 }
 

@@ -447,7 +447,7 @@ export function createTaskRepository(projectRootInput, database) {
       return transactional(database, `RETRY:${newTask.task_id}:${newTask.run_id}`, newTask, () => {
         const current = loadTask(database, newTask.task_id);
         if (!current) fail('TASK_NOT_FOUND', `task does not exist: ${newTask.task_id}`);
-        if (!['FAILED', 'LOST'].includes(current.status)) fail('TASK_RETRY_SOURCE_INVALID', `retry requires FAILED or LOST task, received ${current.status}`);
+        if (!['FAILED', 'LOST', 'NEEDS_REWORK'].includes(current.status)) fail('TASK_RETRY_SOURCE_INVALID', `retry requires FAILED, LOST or NEEDS_REWORK task, received ${current.status}`);
         if (current.attempt >= current.max_attempts) fail('TASK_RETRY_BUDGET_EXHAUSTED', 'task retry budget is exhausted');
         for (const key of ['workflow_id', 'task_id', 'task_type', 'assigned_agent', 'max_attempts', 'output_contract_version']) {
           if (newTask[key] !== current[key]) fail('TASK_RETRY_IDENTITY_MISMATCH', `retry changed immutable field: ${key}`);
@@ -459,8 +459,9 @@ export function createTaskRepository(projectRootInput, database) {
         }
         const dispatch = database.prepare('SELECT status, completion_json FROM dispatches WHERE run_id=? ORDER BY created_at DESC LIMIT 1').get(current.run_id);
         const completion = parseJson(dispatch?.completion_json);
-        if (!dispatch || !['FAILED', 'LOST'].includes(dispatch.status) || completion?.status !== dispatch.status) {
-          fail('TASK_RETRY_DISPATCH_UNCONFIRMED', 'retry requires a terminal FAILED or LOST dispatch completion');
+        const expectedDispatchStatuses = current.status === 'NEEDS_REWORK' ? ['SUCCEEDED'] : ['FAILED', 'LOST'];
+        if (!dispatch || !expectedDispatchStatuses.includes(dispatch.status) || completion?.status !== dispatch.status) {
+          fail('TASK_RETRY_DISPATCH_UNCONFIRMED', 'retry requires a terminal dispatch completion matching the task rework state');
         }
         const workflow = database.prepare('SELECT state_json FROM workflows WHERE workflow_id=?').get(current.workflow_id);
         if (!workflow || parseJson(workflow.state_json).condition === 'TERMINAL') fail('TASK_WORKFLOW_TERMINAL', 'cannot retry task on terminal workflow');
@@ -476,17 +477,56 @@ export function createTaskRepository(projectRootInput, database) {
         return { ok: true, command: 'task-retry', task: newTask, event };
       });
     },
-    resumeHumanTask({ task_id: taskId, decision_id: decisionId, occurred_at: occurredAt = new Date().toISOString() } = {}) {
-      if (!taskId || !decisionId) fail('TASK_APPROVAL_RESUME_INVALID', 'task_id and decision_id are required');
-      return transactional(database, `RESUME-HUMAN:${taskId}:${decisionId}`, { task_id: taskId, decision_id: decisionId, occurred_at: occurredAt }, () => {
+    resumeHumanTask({ task_id: taskId, decision_id: decisionId, outcome, occurred_at: occurredAt = new Date().toISOString() } = {}) {
+      if (!taskId || !decisionId || !['APPROVED', 'REJECTED', 'MODIFIED'].includes(outcome)) {
+        fail('TASK_APPROVAL_RESUME_INVALID', 'task_id, decision_id and a valid outcome are required');
+      }
+      const targetStatus = { APPROVED: 'COMPLETED', REJECTED: 'BLOCKED', MODIFIED: 'NEEDS_REWORK' }[outcome];
+      return transactional(database, `RESUME-HUMAN:${taskId}:${decisionId}`, { task_id: taskId, decision_id: decisionId, outcome, occurred_at: occurredAt }, () => {
         const current = loadTask(database, taskId);
         if (!current) fail('TASK_NOT_FOUND', `task does not exist: ${taskId}`);
-        if (current.status === 'READY') return { ok: true, command: 'task-resume-human', task: current, idempotent_replay: true };
+        if (current.status === targetStatus) return { ok: true, command: 'task-resume-human', task: current, idempotent_replay: true };
         if (current.status !== 'WAITING_HUMAN') fail('TASK_APPROVAL_RESUME_STATUS_INVALID', `task must be WAITING_HUMAN, received ${current.status}`);
-        const next = updateTask(database, current, 'READY', occurredAt);
-        const event = appendTaskEvent(database, next, `TEV-APPROVAL-RESUME-${taskId}-${decisionId}`, 'TASK_HUMAN_APPROVAL_RESOLVED', current.status, 'READY', occurredAt,
-          { decision_id: decisionId });
+        const next = updateTask(database, current, targetStatus, occurredAt);
+        const event = appendTaskEvent(database, next, `TEV-APPROVAL-RESUME-${taskId}-${decisionId}`, 'TASK_HUMAN_APPROVAL_RESOLVED', current.status, targetStatus, occurredAt,
+          { decision_id: decisionId, outcome });
         return { ok: true, command: 'task-resume-human', task: next, event };
+      });
+    },
+    cancelWorkflow({ workflow_id: workflowId, occurred_at: occurredAt = new Date().toISOString(), reason = 'Workflow cancelled' } = {}) {
+      if (!workflowId) fail('TASK_WORKFLOW_CANCEL_INVALID', 'workflow_id is required');
+      return transactional(database, `CANCEL-WORKFLOW:${workflowId}`, { workflow_id: workflowId, occurred_at: occurredAt, reason }, () => {
+        const active = database.prepare(`SELECT task_json FROM tasks WHERE workflow_id=?
+          AND status NOT IN ('COMPLETED','FAILED','CANCELLED','SUPERSEDED','LOST') ORDER BY task_id`).all(workflowId);
+        const cancelled = [];
+        const dispatches = [];
+        for (const row of active) {
+          const task = parseJson(row.task_json);
+          const dispatchRows = database.prepare(`SELECT * FROM dispatches WHERE task_id=?
+            AND status NOT IN ('SUCCEEDED','FAILED','LOST') ORDER BY created_at`).all(task.task_id);
+          for (const dispatch of dispatchRows) {
+            const intent = parseJson(dispatch.intent_json);
+            const completion = {
+              schema_version: 1, record_type: 'COMPLETION_RECEIPT', completion_id: `CMP-CANCEL-${dispatch.dispatch_id.slice(4)}`,
+              dispatch_id: intent.dispatch_id, idempotency_key: intent.idempotency_key,
+              workflow_id: intent.workflow_id, task_id: intent.task_id, run_id: intent.run_id,
+              agent_id: intent.agent_id, attempt: intent.attempt, status: 'LOST', session_key: intent.session_key,
+              session_id: dispatch.session_id ?? `cancelled-${dispatch.dispatch_id}`,
+              result_path_abs: null, result_sha256: null, error_code: 'WORKFLOW_CANCELLED', error_message: reason,
+              completed_at: occurredAt,
+            };
+            database.prepare('UPDATE dispatches SET status=?, completion_json=?, updated_at=? WHERE dispatch_id=?')
+              .run('LOST', json(completion), occurredAt, dispatch.dispatch_id);
+            database.prepare("UPDATE dispatch_outbox SET status='FAILED', attempts=attempts+1, last_error=? WHERE dispatch_id=?")
+              .run(`WORKFLOW_CANCELLED: ${reason}`.slice(0, 2000), dispatch.dispatch_id);
+            dispatches.push({ dispatch_id: dispatch.dispatch_id, run_id: dispatch.run_id, completion });
+          }
+          const next = updateTask(database, task, 'CANCELLED', occurredAt);
+          const event = appendTaskEvent(database, next, `TEV-CANCELLED-${task.task_id}-${task.run_id}`, 'TASK_WORKFLOW_CANCELLED', task.status,
+            'CANCELLED', occurredAt, { reason, dispatch_ids: dispatchRows.map((item) => item.dispatch_id) });
+          cancelled.push({ task: next, event });
+        }
+        return { ok: true, command: 'task-cancel-workflow', workflow_id: workflowId, cancelled, dispatches };
       });
     },
     supersede({ task_id: taskId, reason, occurred_at: occurredAt = new Date().toISOString() } = {}) {
@@ -503,7 +543,28 @@ export function createTaskRepository(projectRootInput, database) {
       });
     },
     get(taskId) { return loadTask(database, taskId); },
-    dispatches(taskId) { return database.prepare('SELECT intent_json, latest_receipt_json, completion_json, status FROM dispatches WHERE task_id = ? ORDER BY created_at').all(taskId).map((row) => ({ intent: parseJson(row.intent_json), receipt: parseJson(row.latest_receipt_json), completion: parseJson(row.completion_json), status: row.status })); },
+    getRun(runId) {
+      const row = database.prepare('SELECT task_snapshot_json, status, result_json, updated_at FROM task_runs WHERE run_id=?').get(runId);
+      return row ? { task: parseJson(row.task_snapshot_json), status: row.status, result: parseJson(row.result_json), updated_at: row.updated_at } : null;
+    },
+    getDispatch(dispatchId) {
+      const row = database.prepare('SELECT * FROM dispatches WHERE dispatch_id = ?').get(dispatchId);
+      if (!row) return null;
+      return {
+        dispatch_id: row.dispatch_id,
+        status: row.status,
+        intent: parseJson(row.intent_json),
+        receipt: parseJson(row.latest_receipt_json),
+        completion: parseJson(row.completion_json),
+        session_id: row.session_id,
+        updated_at: row.updated_at,
+      };
+    },
+    dispatches(taskId) { return database.prepare('SELECT dispatch_id, intent_json, latest_receipt_json, completion_json, status FROM dispatches WHERE task_id = ? ORDER BY created_at').all(taskId).map((row) => ({ dispatch_id: row.dispatch_id, intent: parseJson(row.intent_json), receipt: parseJson(row.latest_receipt_json), completion: parseJson(row.completion_json), status: row.status })); },
+    unresolvedDispatch(taskId) {
+      const row = database.prepare("SELECT dispatch_id FROM dispatches WHERE task_id = ? AND status NOT IN ('SUCCEEDED', 'FAILED', 'LOST') ORDER BY created_at DESC LIMIT 1").get(taskId);
+      return row ? this.getDispatch(row.dispatch_id) : null;
+    },
     outbox() { return database.prepare("SELECT * FROM dispatch_outbox WHERE status <> 'DELIVERED' ORDER BY created_at").all(); },
   };
 }

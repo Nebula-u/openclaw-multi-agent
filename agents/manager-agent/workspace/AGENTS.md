@@ -6,7 +6,7 @@
 ## 不可绕过的边界
 
 1. `runtime/control/control.db` 是 workflow、task、run、dispatch 与结果状态的唯一事实源。聊天记录、Agent 自述、文件投影和看板都不是状态源。
-2. 只可请求本地 `scripts/orchestrator.mjs` 执行受支持的 workflow 操作：`apply`、`task-register`、`task-validate`、`dispatch`、`approval-request`、`approval-list`、`approval-resolve`。不得直接调用 `control-kernel.mjs` 的 mutation 命令。
+2. 只可请求本地 `scripts/orchestrator.mjs` 执行受支持的 workflow 操作：`manager-context`、`workflow-run`、`apply`、`task-register`、`task-validate`、`task-retry`、`dispatch`、`dispatch-reconcile`、`approval-request`、`approval-list`、`approval-resolve`。不得直接调用 `control-kernel.mjs` 的 mutation 命令。
 3. **不得调用** `sessions_spawn`、`sessions_send`、`sessions_list`、`sessions_history`、monitor HTTP 写接口、`dispatch-prepare`、`dispatch-receipt`、`result-ingest` 或直接写 SQLite/控制投影。local-orchestrator 才能生成 Agent ID、session、intent、receipt、completion 和重试结果。
 4. 创建 task 时只能声明 `task_type`、已批准的上下文、绝对 worktree/artifact 路径和验收条件；`task_type → assigned_agent` 由 `task-output-contracts.json` 和 Task Repository 校验。不得从聊天内容自由指定或替换 worker Agent。
 5. Agent 的 JSON/JSONL 只能写 `<artifact_root_abs>/.agent-raw/**`。local-orchestrator 统一执行唯一 JSON 清洗规则、schema 校验、哈希收据和原子发布到最终 output。不得接受聊天中的 JSON 作为结果，也不得自行决定 retry/完成状态。
@@ -14,6 +14,8 @@
 
 7. 新 workflow 的状态模型固定为 v2 `phase + condition`；人工等待只写 `condition=WAITING_HUMAN`。历史 v1 的专用等待名称不再由运行时代码产生，也不能写入新 workflow。
 8. Agent 返回 `HUMAN_DECISION_REQUIRED` 后，必须通过 local-orchestrator 创建绑定的 `approval-request` 并向用户展示问题；未收到真实且绑定校验通过的 response，不得恢复 task、派发依赖 task 或通过 Gate。
+9. `dispatch` 只负责受控启动并立即返回 `STARTED`；Windows 由 detached runner 显式调用 `ComSpec`/`openclaw.cmd`。Manager 不等待长进程、不轮询 session、不直接调用 `openclaw`/`openclaw.cmd`。需要核对时只可使用 `dispatch-reconcile` 或下一轮 `workflow-run`，且必须绑定原 `dispatch_id`；若返回 `RECOVERY_REQUIRED`，只能报告证据缺失并按受控流程建立新 run。
+10. 即使用户已明确批准应急恢复，也只能提交 `dispatch-reconcile`、`approval-resolve` 或其他已支持的 Orchestrator operation；不得手工写 SQLite、伪造 `DISPATCHED/RUNNING/COMPLETED`、重复派发、跳过 test/review/release 阶段或直接修改其他 Agent 的 worktree。
 
 ## 工作方式
 
@@ -24,6 +26,7 @@
 5. 只在 Control DB 的 task/dispatch 结果和本地 Git/Gate 证据都通过后，才能向用户说明阶段或任务完成。无法确认时明确说 `UNKNOWN`、`BLOCKED` 或 `FAILED`。
 6. 恢复时只读取 `orchestrator`/Control Kernel 的快照与审计结果。发现活动 dispatch 时不自行再次派发；必须由本地编排器依据 durable 状态处理。
 7. 每个编排轮次开始前调用 `orchestrator manager-context --workflow-id <WF> --estimated-tokens <n>`；只把返回的 `prompt_context` 作为控制面上下文。若 `session_policy.action=START_NEW_MANAGER_SESSION`，先创建新 Manager 会话并用该紧凑上下文恢复，不继续累积旧聊天历史。
+8. 用户可见回复采用“结果优先”格式：每个工具/文件/命令最多汇总为一条状态，不播报“让我看看”“我正在检查”的连续过程，不输出工具参数、源码探查、session 尾部、模型思考或未经验证的推测。正常回复只保留当前阶段、已验证事实、阻塞/审批和下一步。
 
 ## 用户可见信息与监控
 

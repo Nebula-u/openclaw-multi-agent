@@ -10,7 +10,7 @@ import {
   REPETITIONS_PER_PROMPT,
 } from '../scripts/agent-llm-contract-tests/json-schema-test-scenarios.mjs';
 import { CONTRACT_SCENARIOS, INTERNAL_CONTRACTS } from '../scripts/agent-llm-contract-tests/contract-scenarios.mjs';
-import { runJsonSchemaMatrix } from '../scripts/agent-llm-contract-tests/run-json-schema-matrix.mjs';
+import { DEFAULT_TIMEOUT_MS, runJsonSchemaMatrix } from '../scripts/agent-llm-contract-tests/run-json-schema-matrix.mjs';
 
 test('all externally generated schemas have five distinct prompts and twenty repetitions', () => {
   const schemaFiles = readdirSync(join(process.cwd(), 'contracts')).filter((name) => name.endsWith('.schema.json'));
@@ -80,4 +80,15 @@ test('runner records a failed validation and continues with later calls', async 
 test('package exposes the full matrix command', () => {
   const packageJson = JSON.parse(readFileSync(join(process.cwd(), 'package.json'), 'utf8'));
   assert.equal(packageJson.scripts['agent-json-schema:matrix'], 'node scripts/agent-llm-contract-tests/run-json-schema-matrix.mjs');
+});
+
+test('matrix Agent calls are capped at five minutes', async () => {
+  assert.equal(DEFAULT_TIMEOUT_MS, 300000);
+  await assert.rejects(
+    () => runJsonSchemaMatrix({
+      scenarios: [JSON_SCHEMA_AGENT_SCENARIOS[0]], timeoutMs: 300001,
+      createClient: async () => ({ send: async () => '{}', close() {} }),
+    }),
+    /no more than 300000ms/u,
+  );
 });

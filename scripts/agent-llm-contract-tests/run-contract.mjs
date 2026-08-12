@@ -7,6 +7,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { connectGatewayLlmClient } from '../agent-json-harness/gateway-llm-client.mjs';
 import { PROJECT_ROOT, assertRuntimeGuardReady, validateLlmResponse } from '../agent-json-harness/runtime-guard-client.mjs';
 import { classifyLlmFailure } from '../agent-json-harness/json-repair-prompts.mjs';
+import { validateAgentTimeoutMs } from '../agent-json-harness/timeout-policy.mjs';
 import { getContractScenario } from './contract-scenarios.mjs';
 
 const CALL_COUNT = 10;
@@ -49,6 +50,7 @@ function failureRecord({ ordinal, response, validation }) {
 }
 
 export async function runContractTest({ schemaFile, outputRoot = join(PROJECT_ROOT, 'artifacts', 'agent-llm-contract-tests'), timeoutMs = 120000 }) {
+  timeoutMs = validateAgentTimeoutMs(timeoutMs);
   const scenario = getContractScenario(schemaFile);
   const schemaText = await import('node:fs').then(({ readFileSync }) => readFileSync(join(PROJECT_ROOT, 'contracts', schemaFile), 'utf8').trim());
   assertRuntimeGuardReady();
@@ -98,6 +100,7 @@ function parseArgs(argv) {
     else throw new Error(`Unknown argument: ${argv[index]}`);
   }
   if (!result.schemaFile) throw new Error('Usage: node run-contract.mjs --schema <contracts file>');
+  validateAgentTimeoutMs(result.timeoutMs ?? 120000, '--timeout-seconds');
   return result;
 }
 

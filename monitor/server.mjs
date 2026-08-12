@@ -9,6 +9,10 @@ import { openTelemetryDatabase, createTelemetryRepository } from './telemetry-re
 import { createSessionTailer } from './session-tailer.mjs';
 import { createArtifactWatcher } from './artifact-watcher.mjs';
 import { createHealthClassifier } from './health-classifier.mjs';
+import { createSupervisionRepository } from '../scripts/control-core/supervision-repository.mjs';
+import { createWatchdog } from './watchdog.mjs';
+import { createWakeAdapter } from './wake-adapter.mjs';
+import { createWorkflowContinuation } from '../scripts/orchestrator/workflow-continuation.mjs';
 
 function isLoopback(address = '') {
   return address === '127.0.0.1' || address === '::1' || address === '::ffff:127.0.0.1';
@@ -50,6 +54,7 @@ export function createMonitorServer(config, { database: providedDatabase = null,
   const database = providedDatabase ?? openControlDatabase(config.databasePath);
   createControlRepository(config.projectRoot, database);
   const tasks = createTaskRepository(config.projectRoot, database);
+  const supervision = createSupervisionRepository(config.projectRoot, database);
   const telemetryDatabase = providedTelemetryDatabase ?? openTelemetryDatabase(config.monitorDatabasePath ?? ':memory:');
   const telemetry = createTelemetryRepository(config.projectRoot, telemetryDatabase);
   telemetry.prune({ maxEvents: config.telemetryMaxEvents, activityRetentionDays: config.activityRetentionDays });
@@ -62,6 +67,15 @@ export function createMonitorServer(config, { database: providedDatabase = null,
     heartbeatStaleSeconds: config.heartbeatStaleSeconds, possiblyStalledSeconds: config.possiblyStalledSeconds,
     startingTimeoutSeconds: config.startingTimeoutSeconds, toolRunningGraceSeconds: config.toolRunningGraceSeconds,
   } });
+  const watchdog = createWatchdog({ telemetry, supervision, publish,
+    enabled: config.watchdogEnabled ?? true, shadowMode: config.watchdogShadowMode ?? true,
+    cooldownSeconds: config.supervisionCooldownSeconds ?? 300 });
+  const wakeAdapter = createWakeAdapter({ projectRoot: config.projectRoot, controlDatabase: database, supervision, publish,
+    enabled: config.managerWakeEnabled ?? false, managerSessionKey: config.managerSessionKey ?? null,
+    timeoutSeconds: config.managerWakeTimeoutSeconds ?? 60 });
+  const continuation = createWorkflowContinuation({ projectRoot: config.projectRoot, databasePath: config.databasePath,
+    controlDatabase: database, supervision, publish, enabled: config.workflowContinuationEnabled ?? false,
+    maxTurns: config.workflowContinuationMaxTurns ?? 8 });
   const attachHealth = (value) => {
     for (const workflow of value.workflows) for (const task of workflow.tasks ?? []) task.health = telemetry.health(task.task_id);
     return value;
@@ -83,18 +97,32 @@ export function createMonitorServer(config, { database: providedDatabase = null,
     })),
   });
   let internalSnapshot = createControlSnapshot(database);
-  healthClassifier.scan(internalSnapshot);
+  watchdog.scan(healthClassifier.scan(internalSnapshot));
   internalSnapshot = attachHealth(internalSnapshot);
   let snapshot = publicSnapshot(internalSnapshot);
   let fingerprint = JSON.stringify(snapshot.workflows);
   hub.publish('snapshot', snapshot, { source: 'CONTROL_DB' });
 
+  let supervisionCycle = Promise.resolve();
+  let supervisionRunning = false;
+  const runSupervisionCycle = () => {
+    if (supervisionRunning) return;
+    supervisionRunning = true;
+    supervisionCycle = (async () => {
+      try {
+        await continuation.scan();
+        await wakeAdapter.scan();
+      } catch (error) {
+        hub.publish('monitor-health', { status: 'DEGRADED', error: error.message }, { source: 'SUPERVISION_CYCLE' });
+      } finally { supervisionRunning = false; }
+    })();
+  };
   const reconcile = () => {
     try {
       sessionTailer.scan();
       artifactWatcher.scan();
       const next = createControlSnapshot(database);
-      healthClassifier.scan(next);
+      watchdog.scan(healthClassifier.scan(next));
       attachHealth(next);
       const nextPublicSnapshot = publicSnapshot(next);
       const nextFingerprint = JSON.stringify(nextPublicSnapshot.workflows);
@@ -104,6 +132,7 @@ export function createMonitorServer(config, { database: providedDatabase = null,
         fingerprint = nextFingerprint;
         hub.publish('snapshot', snapshot, { source: 'CONTROL_DB' });
       }
+      runSupervisionCycle();
     } catch (error) {
       hub.publish('monitor-health', { status: 'DEGRADED', error: error.message }, { source: 'MONITOR' });
     }
@@ -198,6 +227,10 @@ export function createMonitorServer(config, { database: providedDatabase = null,
     database,
     hub,
     telemetry,
+    supervision,
+    watchdog,
+    wakeAdapter,
+    continuation,
     config,
     snapshot: () => snapshot,
     async start() {
@@ -210,6 +243,7 @@ export function createMonitorServer(config, { database: providedDatabase = null,
     async close() {
       clearInterval(timer);
       clearInterval(maintenanceTimer);
+      await supervisionCycle;
       if (server.listening) await new Promise((resolveClose, reject) => server.close((error) => error ? reject(error) : resolveClose()));
       if (!providedDatabase) database.close();
       if (!providedTelemetryDatabase) telemetryDatabase.close();

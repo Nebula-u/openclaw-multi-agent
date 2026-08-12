@@ -8,8 +8,6 @@ export function TaskList() {
   const tasks = useFilteredTasks();
   const allTasks = useAppStore((s) => s.tasks);
   const filter = useAppStore((s) => s.filter);
-  const allTags = useAllTags();
-
   const isFiltering = filter.priority !== null || filter.tag !== null || filter.hideCompleted;
 
   // Determine empty state message

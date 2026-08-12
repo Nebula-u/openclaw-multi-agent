@@ -341,10 +341,14 @@ if [ "$APPLY" -eq 0 ]; then
   printf '  %s\n' "${RUNTIME_DIRS[@]:0:8}"
   echo "  ... 共 ${#RUNTIME_DIRS[@]} 个目录"
   echo ""
-  echo "[DRYRUN] 将执行的 openclaw agents add 语义（未执行）："
+  echo "[DRYRUN] Agent 保留/创建计划（未执行）："
   for id in "${AGENT_IDS[@]}"; do
-    modelarg=""; [ -n "${MODEL[$id]}" ] && modelarg=" --model \"${MODEL[$id]}\""
-    echo "  openclaw agents add $id --non-interactive --workspace \"${OC_WS[$id]}\" --agent-dir \"${OC_DIR[$id]}\"$modelarg --json"
+    if contains "$EXISTING_IDS" "$id"; then
+      echo "  KEEP $id -> ${OC_WS[$id]}"
+    else
+      modelarg=""; [ -n "${MODEL[$id]}" ] && modelarg=" --model \"${MODEL[$id]}\""
+      echo "  ADD  openclaw agents add $id --non-interactive --workspace \"${OC_WS[$id]}\" --agent-dir \"${OC_DIR[$id]}\"$modelarg --json"
+    fi
   done
   echo ""
   echo "[DRYRUN] 将通过 config set --dry-run 校验 subagents/sandbox 字段（未写入）。"

@@ -11,6 +11,7 @@ import { collectLlmRun } from '../scripts/agent-json-harness/collect-llm-failure
 import { ingestJsonText } from '../scripts/runtime-core/json-ingestion.mjs';
 import { MAX_REPAIR_RETRIES, buildJsonRepairPrompt, classifyLlmFailure } from '../scripts/agent-json-harness/json-repair-prompts.mjs';
 import { CONTRACT_SCENARIOS, INTERNAL_CONTRACTS, getContractScenario } from '../scripts/agent-llm-contract-tests/contract-scenarios.mjs';
+import { MAX_AGENT_TIMEOUT_MS, validateAgentTimeoutMs } from '../scripts/agent-json-harness/timeout-policy.mjs';
 
 const EXPECTED_SCHEMAS = [
   'acceptance-criteria.schema.json', 'agent-package.schema.json',
@@ -20,6 +21,12 @@ const EXPECTED_SCHEMAS = [
   'release-decision.schema.json', 'result.schema.json', 'review-findings.schema.json', 'skill-package.schema.json',
   'task.schema.json',
 ];
+
+test('Agent harness timeouts are capped at five minutes', () => {
+  assert.equal(MAX_AGENT_TIMEOUT_MS, 300000);
+  assert.equal(validateAgentTimeoutMs(300000), 300000);
+  assert.throws(() => validateAgentTimeoutMs(300001), /no more than 300000ms/u);
+});
 
 test('LLM 场景矩阵覆盖每份契约的 5 个不同需求', () => {
   assert.deepEqual(LLM_SCENARIOS.map((item) => item.schemaFile).sort(), [...EXPECTED_SCHEMAS].sort());

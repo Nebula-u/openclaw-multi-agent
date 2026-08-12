@@ -1,4 +1,3 @@
-import { motion } from 'framer-motion';
 import { useAppStore } from '../../store';
 import { Priority } from '../../model/Task';
 import { PRIORITY_OPTIONS } from '../task/PriorityBadge';

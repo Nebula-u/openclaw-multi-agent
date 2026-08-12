@@ -47,6 +47,8 @@ test('manager session policy rotates before long context dominates the session',
   assert.equal(policy.soft_budget_percent, 60);
   assert.equal(policy.soft_budget_tokens, 120000);
   assert.equal(policy.thinking_level, 'medium');
+  assert.equal(policy.visible_output.mode, 'summary_only');
+  assert.equal(policy.visible_output.max_items, 4);
   assert.ok(policy.prompt_content.include.includes('Control Kernel manager-context snapshot'));
   assert.ok(policy.prompt_content.exclude.includes('complete Control Kernel snapshot'));
   assert.ok(policy.prompt_content.exclude.includes('dispatch receipts and completion payloads'));

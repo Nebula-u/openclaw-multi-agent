@@ -2,6 +2,7 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { MAX_AGENT_TIMEOUT_MS, validateAgentTimeoutMs } from './timeout-policy.mjs';
 
 function commandOutput(command, args) {
   try {
@@ -84,6 +85,7 @@ function withTimeout(operation, milliseconds, label) {
 }
 
 export async function connectGatewayLlmClient({ connectTimeoutMs = 30000 } = {}) {
+  connectTimeoutMs = validateAgentTimeoutMs(connectTimeoutMs, 'Gateway connection timeout');
   const GatewayChatClient = await loadGatewayChatClient();
   let client = null;
   let reconnecting = null;
@@ -124,7 +126,8 @@ export async function connectGatewayLlmClient({ connectTimeoutMs = 30000 } = {})
 
   await establish();
   return {
-    async send({ agentId, sessionKey, prompt, expectedReplyCount = 1, timeoutMs = 600000 }) {
+    async send({ agentId, sessionKey, prompt, expectedReplyCount = 1, timeoutMs = MAX_AGENT_TIMEOUT_MS }) {
+      timeoutMs = validateAgentTimeoutMs(timeoutMs);
       try {
         await request(
           (active) => active.sendChat({ agentId, sessionKey, message: prompt, deliver: false, thinking: 'off', timeoutMs }),

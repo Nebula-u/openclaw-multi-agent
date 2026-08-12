@@ -6,7 +6,7 @@ import { createControlSnapshot } from '../../control-core/read-model.mjs';
 import { createControlRepository } from '../../control-core/repository.mjs';
 import { createTaskRepository } from '../../control-core/task-repository.mjs';
 import { canonicalJson } from '../../runtime-core/atomic-store.mjs';
-import { dispatchReadyTask } from '../service.mjs';
+import { reconcileTaskDispatch, startReadyTask } from '../service.mjs';
 
 function parseJson(value) { return value == null ? null : JSON.parse(value); }
 
@@ -48,7 +48,10 @@ export function createWorkflowGraphAdapter({ projectRoot, databasePath, database
     },
     validateTask(taskId) { return tasks.validatePackage(taskId, clock().toISOString()); },
     async dispatch(taskId) {
-      return dispatchReadyTask({ projectRoot, databasePath, taskId, runner, clock });
+      return startReadyTask({ projectRoot, databasePath, taskId, runner, clock });
+    },
+    reconcile(taskId) {
+      return reconcileTaskDispatch({ projectRoot, databasePath, taskId, clock });
     },
     apply(graphRunId, workflow, action) {
       const occurredAt = clock().toISOString();
