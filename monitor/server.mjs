@@ -171,6 +171,9 @@ export function createMonitorServer(config, { database: providedDatabase = null,
       if (request.method === 'GET' && path === '/api/workflows') {
         return sendJson(response, 200, { ok: true, workflows: snapshot.workflows, generated_at: snapshot.generated_at }, cors);
       }
+      if (request.method === 'GET' && path === '/api/supervisor') {
+        return sendJson(response, 200, { ok: true, workflows: continuation.status(), generated_at: new Date().toISOString() }, cors);
+      }
       const workflowSnapshot = path.match(/^\/api\/workflows\/([^/]+)\/snapshot$/u);
       if (request.method === 'GET' && workflowSnapshot) {
         const value = publicSnapshot(attachHealth(createControlSnapshot(database, { workflowId: decodeURIComponent(workflowSnapshot[1]) })));

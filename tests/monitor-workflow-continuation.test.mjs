@@ -34,6 +34,8 @@ test('workflow continuation advances deterministic phases and wakes manager only
     assert.equal(supervision.list().length, 1);
     assert.equal(supervision.list()[0].request_type, 'SEND_MESSAGE');
     assert.equal(supervision.wakeOutbox().length, 1);
+    assert.ok(continuation.status(workflowId)[0].checkpoint_id);
+    assert.ok(supervision.list()[0].evidence.checkpoint.checkpoint_id);
 
     await continuation.scan();
     assert.equal(supervision.list().length, 1, 'the same durable stop must not create repeated manager wakes');

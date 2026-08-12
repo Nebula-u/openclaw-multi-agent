@@ -17,6 +17,14 @@ export function createWorkflowContinuation({ projectRoot: projectRootInput, data
   const projectRoot = resolve(projectRootInput);
   let running = false;
 
+  function checkpoint(workflowId) {
+    const row = controlDatabase.prepare(`SELECT checkpoint_id, checkpoint_blob, checkpoint_type, created_at
+      FROM langgraph_checkpoints WHERE thread_id=?
+      ORDER BY checkpoint_id DESC LIMIT 1`).get(workflowId);
+    if (!row) return null;
+    return { checkpoint_id: row.checkpoint_id, checkpoint_type: row.checkpoint_type, created_at: row.created_at };
+  }
+
   function requestManager(workflow, graphResult) {
     if (!['NEEDS_TASK', 'HOLD', 'FAILED'].includes(graphResult.status)) return null;
     const key = `workflow-continuation/${workflow.workflow_id}/${workflow.revision}/${graphResult.status}`;
@@ -36,7 +44,7 @@ export function createWorkflowContinuation({ projectRoot: projectRootInput, data
       reason: graphResult.status === 'NEEDS_TASK'
         ? `Workflow ${workflow.workflow_id} requires a task package for phase ${graphResult.phase}`
         : `Workflow ${workflow.workflow_id} stopped with ${graphResult.status}: ${graphResult.stop_reason ?? 'unknown reason'}`,
-      evidence: { graph_result: graphResult },
+      evidence: { graph_result: graphResult, checkpoint: checkpoint(workflow.workflow_id) },
       requested_at: now().toISOString(),
     };
     const created = supervision.request(request);
@@ -80,6 +88,16 @@ export function createWorkflowContinuation({ projectRoot: projectRootInput, data
         }
         return results;
       } finally { running = false; }
+    },
+    status(workflowId = null) {
+      const clauses = workflowId ? 'WHERE w.workflow_id=?' : "WHERE w.condition <> 'TERMINAL'";
+      const rows = controlDatabase.prepare(`SELECT w.workflow_id, w.revision, w.phase, w.condition,
+        (SELECT checkpoint_id FROM langgraph_checkpoints c WHERE c.thread_id=w.workflow_id
+          ORDER BY checkpoint_id DESC LIMIT 1) AS checkpoint_id,
+        (SELECT created_at FROM langgraph_checkpoints c WHERE c.thread_id=w.workflow_id
+          ORDER BY checkpoint_id DESC LIMIT 1) AS checkpoint_at
+        FROM workflows w ${clauses} ORDER BY w.created_at`).all(...(workflowId ? [workflowId] : []));
+      return rows.map((row) => ({ ...row, supervisor_running: running }));
     },
     get running() { return running; },
   };
