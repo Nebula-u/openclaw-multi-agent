@@ -46,7 +46,28 @@
     "decisions_required": { "type": "array", "items": { "type": "object" } },
     "recommended_next_action": { "type": "string" },
     "git_status_after_completion": { "type": ["string", "null"] },
-    "isolation_mode": { "type": "string", "enum": ["UNSANDBOXED_LOCAL"], "description": "实际执行隔离级别；当前部署仅允许 UNSANDBOXED_LOCAL。" },
+    "isolation_mode": { "type": "string", "enum": ["UNSANDBOXED_LOCAL", "SANDBOXED_DOCKER"], "description": "实际执行隔离级别；新 test-agent run 必须使用 SANDBOXED_DOCKER。" },
+    "sandbox_attestation": {
+      "type": ["object", "null"],
+      "additionalProperties": true,
+      "properties": {
+        "schema_version": { "type": "integer", "minimum": 1 },
+        "provider": { "const": "openclaw" },
+        "backend": { "const": "docker" },
+        "mode": { "const": "all" },
+        "scope": { "const": "session" },
+        "runtime_id": { "type": "string", "minLength": 1 },
+        "container_id": { "type": "string", "minLength": 1 },
+        "image": { "type": "string", "minLength": 1 },
+        "image_digest": { "type": "string", "minLength": 1 },
+        "network": { "const": "none" },
+        "workspace_access": { "const": "none" },
+        "read_only_root": { "const": true },
+        "cap_drop": { "type": "array", "contains": { "const": "ALL" } },
+        "host_execution": { "const": false },
+        "verified_at": { "type": "string", "format": "date-time" }
+      }
+    },
     "self_validation": {
       "type": "object",
       "additionalProperties": true,

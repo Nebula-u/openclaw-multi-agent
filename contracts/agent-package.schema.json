@@ -53,7 +53,34 @@
         "delegation_mode": { "enum": ["prefer", "off"] }
       }
     },
-    "sandbox_mode": { "type": ["string", "null"] },
+    "sandbox_mode": { "enum": ["off", "non-main", "all", null] },
+    "sandbox_config": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "properties": {
+        "mode": { "enum": ["off", "non-main", "all"] },
+        "backend": { "enum": ["docker", "ssh", "openshell"] },
+        "scope": { "enum": ["session", "agent", "shared"] },
+        "workspaceAccess": { "enum": ["none", "ro", "rw"] },
+        "docker": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "image": { "type": "string", "minLength": 1 },
+            "network": { "type": "string", "minLength": 1 },
+            "readOnlyRoot": { "type": "boolean" },
+            "capDrop": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
+            "pidsLimit": { "type": "integer", "exclusiveMinimum": 0 },
+            "memory": { "type": ["string", "number"] },
+            "cpus": { "type": "number", "exclusiveMinimum": 0 }
+          }
+        }
+      }
+    },
+    "tools_config": {
+      "type": ["object", "null"],
+      "additionalProperties": true
+    },
     "assembly": {
       "type": "object",
       "additionalProperties": false,

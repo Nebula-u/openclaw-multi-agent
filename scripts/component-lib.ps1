@@ -214,6 +214,10 @@ function Get-AgentPackages {
 
     $sandbox = $null
     if ($m.PSObject.Properties.Name -contains 'sandbox_mode' -and $null -ne $m.sandbox_mode) { $sandbox = [string]$m.sandbox_mode }
+    $sandboxConfig = $null
+    if ($m.PSObject.Properties.Name -contains 'sandbox_config' -and $null -ne $m.sandbox_config) { $sandboxConfig = $m.sandbox_config }
+    $toolsConfig = $null
+    if ($m.PSObject.Properties.Name -contains 'tools_config' -and $null -ne $m.tools_config) { $toolsConfig = $m.tools_config }
     $skills = @()
     if ($m.PSObject.Properties.Name -contains 'skills') { $skills = @($m.skills | ForEach-Object { [string]$_ }) }
 
@@ -245,6 +249,8 @@ function Get-AgentPackages {
       require_agent_id = if ($m.delegation.PSObject.Properties.Name -contains 'require_agent_id') { [bool]$m.delegation.require_agent_id } else { $false }
       delegation_mode = if ($m.delegation.PSObject.Properties.Name -contains 'delegation_mode') { [string]$m.delegation.delegation_mode } else { '' }
       sandbox_mode = $sandbox
+      sandbox_config = $sandboxConfig
+      tools_config = $toolsConfig
       include_common_rules = [bool]$m.assembly.include_common_rules
       include_templates = [bool]$m.assembly.include_templates
       skills = $skills

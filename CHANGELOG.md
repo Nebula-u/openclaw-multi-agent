@@ -9,6 +9,13 @@
 - 新增 `scripts/orchestrator/sandbox-runtime.mjs`，实现每次 test run 的 worktree/input/raw-log 精确挂载计划、路径逃逸拒绝、sandbox attestation 和 fail-closed 校验。
 - 新增 sandbox runtime 单元测试；本轮只建立控制核心，尚未接入正式 dispatch，也未宣称测试任务已完成沙箱执行迁移。
 
+### 强制 test-agent Docker sandbox（Round 2，2026-08-12）
+
+- test-agent package 改为 `sandbox_mode=all`，并携带 Docker backend、session scope、`workspaceAccess=none`、`network=none`、只读根文件系统、`capDrop=ALL` 和资源限制。
+- PowerShell/Bash 安装器现在同步完整 sandbox/tools 配置；安装清单也记录该配置，避免只同步 `mode` 造成不完整隔离。
+- `command-record`、`result` 和 `release-decision` 契约新增 `SANDBOXED_DOCKER` 与 sandbox 运行时字段，同时保留 `UNSANDBOXED_LOCAL` 以兼容历史 artifact。
+- 新 test-agent 运行记录后续必须由 attestation 证明 Docker sandbox；本轮尚未接入 dispatch 生命周期。
+
 ### 通用静态模型配置与协议清理（2026-08-12）
 
 - 保留 Agent package 当前默认模型，不触发已安装 Agent 的隐式换模。
