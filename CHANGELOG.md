@@ -2,6 +2,13 @@
 
 ## [Unreleased] - 2026-08-07
 
+### 强制 test-agent Docker sandbox（Round 1，2026-08-12）
+
+- 新增 fail-closed 的 `config/test-sandbox-policy.json`，固定 `SANDBOXED_DOCKER`、Docker、session scope、`network=none`、只读根文件系统、`capDrop=ALL` 和资源上限。
+- 新增 Node 22 测试镜像定义 `deploy/sandbox/Dockerfile.test-node`；镜像运行用户为非 root，未配置运行时安装命令或 Docker socket。
+- 新增 `scripts/orchestrator/sandbox-runtime.mjs`，实现每次 test run 的 worktree/input/raw-log 精确挂载计划、路径逃逸拒绝、sandbox attestation 和 fail-closed 校验。
+- 新增 sandbox runtime 单元测试；本轮只建立控制核心，尚未接入正式 dispatch，也未宣称测试任务已完成沙箱执行迁移。
+
 ### 通用静态模型配置与协议清理（2026-08-12）
 
 - 保留 Agent package 当前默认模型，不触发已安装 Agent 的隐式换模。
