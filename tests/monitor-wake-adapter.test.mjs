@@ -68,7 +68,7 @@ test('wake adapter starts a fresh manager session after the configured soft budg
   const calls = [];
   try {
     const runner = async (_command, args) => { calls.push(args); return args[0] === 'sessions'
-      ? { exitCode: 0, stdout: JSON.stringify({ sessions: [{ key: 'agent:manager-agent:main', totalTokens: 120000 }] }), stderr: '', timedOut: false }
+      ? { exitCode: 0, stdout: JSON.stringify({ sessions: [{ key: 'agent:manager-agent:main', totalTokens: 76800 }] }), stderr: '', timedOut: false }
       : { exitCode: 0, stdout: '{"ok":true}', stderr: '', timedOut: false }; };
     const adapter = createWakeAdapter({ projectRoot: ROOT, controlDatabase: value.database, supervision: value.supervision,
       enabled: true, managerSessionKey: null, runner, now: () => new Date('2026-08-06T14:00:10.000Z') });

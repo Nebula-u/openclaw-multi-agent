@@ -26,6 +26,7 @@ export function createManagerSessionContext({ projectRoot: projectRootInput, dat
     workflow_id: workflowId,
     session_policy: {
       model_context_window_tokens: policy.model_context_window_tokens,
+      max_session_tokens: policy.max_session_tokens,
       soft_budget_percent: policy.soft_budget_percent,
       soft_budget_tokens: policy.soft_budget_tokens,
       estimated_tokens: usedTokens,

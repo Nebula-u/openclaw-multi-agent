@@ -1,0 +1,18 @@
+{
+  "$comment": "OpenAI Chat Completions provider 模板。请通过 OpenClaw auth/profile 配置凭据，不要在本文件写 apiKey；替换 model id/name 后再应用。",
+  "baseUrl": "https://api.openai.com/v1",
+  "api": "openai-completions",
+  "models": [
+    {
+      "id": "replace-with-model-id",
+      "name": "Configured OpenAI model",
+      "api": "openai-completions",
+      "reasoning": true,
+      "input": ["text"],
+      "contextWindow": 128000,
+      "maxTokens": 49152,
+      "compat": { "maxTokensField": "max_completion_tokens" },
+      "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }
+    }
+  ]
+}
