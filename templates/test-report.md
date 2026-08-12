@@ -12,9 +12,14 @@
 - generated_at: `2026-01-01T00:00:00Z`
 
 ## 隔离与风险披露（Isolation & Risk Disclosure）
-- isolation_mode: `UNSANDBOXED_LOCAL`
-- <PLACEHOLDER: 说明 test-agent 在本机非隔离环境执行测试（`sandbox.mode=off`），命令直接作用于本地文件系统与进程。>
-- 风险披露：<PLACEHOLDER: 列出非隔离执行的潜在副作用（本地文件 / 网络 / 端口 / 全局状态），以及已采取的约束（仅在 worktree_path_abs 内操作）。>
+- isolation_mode: `SANDBOXED_DOCKER`
+- sandbox_attestation: `<PLACEHOLDER: 本次 run 的真实 attestation；不得使用占位值冒充已验证>`
+- runtime/container ID: `<PLACEHOLDER>`
+- image digest: `<PLACEHOLDER>`
+- sandbox cwd: `/workspace`
+- mounts: `/worktree (rw)`, `/input (ro)`, `/agent-raw (rw)`, `/raw-logs (rw)`
+- resource/network boundary: `network=none`, `readOnlyRoot=true`, `capDrop=[ALL]`, `pidsLimit=256`, `memory=2g`, `cpus=2`
+- 若 Docker sandbox、挂载或 attestation 无法验证：结果必须为 `BLOCKED`，不得执行宿主机回退。
 
 ## 执行的测试命令（Executed Commands）
 > 每条命令须对应一条 command-record；退出码 / 日志路径 / 哈希不得编造。

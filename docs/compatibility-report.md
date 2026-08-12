@@ -68,7 +68,7 @@
   - 在 `agents.defaults.sandbox` 与 `agents.list[].sandbox` 两处均存在。
 - `agents.list[]` 条目含 `workspace`（string）与 `agentDir`（string）。
 
-与本项目设计一致：工作 Agent 设 `subagents.allowAgents = []`；test-agent 设 `sandbox.mode = "off"`；每个 Agent 配绝对 `workspace` / `agentDir`。
+与本项目设计一致：工作 Agent 设 `subagents.allowAgents = []`；test-agent 设 `sandbox.mode = "all"`，并由项目 sandbox policy 固定 Docker backend、session scope、`workspaceAccess=none`；每个 Agent 配绝对 `workspace` / `agentDir`。
 
 ## 5. `config validate` 与 `doctor --lint`
 
@@ -104,7 +104,7 @@
 
 - `openclaw agents add` 参数（`--workspace` / `--agent-dir` / `--model` / `--non-interactive` / `--json` / `--bind`）：**无差异**（第 3.1 节已核对存在）。
 - `openclaw config set` 的 dot / bracket 路径、`--strict-json` / `--dry-run` / `--merge` / `--replace`：**无差异**（第 3.2 节已核对存在）。
-- schema 字段 `subagents.{delegationMode, allowAgents, requireAgentId}`、`sandbox.mode`（`off` / `non-main` / `all`）、`workspace`、`agentDir`：**无差异**（第 4 节已核对存在）。
+- schema 字段 `subagents.{delegationMode, allowAgents, requireAgentId}`、`sandbox.mode`（`off` / `non-main` / `all`）、`workspace`、`agentDir`：**无差异**（第 4 节已核对存在）；Docker backend、session scope、`workspaceAccess` 与动态 bind 的真实 E2E 仍需 Docker Engine 可用后验证。
 
 结论：就**已探测**范围而言，本项目示例引用的工具名与字段与真实版本 `2026.7.1-2 (0790d9f)` **无差异**。
 

@@ -2,6 +2,36 @@
 
 ## [Unreleased] - 2026-08-07
 
+### 强制 test-agent Docker sandbox（Round 4，2026-08-12）
+
+- 将 test-agent 的工具边界、身份、使命、永久规则和本地规则说明统一为强制 `SANDBOXED_DOCKER`；沙箱、动态挂载、配置或 attestation 不可验证时 `BLOCKED`，禁止宿主机回退。
+- 更新 agent contracts、Evidence/Test/Security/Release Gate、OpenClaw 兼容性说明和人工审批边界：历史 `UNSANDBOXED_LOCAL` 仅用于迁移前 artifact，不再支撑新 test-agent 的通过结论。
+- 更新 demo policy/project/request、测试报告、命令记录、上下文与结果模板，要求记录 runtime/container ID、镜像 digest、挂载、资源限制、网络策略和 sandbox attestation。
+- 更新 release-agent、review-agent、developer-agent 的消费/契约说明，以及当前进度和交付报告，明确 Docker Desktop Linux Engine 恢复后仍需执行真实 Docker E2E。
+- 验证：Runtime Guard self-check `35 contracts / 10 templates`；sandbox runtime `6/6`；Orchestrator `10/10`；Node 语法检查与 `git diff --check` 通过。真实 Docker E2E 仍因 Docker Engine 不可用而未执行。
+
+### 强制 test-agent Docker sandbox（Round 1，2026-08-12）
+
+- 新增 fail-closed 的 `config/test-sandbox-policy.json`，固定 `SANDBOXED_DOCKER`、Docker、session scope、`network=none`、只读根文件系统、`capDrop=ALL` 和资源上限。
+- 新增 Node 22 测试镜像定义 `deploy/sandbox/Dockerfile.test-node`；镜像运行用户为非 root，未配置运行时安装命令或 Docker socket。
+- 新增 `scripts/orchestrator/sandbox-runtime.mjs`，实现每次 test run 的 worktree/input/raw-log 精确挂载计划、路径逃逸拒绝、sandbox attestation 和 fail-closed 校验。
+- 新增 sandbox runtime 单元测试；本轮只建立控制核心，尚未接入正式 dispatch，也未宣称测试任务已完成沙箱执行迁移。
+
+### 强制 test-agent Docker sandbox（Round 2，2026-08-12）
+
+- test-agent package 改为 `sandbox_mode=all`，并携带 Docker backend、session scope、`workspaceAccess=none`、`network=none`、只读根文件系统、`capDrop=ALL` 和资源限制。
+- PowerShell/Bash 安装器现在同步完整 sandbox/tools 配置；安装清单也记录该配置，避免只同步 `mode` 造成不完整隔离。
+- `command-record`、`result` 和 `release-decision` 契约新增 `SANDBOXED_DOCKER` 与 sandbox 运行时字段，同时保留 `UNSANDBOXED_LOCAL` 以兼容历史 artifact。
+- 新 test-agent 运行记录后续必须由 attestation 证明 Docker sandbox；本轮尚未接入 dispatch 生命周期。
+
+### 强制 test-agent Docker sandbox（Round 3，2026-08-12）
+
+- 将 OpenClaw 命令解析、Windows 参数传递和进程树终止抽到独立 `process-utils.mjs`，消除 sandbox runtime 与 Agent runner 的循环依赖；Windows 下可直接调用已解析的 OpenClaw Node entry，避免 JSON bind 参数被 `cmd` 破坏。
+- Orchestrator 现在在 test-agent 派发前生成每次运行的 sandbox lease，执行动态 bind 的 dry-run、配置应用、session recreate、`sandbox explain` 和 Docker inspect；任一步失败都阻断派发，不回退到宿主机执行。
+- 每次运行只挂载 worktree、只读 input、staged raw output 和 raw logs；输入 manifest、task 和声明的输入文件会复制到容器可见路径，并在复制前校验 SHA-256。容器内统一使用 `/worktree`、`/input`、`/agent-raw`、`/raw-logs` 和 `/workspace`。
+- test-agent 进程结束时强制验证容器身份、镜像、工作目录、network、只读根、capDrop、资源限制和挂载，再清理 session 并恢复原有 bind；结果缺少 `SANDBOXED_DOCKER` 或 attestation 会被 Orchestrator 拒绝。
+- 新增命令边界 mock 测试、容器路径 staging 测试和 prepare/verify/restore 闭环测试；定向结果为 sandbox runtime 6/6、Orchestrator 10/10、Runtime Guard self-check 35 contracts/10 templates。Windows 上组合测试进程未正常退出，未将其计为通过；Docker Desktop Linux Engine 当前不可用，因此真实 Docker E2E 仍待环境恢复后执行。
+
 ### 通用静态模型配置与协议清理（2026-08-12）
 
 - 保留 Agent package 当前默认模型，不触发已安装 Agent 的隐式换模。

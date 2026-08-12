@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "policy_id": "test-agent-docker-sandbox",
+  "enabled": true,
+  "required": true,
+  "fail_closed": true,
+  "isolation_mode": "SANDBOXED_DOCKER",
+  "agent_id": "test-agent",
+  "mode": "all",
+  "backend": "docker",
+  "scope": "session",
+  "workspace_access": "none",
+  "exec_host": "sandbox",
+  "elevated_enabled": false,
+  "docker": {
+    "image": "openclaw-test-node:22-slim",
+    "workdir": "/workspace",
+    "network": "none",
+    "read_only_root": true,
+    "cap_drop": ["ALL"],
+    "pids_limit": 256,
+    "memory": "2g",
+    "cpus": 2,
+    "dangerously_allow_external_bind_sources": true,
+    "dangerously_allow_reserved_container_targets": false
+  },
+  "mounts": {
+    "worktree": { "container_path": "/worktree", "mode": "rw" },
+    "input": { "container_path": "/input", "mode": "ro" },
+    "agent_raw": { "container_path": "/agent-raw", "mode": "rw" },
+    "raw_logs": { "container_path": "/raw-logs", "mode": "rw" }
+  }
+}

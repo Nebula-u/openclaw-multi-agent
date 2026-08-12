@@ -9,7 +9,7 @@
 - `EVIDENCE_RULES.md` — 事实四级分类，claim / evidence / CommandRecord 结构与命令日志规则。
 - `GIT_RULES.md` — 本地 Git、worktree、commit 信息 trailer 格式、绝对 cwd 规则。
 - `APPROVAL_RULES.md` — 人工审批节点与 `HUMAN_DECISION_REQUIRED` 触发方式。
-- `SECURITY_RULES.md` — 环境、路径安全、不受信任数据、凭证、破坏性操作、**无沙箱测试风险**、最小权限。
+- `SECURITY_RULES.md` — 环境、路径安全、不受信任数据、凭证、破坏性操作、**强制 Docker sandbox**、最小权限。
 
 ## 加载与优先级
 
@@ -24,7 +24,7 @@
 
 ## 与 test-agent 特别相关的规则
 
-- `SECURITY_RULES.md` 第 6 节（无沙箱测试风险）与 `EVIDENCE_RULES.md` 第 5 节（命令记录）是本 Agent 的核心约束：本阶段 `isolation_mode = UNSANDBOXED_LOCAL`，每次执行必须记录隔离模式、worktree 绝对路径、用户权限、网络策略、是否涉及不受信任代码与已知风险，且**不得声称"完全隔离"**。
+- `SECURITY_RULES.md` 第 6 节（强制 Docker sandbox）与 `EVIDENCE_RULES.md` 第 5 节（命令记录）是本 Agent 的核心约束：新 run 固定为 `isolation_mode = SANDBOXED_DOCKER`，每次执行必须记录运行时/容器身份、挂载、资源边界、网络策略、是否涉及不受信任代码与已知风险；沙箱或 attestation 缺失即 `BLOCKED`。
 - 命令来源限制（用户配置 / 项目自身构建配置 / 已批准测试策略）与"重试保留第一次失败、标记潜在 flaky"是硬性要求。
 
 ## 说明

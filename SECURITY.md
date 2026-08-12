@@ -13,7 +13,7 @@
 - 不执行 `openclaw doctor --fix`。
 - 不记录或显示 token、password、cookie、私钥或完整凭证。
 
-## 2. 隔离机制（即使本阶段不启用 sandbox 也保留）
+## 2. 隔离机制
 
 - **workspace 隔离**：7 个 Agent 各自独立的绝对 workspace 与 agentDir，互不重叠。
 - **Git worktree 隔离**：每个开发/重做/测试任务使用独立本地分支 + 独立 worktree（绝对路径）。
@@ -22,17 +22,19 @@
 - **命令边界**：默认禁止网络、依赖安装与破坏性命令。
 - **人工审批**：破坏性/不可逆/影响其他项目的操作必须人工审批（见 docs/human-approval.md）。
 - **证据记录**：所有关键命令保存真实 stdout/stderr/退出码/哈希。
+- **test-agent 强制沙箱**：新 test-agent run 必须使用 `SANDBOXED_DOCKER`；Docker、OpenClaw sandbox、运行时 attestation 或挂载校验任一失败，任务必须 `BLOCKED`，禁止回退宿主机执行。
+- **轻量级边界**：使用非 root Node 22 镜像，`network=none`、只读根文件系统、`capDrop=ALL`、PID/CPU/内存上限，并且仅挂载本次 run 的 worktree、只读 input、raw output 和 raw logs。
 
-## 3. 已知安全限制：无沙箱测试
+## 3. test-agent 沙箱运行规则
 
-本阶段**明确不实现测试沙箱**。`test-agent` 在被分配的本地 Git worktree 中**直接**执行测试命令（`isolation_mode=UNSANDBOXED_LOCAL`）。这意味着：
+`test-agent` 的测试命令必须在 OpenClaw 原生 Docker sandbox 内执行，结果必须包含 `isolation_mode=SANDBOXED_DOCKER` 和由 Orchestrator 校验的 `sandbox_attestation`。
 
-- 测试命令以当前用户权限在宿主机上运行，进程隔离弱于容器/沙箱。
-- 因此默认禁止网络、依赖安装、系统配置修改、服务启动、注册表/计划任务修改与访问凭证目录。
-- 对来源不可信、可能执行任意安装/破坏性行为的测试，必须先人工审批。
-- **不得**把当前状态描述为"完全隔离"。未来运维/加固阶段可另行加入 sandbox。
+- 沙箱使用 `mode=all`、`backend=docker`、`scope=session`、`workspaceAccess=none`。
+- 容器使用 `/worktree`、`/input`、`/agent-raw`、`/raw-logs` 和 `/workspace`；宿主机绝对路径不作为容器内文件访问路径。
+- 默认仍禁止网络、依赖安装、系统配置修改、服务启动、注册表/计划任务修改与访问凭证目录。
+- Docker Engine、镜像、配置或挂载不可用时返回 `BLOCKED`，不得将该次执行记录为 `UNSANDBOXED_LOCAL`。
 
-详见 [docs/unsandboxed-test-policy.md](docs/unsandboxed-test-policy.md) 与 [docs/threat-model.md](docs/threat-model.md)。
+详见 [docs/sandboxed-test-policy.md](docs/sandboxed-test-policy.md) 与 [docs/threat-model.md](docs/threat-model.md)。
 
 ## 4. Prompt Injection 防护
 

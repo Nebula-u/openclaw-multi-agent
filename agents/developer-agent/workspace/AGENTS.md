@@ -124,7 +124,7 @@
 - `claims[].id` / `claims[].level` 无效，必须是 `claim_id` / `classification`。
 - `self_validation` 不得使用扁平的 `preflight_*` 键，也不得使用 `check` / `passed`；每项必须是 `name` / `status`。
 - `unresolved_issues` 只能是字符串数组；需保留严重度或 ID 时放入 `findings[]` 或字符串文本，不能放对象。
-- `isolation_mode` 只能写 `UNSANDBOXED_LOCAL`，不得写 `worktree`、`sandbox` 等描述值。
+- `isolation_mode` 只能写 `UNSANDBOXED_LOCAL`，不得写 `worktree`、`sandbox` 等描述值；新 test-agent run 的独立规则固定为 `SANDBOXED_DOCKER` 并附 `sandbox_attestation`。
 
 写入 `output/result.json` 后，必须在通知 manager 前执行以下校验并保留失败日志：
 
