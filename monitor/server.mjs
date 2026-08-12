@@ -13,6 +13,7 @@ import { createSupervisionRepository } from '../scripts/control-core/supervision
 import { createWatchdog } from './watchdog.mjs';
 import { createWakeAdapter } from './wake-adapter.mjs';
 import { createWorkflowContinuation } from '../scripts/orchestrator/workflow-continuation.mjs';
+import { createSessionCatalog } from './session-catalog.mjs';
 
 function isLoopback(address = '') {
   return address === '127.0.0.1' || address === '::1' || address === '::ffff:127.0.0.1';
@@ -62,6 +63,7 @@ export function createMonitorServer(config, { database: providedDatabase = null,
   const publish = (type, payload, meta) => hub.publish(type, payload, meta);
   const sessionTailer = createSessionTailer({ controlDatabase: database, telemetry,
     sessionRoot: config.sessionRoot ?? config.projectRoot, publish });
+  const sessionCatalog = createSessionCatalog({ sessionRoot: config.sessionRoot ?? config.projectRoot, projectRoot: config.projectRoot });
   const artifactWatcher = createArtifactWatcher({ controlDatabase: database, telemetry, publish });
   const healthClassifier = createHealthClassifier({ telemetry, publish, thresholds: {
     heartbeatStaleSeconds: config.heartbeatStaleSeconds, possiblyStalledSeconds: config.possiblyStalledSeconds,
@@ -173,6 +175,22 @@ export function createMonitorServer(config, { database: providedDatabase = null,
       }
       if (request.method === 'GET' && path === '/api/supervisor') {
         return sendJson(response, 200, { ok: true, workflows: continuation.status(), generated_at: new Date().toISOString() }, cors);
+      }
+      if (request.method === 'GET' && path === '/api/agents') {
+        return sendJson(response, 200, { ok: true, agents: sessionCatalog.agents(), generated_at: new Date().toISOString() }, cors);
+      }
+      const agentSessions = path.match(/^\/api\/agents\/([^/]+)\/sessions$/u);
+      if (request.method === 'GET' && agentSessions) {
+        const agentId = decodeURIComponent(agentSessions[1]);
+        const sessions = sessionCatalog.sessions(agentId);
+        return sendJson(response, sessions ? 200 : 404, sessions ? { ok: true, agent_id: agentId, sessions } : { ok: false, error: 'AGENT_NOT_FOUND' }, cors);
+      }
+      const sessionMessages = path.match(/^\/api\/agents\/([^/]+)\/sessions\/([^/]+)\/messages$/u);
+      if (request.method === 'GET' && sessionMessages) {
+        const agentId = decodeURIComponent(sessionMessages[1]);
+        const sessionId = decodeURIComponent(sessionMessages[2]);
+        const result = sessionCatalog.messages(agentId, sessionId, { limit: integerQuery(url, 'limit', 500) });
+        return sendJson(response, result ? 200 : 404, result ? { ok: true, agent_id: agentId, ...result } : { ok: false, error: 'SESSION_NOT_FOUND' }, cors);
       }
       const workflowSnapshot = path.match(/^\/api\/workflows\/([^/]+)\/snapshot$/u);
       if (request.method === 'GET' && workflowSnapshot) {
