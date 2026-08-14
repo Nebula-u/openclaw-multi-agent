@@ -13,5 +13,3 @@ RUN apt-get update \
 USER sandbox
 WORKDIR /worktree
 ENV HOME=/home/sandbox
-
-ENTRYPOINT ["sleep", "infinity"]

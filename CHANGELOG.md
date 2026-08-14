@@ -2,6 +2,11 @@
 
 ## [Unreleased] - 2026-08-07
 
+### 修复 test-agent 测试镜像启动方式（Round 1，2026-08-14）
+
+- 移除测试镜像中的 `ENTRYPOINT ["sleep", "infinity"]`，避免 OpenClaw 启动沙箱时重复追加 `sleep infinity` 导致容器立即退出。
+- 保留镜像内的 `USER sandbox` 非 root 设置；Docker 沙箱本身不要求 root，后续真实会话会单独核验 OpenClaw 是否覆盖该用户。
+
 ### 强制 test-agent Docker sandbox（Round 4，2026-08-12）
 
 - 将 test-agent 的工具边界、身份、使命、永久规则和本地规则说明统一为强制 `SANDBOXED_DOCKER`；沙箱、动态挂载、配置或 attestation 不可验证时 `BLOCKED`，禁止宿主机回退。
