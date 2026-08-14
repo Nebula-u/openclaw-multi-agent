@@ -7,7 +7,6 @@ export function authorityPaths(projectRootInput) {
   return {
     runtime: join(projectRoot, 'runtime', 'stategraph', 'runtime.capability'),
     human: join(projectRoot, 'runtime', 'stategraph', 'human-approval.capability'),
-    intake: join(projectRoot, 'runtime', 'stategraph', 'intake.capability'),
   };
 }
 
@@ -33,9 +32,7 @@ function matches(expected, supplied) {
 export function assertAuthority(projectRoot, kind, supplied = null) {
   const path = authorityPaths(projectRoot)[kind];
   if (!path || !existsSync(path)) throw Object.assign(new Error(`${kind} capability is not initialized`), { code: 'STATEGRAPH_CAPABILITY_NOT_INITIALIZED' });
-  const envName = kind === 'human' ? 'OPENCLAW_HUMAN_APPROVAL_CAPABILITY'
-    : kind === 'intake' ? 'OPENCLAW_STATEGRAPH_INTAKE_CAPABILITY'
-      : 'OPENCLAW_STATEGRAPH_CAPABILITY';
+  const envName = kind === 'human' ? 'OPENCLAW_HUMAN_APPROVAL_CAPABILITY' : 'OPENCLAW_STATEGRAPH_CAPABILITY';
   const token = supplied ?? process.env[envName];
   if (!matches(readFileSync(path, 'utf8'), token)) throw Object.assign(new Error(`${kind} capability is invalid`), { code: 'STATEGRAPH_CAPABILITY_INVALID' });
   return true;

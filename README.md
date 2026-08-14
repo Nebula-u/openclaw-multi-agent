@@ -145,24 +145,6 @@ pwsh -NoProfile -File scripts/reinstall-agents.ps1 -Apply -Yes -GatewayStopped \
 node scripts/workflow.mjs init --project-root .
 ```
 
-### WebChat / Gateway 接入控制器
-
-manager-agent 不拥有创建 workflow 或派发 Agent 的权限。启动受信任的 intake controller 后，由 WebChat/Gateway 或前端把用户的新需求提交给它；controller 是唯一持有 runtime/human capability 的进程，会创建 checkpoint 并推进到 StateGraph `dispatch` 节点。monitor 仍为只读服务。
-
-**Windows（PowerShell）**
-
-```powershell
-npm run stategraph:intake
-```
-
-**Linux（Bash；命令相同）**
-
-```bash
-npm run stategraph:intake
-```
-
-服务默认仅监听 `127.0.0.1:4320`。首次启动会在 `runtime/stategraph/intake.capability` 创建 intake token；Gateway 接入层使用该 token 调用 `POST /api/workflows`，请求体为 `text` 与绝对 `project_path_abs`。controller 自动创建 workflow、执行有界推进，并在路线审批或 Agent 运行时停下。人工审批使用 `POST /api/workflows/<workflow-id>/approve`，必须携带当前 `decision_id`、允许的 `choice` 和 `human:<id>` 身份。
-
 请求文件示例：
 
 **Windows（PowerShell）**
