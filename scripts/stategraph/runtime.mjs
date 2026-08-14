@@ -31,7 +31,8 @@ function publicResult(state) {
 }
 
 export function createStateGraphRuntime({ projectRoot: projectRootInput, databasePath = null, database = null,
-  dispatcher = null, worktrees: worktreesInput = null, policy = null, clock = () => new Date(), skipAuthority = false } = {}) {
+  dispatcher = null, worktrees: worktreesInput = null, policy = null, clock = () => new Date(), skipAuthority = false,
+  runtimeCapability = null, humanCapability = null } = {}) {
   const projectRoot = resolve(projectRootInput);
   const ownDatabase = !database;
   const connection = database ?? openStateGraphDatabase(databasePath ?? defaultDatabasePath(projectRoot));
@@ -57,7 +58,7 @@ export function createStateGraphRuntime({ projectRoot: projectRootInput, databas
   }
 
   async function invoke(workflowId, input, authorityKind = 'runtime') {
-    if (!skipAuthority) assertAuthority(projectRoot, authorityKind);
+    if (!skipAuthority) assertAuthority(projectRoot, authorityKind, authorityKind === 'human' ? humanCapability : runtimeCapability);
     return withWorkflowLock(projectRoot, workflowId, async () => {
       const value = await graph.invoke(input, config(workflowId));
       return { ...publicResult(value), state: value };

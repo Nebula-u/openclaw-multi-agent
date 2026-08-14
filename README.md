@@ -139,6 +139,32 @@ pwsh -NoProfile -File scripts/reinstall-agents.ps1 -Apply -Yes -GatewayStopped \
 
 ## 运行 Workflow
 
+### OpenClaw WebChat 自动接入
+
+本项目通过 `stategraph-webchat` Gateway 插件在普通 manager-agent 对话开始前接管 WebChat 入站消息。插件创建 workflow、推进 StateGraph，并把“确认”等人工回复绑定到当前 checkpoint 的 `decision_id`；manager-agent 本身仍不持有 runtime 或 human capability。
+
+**Windows（PowerShell）**
+
+```powershell
+openclaw plugins install --link extensions/stategraph-webchat
+openclaw config set plugins.entries.stategraph-webchat.enabled true --strict-json
+openclaw config set plugins.entries.stategraph-webchat.config.projectRoot '"D:/MicroConnect/project/openclaw-multi-agent"' --strict-json
+openclaw gateway restart
+openclaw gateway status
+```
+
+**Linux（Bash；把路径替换为服务器上的项目绝对路径）**
+
+```bash
+openclaw plugins install --link extensions/stategraph-webchat
+openclaw config set plugins.entries.stategraph-webchat.enabled true --strict-json
+openclaw config set plugins.entries.stategraph-webchat.config.projectRoot '"/absolute/path/openclaw-multi-agent"' --strict-json
+openclaw gateway restart
+openclaw gateway status
+```
+
+插件默认只接管 `webchat` 且要求消息发送者是 owner。StateGraph 自己通过 CLI 启动的 manager-agent 任务不会被再次接管，因此不会递归创建 workflow。发送 `/workflow status` 可读取并推进当前会话关联的 workflow；路线待确认时发送“确认”或 `/workflow approve` 会写入正式人工审批。
+
 初始化本地 runtime/human capability：
 
 ```powershell

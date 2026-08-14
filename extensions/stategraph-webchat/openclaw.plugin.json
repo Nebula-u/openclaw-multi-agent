@@ -1,0 +1,18 @@
+{
+  "id": "stategraph-webchat",
+  "name": "StateGraph WebChat Bridge",
+  "description": "Routes manager WebChat requests into the trusted StateGraph runtime before normal agent dispatch.",
+  "version": "1.0.0",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "projectRoot": { "type": "string" },
+      "targetProjectRoot": { "type": "string" },
+      "managerAgentId": { "type": "string" },
+      "channels": { "type": "array", "items": { "type": "string" } },
+      "scanIntervalMs": { "type": "integer", "minimum": 500 }
+    }
+  },
+  "activation": { "onStartup": true }
+}
