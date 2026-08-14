@@ -14,7 +14,8 @@
     "test:runtime-bundle": "node --test tests/runtime-bundle.test.mjs",
     "test:stategraph": "node --test tests/stategraph-*.test.mjs",
     "test:monitor": "node --test --test-concurrency=1 tests/monitor-*.test.mjs",
-    "monitor:start": "node monitor/main.mjs"
+    "monitor:start": "node monitor/main.mjs",
+    "stategraph:intake": "node scripts/stategraph-intake.mjs"
   },
   "dependencies": {
     "@langchain/langgraph": "1.4.9",
