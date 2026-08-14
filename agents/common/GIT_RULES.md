@@ -24,7 +24,7 @@
 
 - `developer-agent` / `test-agent`：只能修改被分配的 worktree，代码修改必须形成**真实本地 commit**。
 - `requirement` / `architect` / `review` / `release`：正式报告默认写入 artifact，**不**为提交报告污染目标业务仓库；仅当任务明确要求更新业务仓库文档时才 commit。
-- 工作 Agent **不得**直接合并 integration 分支。合并由 manager-agent 负责。
+- 工作 Agent **不得**合并或推进集成分支。StateGraph Gate 只在校验 `output_commit` 的存在性、ancestry 与 worktree HEAD 后推进 checkpoint 的 `candidateCommit`。
 
 ## 5. commit 信息格式
 
@@ -39,12 +39,12 @@ Attempt: <n>
 Input-Commit: <hash>
 ```
 
-## 6. manager-agent 合并规则
+## 6. StateGraph 候选提交规则
 
-1. 合并前验证：commit 真实存在、ancestry（基于允许的 input commit）、diff、角色修改范围、worktree 状态。
-2. 使用**非 fast-forward** merge（`--no-ff`），并记录来源分支、commit、Gate、task_id、run_id。
-3. merge conflict **不**由 manager 猜测解决 → 重新分配给对应 developer/test-agent。
-4. 失败 / 脏状态 / 未合并 / 待审批的 worktree **默认保留**，不清理。
+1. DEVELOPMENT/TEST 的 `output_commit` 必须是真实完整 SHA，等于该 run worktree HEAD，且为 checkpoint `input_commit` 的后代。
+2. REVIEW/TEST/RELEASE 只能从 checkpoint 当前 `candidateCommit` 开始，不得自行切换候选版本。
+3. Gate 通过且所需人工审批完成后，StateGraph 才更新 `candidateCommit`；Agent 和 Manager 均无此写权限。
+4. 失败、脏状态、未接收或待审批的 worktree 默认保留，用于取证和重试对比。
 
 ## 7. cwd 规则
 

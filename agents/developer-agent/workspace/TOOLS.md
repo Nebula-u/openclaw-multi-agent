@@ -4,13 +4,13 @@
 > 版本: developer-agent-tools v1
 > 本文件说明本 Agent 使用哪些 OpenClaw **原生工具**、各自用途与硬性边界。工具行为以当前安装版本（本机 `OpenClaw 2026.7.1-2`）的实际 `--help` 与 `config schema` 为准。
 
-> v3 覆盖：不得调用会话调度、Control Kernel mutation、monitor API、receipt/retry；JSON/JSONL 只写派发消息声明的 `.agent-raw` 暂存路径，绝不写最终 output JSON。
+> v4 边界：不得调用会话调度、checkpoint mutation、monitor API、receipt/retry/approval；JSON/JSONL 只写派发消息声明的 `.agent-raw` 暂存路径。
 
 ## 1. 文件工具（读 / 写）
 
-- **用途**：读取本次 run 的 `input/` 上下文包；在被分配的 worktree 内创建/修改生产代码、配置、迁移、开发文档；向本次 run 的 `output/` 与 `raw-logs/` 写入报告、清单、证据与原始日志。
+- **用途**：读取本次 run 的 input；在被分配的 worktree 内修改授权代码；向 `.agent-raw/` 与 `raw-logs/` 写入原文、证据与日志。
 - **边界**：
-  - 只能写入 `task.json.allowed_write_paths_abs` 覆盖的 worktree 路径，以及本次 run 的 `output/`、`raw-logs/`。
+  - 只能写入 manifest 授权的 worktree 路径，以及本次 run 的 `.agent-raw/`、`raw-logs/`。
   - 不得写入/读取：manager 控制目录中与本任务无关的内容、其他 Agent 的 workspace/agentDir、其他任务的 `input`、任何历史 run 目录（不可变）、OpenClaw 配置文件。
   - 已派发任务的 `input/` 视为**只读且不可变**。
 
@@ -33,16 +33,16 @@
   - 远程操作：`push` / `pull` / `fetch` / 修改 remote / 远程 PR。
   - 破坏性命令：`git reset --hard` / `git clean -fdx` / 强删分支或 worktree 中未合并工作。
   - 修改**全局** Git 配置；Git identity 只写入该 worktree 对应仓库的**本地**配置。
-  - 直接合并 integration 分支（合并由 manager-agent 负责）。
+  - 合并或推进 integration/candidate 分支。
   - 擅自 `git init` 或对未提交修改自动 commit/stash/丢弃/reset。
 - **cwd 规则**：所有 Git 命令用 `-C <abs>` 或原生 Shell 工具的绝对 cwd 显式指定目标仓库/worktree，禁止相对路径。
 
 ## 4. 跨 Agent 会话权限（本 Agent 无）
 
-- 跨 Agent 调度（`sessions_spawn` / `sessions_send` / `sessions_list` / `sessions_history`）是 **manager-agent 独有**的能力，用于以显式 `agentId` 派发任务。
-- **本 Agent 不得 spawn 其他 Agent。** 我的 `subagents.allowAgents = []`。我不发起、不请求、不模拟任何跨 Agent 调度；需要其他角色介入时，只在 `result.json` 中向 manager-agent 说明并由其决定。
+- 跨 Agent 工具对白名单中的所有 worker 均关闭；唯一派发入口是宿主 StateGraph `dispatch` 节点。
+- **本 Agent 不得调用其他 Agent。** 跨 Agent 工具白名单为空；需要其他角色介入时，只在结果中报告事实，由 StateGraph 处理。
 
 ## 5. 网络 / 安装 / 凭证 / 远程（全体默认禁止）
 
 - 默认**不联网**、**不安装**软件或依赖、**不访问凭证/密钥**、**不执行远程 Git**。
-- 任何上述需求都属人工审批节点：返回 `HUMAN_DECISION_REQUIRED`，交 manager-agent 处理，不自行开启。
+- 任何上述需求都属人工审批节点：返回 `HUMAN_DECISION_REQUIRED`，由 StateGraph 生成绑定审批，不自行开启。

@@ -34,15 +34,15 @@
 - 任何破坏性 / 不可逆 / 可能影响其他项目的操作 → 必须人工审批（见 APPROVAL_RULES.md）。
 - 默认选择非破坏性替代方案。
 
-## 6. 测试无沙箱风险（本阶段）
+## 6. TEST 强制 Docker sandbox
 
-- 本阶段测试**无 sandbox**，`isolation_mode=UNSANDBOXED_LOCAL`。
-- 每次测试必须记录：isolation_mode、worktree 绝对路径、当前用户权限、网络策略、是否涉及不受信任代码、已知风险。
-- 默认禁止：网络、依赖安装、系统配置修改、服务启动、计划任务、注册表修改、访问用户凭证目录。
-- 不得声称当前测试"已完全隔离"。
+- test-agent 只能在代码准备并校验的 Docker sandbox 中执行，`isolation_mode=SANDBOXED_DOCKER`。
+- sandbox 必须满足：network none、只读 rootfs、drop ALL capabilities、非 root、PID/CPU/内存限制，并仅挂载当前 worktree、input、`.agent-raw` 与 raw logs。
+- 每次执行必须保存由宿主交叉验证的 container/image/mount/network/rootfs/capability/resource attestation；缺失或不一致时 fail closed。
+- test-agent 不得修改 sandbox 配置、外部 bind、Docker daemon 或宿主 OpenClaw 配置。
 
 ## 7. 最小权限与最小上下文
 
-- manager-agent 传递上下文遵循最小必要原则。
-- 工作 Agent 不访问 manager 控制目录中与当前任务无关的内容。
+- StateGraph dispatch 生成的上下文遵循最小必要原则。
+- 工作 Agent 不访问 runtime state、capability、锁或其他 workflow 数据。
 - 工作 Agent 的 subagent 白名单为空，不得再派生 Agent。

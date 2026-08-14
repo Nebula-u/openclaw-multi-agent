@@ -23,11 +23,11 @@
 
 每条 claim 至少含：`claim_id`、`statement`、`classification`（四级之一）、`evidence_refs`（evidence_id 列表）、`limitations`、`observed_at`。
 
-## 4. evidence 结构（`output/evidence.jsonl`，每行一条）
+## 4. evidence 结构（Agent 写 `.agent-raw/evidence.jsonl.raw`，宿主发布 `output/evidence.jsonl`）
 
 每条 evidence 至少含：`evidence_id`、`source_type`（file/git/command/doc/...）、`locator_abs` 或 Git locator、`sha256`、`line_start`/`line_end`（适用时）、`collected_at`、`collector`、`command_record_id`（适用时）、`notes`。
 
-## 5. 命令记录（`output/command-records.jsonl`，每行一条）
+## 5. 命令记录（Agent 写 `.agent-raw/command-records.jsonl.raw`，宿主发布最终 JSONL）
 
 所有构建、测试、格式化、扫描与关键 Git 命令必须保留真实记录。**不得新增 Python CommandRunner**；直接用 OpenClaw 原生 Shell 工具执行并保存日志。
 
@@ -47,4 +47,4 @@
 ## 6. 校验和
 
 - 每个 run 的关键产物写入 `checksums.sha256`（可用 PowerShell `Get-FileHash`、`sha256sum`、`shasum -a 256` 等原生工具计算，**不用** Python 脚本）。
-- Control Kernel v2 的 workflow/task event 使用 SHA-256 哈希链；`runtime/control/v2/**` 中的 `events.jsonl` 只是只读投影。
+- 最新 LangGraph checkpoint 内的 workflow/task event 使用 SHA-256 哈希链；monitor 只读取 checkpoint 和 artifact，不是状态权威。

@@ -1,12 +1,11 @@
 # APPROVAL_RULES.md — 人工审批规则
 
-> 版本: approval-rules v1
-> 审批的发起、记录与放行由 manager-agent / local-orchestrator 负责；工作 Agent 通过返回 `HUMAN_DECISION_REQUIRED` 触发。
-> 新 workflow 只使用 Control Kernel v2：workflow 的待人工状态是 `condition=WAITING_HUMAN`，审批对象自身才使用 `status=PENDING`。历史专用等待名称只存在于归档资料，运行时代码不会产生。
+> 版本: approval-rules v2
+> 审批节点由 StateGraph 根据冻结路线、Gate 和错误升级规则生成；只有持有 human capability 的 `scripts/workflow.mjs approve` 可以写入决定。
 
 ## 1. 必须人工审批的节点
 
-出现以下任一情况，manager-agent 生成审批请求。新 workflow 统一执行 v2 `WAIT_HUMAN`，并将当前业务阶段保留在 `phase` 字段中；需求、架构、发布的“专用等待”只由 `phase + trigger` 展示派生，不写入历史专用等待名称：
+出现以下任一情况，工作 Agent 返回 `HUMAN_DECISION_REQUIRED`；StateGraph Gate 根据代码策略生成绑定当前 decision、route 和候选 commit 的审批：
 
 1. 需求存在影响范围或验收方式的关键歧义。
 2. 实现存在明显不同取舍的方向（成本/风险/兼容性/维护差异大）。
@@ -19,7 +18,7 @@
 9. 需要改变已批准的需求或架构。
 10. 第三方代码 / 许可证 / 版权来源不明确。
 11. 严重安全问题需要风险接受。
-12. 失败测试、UNKNOWN 安全结果或 `UNSANDBOXED_LOCAL` 风险需要例外放行。
+12. 失败测试、UNKNOWN 安全结果或 Docker sandbox attestation 不完整。
 13. release-agent 给出 `HOLD`，用户希望继续。
 14. 超过最大重做次数（默认 3）。
 15. 任何破坏性、不可逆或可能影响其他项目的操作。
@@ -28,11 +27,10 @@
 
 - **不设自动超时同意。** 用户沉默 ≠ 批准。
 - 等待审批期间，不得继续调度依赖该决策的任务。
-- 用户回复后，保存 `approval-response.json` + 原始回复摘要。
-- 审批粒度绑定到具体 `decision_id` / `task_id` / `run_id`；一次审批不自动延伸到其他上下文。
-- request/response 必须同时记录并逐字段匹配 `workflow_id`、可空 `task_id` 和可空 `run_id`；Runtime Guard 校验失败即有效 HOLD。
-- `HOLD` 是 workflow / Gate 的合法阻塞状态，不是工作 Agent 的 `result_status`；不得重写历史 `result.json` 为 `HOLD`。保留原 result，由 manager 在控制层记录 `HOLD`、差异和后续人工决策。
-- 真实回复必须通过 `approval-resolve` / 等价的受控交互入口提交；它必须绑定相同的 `decision_id`、`workflow_id`、`task_id`、`run_id`，并由 v2 原子执行 `RESOLVE_HUMAN`。存在 `PENDING` request 时，直接 `RESUME` 一律拒绝。
+- 审批粒度绑定 `decision_id`、`workflow_id`、`route_hash`，适用时同时绑定 `task_id`、`run_id` 和 `candidate_commit`；一次审批不延伸到其他上下文。
+- 路线确认后冻结 steps 与 approval plan；Agent 不得修改、跳过或自行满足审批节点。
+- Agent 返回 `HUMAN_DECISION_REQUIRED` 后，人工只能选择由代码声明的选项；未通过 Gate 的结果不能被人工直接改写为完成。
+- 真实回复只能通过 `scripts/workflow.mjs approve` 提交，并由 human capability 校验后原子写入最新 checkpoint。
 
 ## 3. approval-request.json（见 contracts/approval-request.schema.json）
 
@@ -40,8 +38,8 @@
 
 ## 4. approval-response.json（见 contracts/approval-response.schema.json）
 
-至少含：`schema_version`、与 request 完全相同的 `decision_id`/`workflow_id`/`task_id`/`run_id`、`outcome`、`chosen_option_id`、`raw_user_reply_summary`、`decided_by`、`decided_at`、`notes`。`APPROVED`/`MODIFIED` 必须选择 request 中存在的 option；`REJECTED` 的 chosen option 必须为 null。
+至少含：`schema_version`、与 request 完全相同的绑定字段、`outcome`、`chosen_option_id`、`raw_user_reply_summary`、`decided_by`、`decided_at`、`notes`。决定者必须是明确的 `human:*` 身份，选择项必须来自代码生成的 options。
 
 ## 5. 工作 Agent 侧
 
-工作 Agent 遇到上述节点时**不擅自决定**，返回 `result_status = HUMAN_DECISION_REQUIRED`，在 `decisions_required[]` 列出选项与影响，交由 manager-agent 发起审批。
+工作 Agent 遇到上述节点时**不擅自决定**，返回 `result_status = HUMAN_DECISION_REQUIRED`，在 `decisions_required[]` 列出事实、选项与影响；后续审批生成和状态推进全部由 StateGraph 完成。

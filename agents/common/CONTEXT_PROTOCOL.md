@@ -1,11 +1,11 @@
 # CONTEXT_PROTOCOL.md — 上下文与规则传递协议
 
-> 版本: context-protocol v1
-> manager-agent 是本协议的执行者；工作 Agent 是消费者。
+> 版本: context-protocol v2
+> StateGraph dispatch 是本协议的执行者；工作 Agent 是只读消费者。
 
 ## 1. 任务上下文包结构
 
-manager-agent 在每次派发前，于 `<artifact_root_abs>/input/` 创建完整上下文包：
+StateGraph 在每次派发前，于 `<artifact_root_abs>/input/` 创建不可变上下文包：
 
 ```
 <ABS_ARTIFACT_RUN_ROOT>/input/
@@ -43,7 +43,7 @@ manager-agent 在每次派发前，于 `<artifact_root_abs>/input/` 创建完整
 
 ## 4. `context-manifest.json` 必含字段
 
-`schema_version`、`workflow_id`、`task_id`、`run_id`、`assigned_agent`、`created_at`、`manager_session_reference`、`target_project_root_abs`、`worktree_path_abs`、`artifact_root_abs`、`input_files`（含各文件 SHA-256）、`rule_version`、`rule_hash`、`input_commit`、`expected_output_paths_abs`。
+`schema_version`、`workflow_id`、`task_id`、`run_id`、`assigned_agent`、`attempt`、`created_at`、`target_project_root_abs`、`worktree_path_abs`、`artifact_root_abs`、`input_files`（含各文件 SHA-256）、`rule_version`、`rule_hash`、`input_commit`、`expected_output_paths_abs`。
 
 ## 5. 上下文传递规则（硬性）
 
@@ -52,8 +52,8 @@ manager-agent 在每次派发前，于 `<artifact_root_abs>/input/` 创建完整
 3. 派发消息只提供：任务摘要、`dispatch_id`、input manifest SHA-256、绝对 `context-manifest.json` 路径、绝对 `task.json` 路径、绝对输出目录 + 绝对 worktree 路径。
 4. 工作 Agent **先读取并校验**上下文包，再开始工作。
 5. 上下文不足 → 只返回缺失项，不自行扩大范围。
-6. manager 更新规则后，**不篡改**已派发任务的 input；必须创建新 attempt + 新 run_id + 新规则快照。
-7. manager 每阶段结束更新 `context-summary.md`，只保留后续阶段真正需要的事实/决策/限制/证据引用。
+6. 规则更新后，**不篡改**已派发任务的 input；StateGraph 必须创建新 attempt + 新 run_id + 新规则快照。
+7. checkpoint 只保存后续阶段真正需要的事实、决策、限制与证据引用；原始日志留在本 run artifact。
 8. 最小充分原则：只传递完成当前任务所必需的上下文。
 9. Monitor endpoint 只通过运行环境提供；上下文包可以声明“activity enabled”，但不得包含
    `MONITOR_TOKEN` 或其他凭据。
@@ -61,9 +61,9 @@ manager-agent 在每次派发前，于 `<artifact_root_abs>/input/` 创建完整
 ## 7. Dispatch 启动与完成确认
 
 1. 工作 Agent 启动后，先比对派发消息中的 `dispatch_id`、workflow/task/run/agent ID 与 `context-manifest.json`，并计算/核对 input manifest SHA-256；不一致即 `BLOCKED`，不写产物、不开始工作。
-2. 校验完成后向 manager-agent 发送简短启动确认，明确 `dispatch_id` 与已核对的 manifest SHA-256；该确认是消息信号，Manager 才能将其持久化为 `ACKNOWLEDGED` / `RUNNING` receipt，Agent 不得自行修改 dispatch ledger。
-3. 先完整落盘并自检所有结构化结果、报告、日志、校验和与（适用时）Git commit，再发送完成通知。完成消息必须包含 `dispatch_id`、result 路径、result SHA-256 与真实结果状态；消息本身不代表完成事实。
-4. 若 Manager 明确通知当前 run 已 superseded、取消或终结，立即停止新增写入并如实报告；不得调度其他 Agent 或自行重试。
+2. 校验完成后开始当前任务；启动状态由 runner 的真实进程事实记录，Agent 不发送会改变状态的 ACK。
+3. 先完整落盘所有结构化原文、报告、日志、校验和与（适用时）Git commit；进程退出后由 reconcile 校验结果，Agent 自述不代表完成事实。
+4. 若 runner 终止当前 run，立即停止新增写入并如实退出；不得调度其他 Agent或自行重试。
 
 ## 6. 工作 Agent 侧消费步骤
 

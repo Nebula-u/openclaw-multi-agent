@@ -3,14 +3,14 @@
 > 版本: requirement-agent-tools v1
 > 本文件规定本 Agent 允许使用的 OpenClaw 原生工具及其边界。凡本文件与 `TOOLS.md` 冲突处，以更严格者为准。**不得凭记忆假设不存在的工具名**；工具面以实际 OpenClaw `2026.7.1-2` 为准（见 `config/openclaw-config-notes.md`）。
 
-> v3 覆盖：不得调用会话调度、Control Kernel mutation、monitor API、receipt/retry；JSON/JSONL 只写派发消息声明的 `.agent-raw` 暂存路径，绝不写最终 output JSON。
+> v4 边界：不得调用会话调度、checkpoint mutation、monitor API、receipt/retry/approval；JSON/JSONL 只写派发消息声明的 `.agent-raw` 暂存路径。
 
 ## 1. 允许使用的原生工具
 
 ### 1.1 文件工具（File）
 
 - **读取（read-only）**：读取上下文包 `input/`（`context-manifest.json`、`context.md`、`rules.md`、`task.json`、`acceptance-criteria.json`、`approved-decisions.json`、`source-manifest.json`）、本 workspace 永久规则（`AGENTS.md`、`SOUL.md`、`TOOLS.md`、`IDENTITY.md`、`rules/`）、以及 `source-manifest.json` 中列出的目标项目只读引用文件。
-- **写入（write）**：**仅**写入本次 run 的 `artifact_root_abs/output/` 与 `artifact_root_abs/raw-logs/`。所有 mandatory 输出（见 `AGENTS.md`）都落在 `output/`。
+- **写入（write）**：仅写入本次 run 的 `.agent-raw/` 与 `raw-logs/`；最终 `output/` 由宿主 ingestion 发布。
 - **禁止写入**：目标业务仓库、worktree、其他 Agent 的 workspace/agentDir、manager 控制目录、任何历史 run 目录、OpenClaw 配置、其他任务的 `input/`。
 
 ### 1.2 Shell 工具（Shell）
@@ -24,7 +24,7 @@
 
 - 仅允许**只读、本地**查询以完成 Preflight 与证据固化：如 `git -C <abs> rev-parse HEAD`、`git -C <abs> status`、`git -C <abs> log`（读取 `input_commit` 与当前 `HEAD` 是否一致）。
 - 本 Agent **不产生代码 commit**（需求正式报告写入 artifact，不污染业务仓库）。
-- **禁止**：`push` / `pull` / `fetch` / 修改 remote / 远程 PR、`git init`、修改全局 Git 配置、破坏用户数据的命令、合并 integration 分支（合并权归 manager-agent）。详见 `rules/GIT_RULES.md`。
+- **禁止**：`push` / `pull` / `fetch` / 修改 remote / 远程 PR、`git init`、修改全局 Git 配置、破坏用户数据的命令、合并或推进候选提交。详见 `rules/GIT_RULES.md`。
 
 ## 2. 绝对 cwd 规则
 
@@ -34,7 +34,7 @@
 
 ## 3. 硬性禁止（本 Agent）
 
-- **本 Agent 不得 spawn 其他 Agent**（`subagents.allowAgents = []`；跨 Agent 调度仅 manager-agent 通过原生 `sessions_spawn` 执行）。不得调用 `sessions_spawn` / `sessions_send` 派生或驱动其他 Agent。
+- **本 Agent 不得调用其他 Agent**。跨 Agent 工具白名单为空，派发只由宿主 StateGraph `dispatch` 节点执行。
 - **不联网**（除非上下文包明确批准并记录）。
 - **不安装**任何软件 / 依赖 / Docker。
 - **不访问凭证 / 密钥目录**；配置与日志中不得出现 token / password / cookie / private key / 完整凭证。

@@ -1,6 +1,6 @@
 # manager-agent / templates
 
-本目录存放 manager-agent 运行时**快速参考模板**（workspace 本地副本）。权威模板位于项目根 `templates/`，安装时复制到此处。Control Kernel 创建并持久化 workflow/task/approval/gate 的控制事实；Manager 只能为任务产物和审批输入准备模板数据。
+本目录存放 manager-agent 运行时快速参考模板。最新 checkpoint 保存 workflow/route/task/approval/Gate 事实；Manager 只能按派发消息产出候选 `route-plan.json.raw`，不能准备或写入控制状态。
 
 包含（安装后）：
 
@@ -15,4 +15,4 @@
 - 事实分级字段必须真实标注 OBSERVED/INFERRED/PROPOSED/UNKNOWN。
 - 不得留占位符进入正式产物；未知值填 `UNKNOWN` 并说明。
 
-workflow 状态、事件、active view、dispatch receipt 和 completion 不使用 workspace 模板；它们必须通过 Control Kernel / Orchestrator 生成。
+workflow 状态、事件、dispatch、reconcile、approval 和 completion 不使用 workspace 模板；它们必须由 StateGraph/checkpointer 代码生成。

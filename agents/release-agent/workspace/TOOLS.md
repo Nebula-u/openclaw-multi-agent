@@ -3,7 +3,7 @@
 > 版本: release-agent-tools v1
 > 本文件规定 release-agent 允许使用的 OpenClaw 原生工具与硬性边界。凡本文件未列出的能力，一律视为禁止。
 
-> v3 覆盖：不得调用会话调度、Control Kernel mutation、monitor API、receipt/retry；JSON/JSONL 只写派发消息声明的 `.agent-raw` 暂存路径，绝不写最终 output JSON。
+> v4 边界：不得调用会话调度、checkpoint mutation、monitor API、receipt/retry/approval；JSON/JSONL 只写派发消息声明的 `.agent-raw` 暂存路径。
 
 ## 1. 允许使用的 OpenClaw 原生工具
 
@@ -15,13 +15,13 @@
 
 - 所有 Shell 与 Git 命令必须显式使用**绝对路径**（Git 用 `-C <abs>` 或原生 Shell 工具的绝对 cwd）。
 - 禁止依赖当前工作目录，禁止相对运行时路径（如 `./repo`、`../worktree`）。即使从 `C:\Windows\System32` 启动也必须给绝对路径。
-- 所有读写路径规范化后必须落在允许根目录内：读取限于 `input/`、`source-manifest.json` 所列文件、前序产物与工件目录；写入仅限本次 run 的 `artifact_root_abs/output/` 与 `raw-logs/`。拒绝 `..` / 符号链接 / junction 逃逸。
+- 所有读写路径规范化后必须落在允许根目录内：读取限于 input、清单文件和前序已发布产物；写入仅限本次 run `.agent-raw/` 与 `raw-logs/`。
 
 ## 3. 本 Agent 不得 spawn 其他 Agent
 
 - **本 Agent 不得 spawn 其他 Agent。** `subagents.allowAgents = []`。
-- 不得调用 `sessions_spawn` 创建子 Agent；不得通过 `sessions_send` 指挥其他 Agent 代替自己工作。只有 manager-agent 拥有调度权。
-- 需要补证据、需要他人改代码或需要放行例外时，返回相应状态（`HOLD` 对应的 `NEEDS_REWORK` / `BLOCKED` / `HUMAN_DECISION_REQUIRED`），交由 manager-agent 处理，不自行派生。
+- 不得调用或指挥其他 Agent；唯一派发入口是宿主 StateGraph `dispatch` 节点。
+- 需要补证据、他人改代码或放行例外时，返回相应状态与证据，由 StateGraph 处理，不自行派生。
 
 ## 4. 明确禁止（含阶段红线）
 
@@ -33,4 +33,4 @@
 - **不执行破坏性命令**（`git reset --hard`、`git clean -fdx`、递归删除等）。
 - **不修改**全局 Git 配置、OpenClaw 配置、其他 Agent 的 workspace/agentDir、其他任务 input、历史 run 目录。
 - **不执行本项目新建的任何 Python 编排脚本**（本系统无 Python 控制平面）；校验和用原生工具计算。
-- 本阶段测试为 `UNSANDBOXED_LOCAL`：作为**已披露的已知风险**记录，**不得**声称"已完全隔离"。关键构建/测试/安全证据无法验证或缺失 → 不 GO。
+- TEST 必须具备宿主校验的 `SANDBOXED_DOCKER` attestation。关键构建/测试/安全证据无法验证或 attestation 缺失 → 不 GO。
