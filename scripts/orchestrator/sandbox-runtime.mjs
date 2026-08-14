@@ -386,7 +386,17 @@ export async function prepareTestSandboxSession({ projectRootInput, task, sessio
     created_at: new Date().toISOString(), lease_path_abs: leasePath,
   };
   atomicWriteJson(leasePath, lease);
-  const attestation = await verifySandboxRuntime({ lease, commandRunner });
+  let attestation;
+  try {
+    attestation = await verifySandboxRuntime({ lease, commandRunner });
+  } catch (error) {
+    try {
+      await cleanupTestSandboxSession({ lease, leasePath, commandRunner });
+    } catch (cleanupError) {
+      error.details = { ...(error.details ?? {}), prepare_cleanup_error: cleanupError.message, prepare_cleanup_error_code: cleanupError.code ?? null };
+    }
+    throw error;
+  }
   return { lease, leasePath, policy, mountPlan, attestation };
 }
 

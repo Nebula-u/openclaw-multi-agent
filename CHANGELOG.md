@@ -15,6 +15,11 @@
 - 停止 session 后复查实际 Docker 状态，清理残留的已停止容器，并在状态文件中记录清理结果；若仍有运行容器则清理失败。
 - 验证：sandbox runtime 单测 `8/8` 通过，覆盖历史记录区分、root 拒绝、清理后的状态归档、Node 语法检查和 `git diff --check`。
 
+### 补强 test-agent 准备失败清理（Round 3，2026-08-14）
+
+- 如果 Docker 运行时核验在 lease 返回前失败（例如发现 root 用户），准备流程也会立即停止并清理该 session，避免留下可继续执行的孤儿容器。
+- 清理失败会附加到原始校验错误中，仍保持 fail-closed，不会把失败任务当作已启动。
+
 ### 强制 test-agent Docker sandbox（Round 4，2026-08-12）
 
 - 将 test-agent 的工具边界、身份、使命、永久规则和本地规则说明统一为强制 `SANDBOXED_DOCKER`；沙箱、动态挂载、配置或 attestation 不可验证时 `BLOCKED`，禁止宿主机回退。
