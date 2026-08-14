@@ -13,5 +13,5 @@ $env:OPENCLAW_PROJECT_ROOT = $resolvedProject
 $env:OPENCLAW_RUNTIME_ROOT = $resolvedRuntime
 $env:MONITOR_PORT = [string]$Port
 
-& node (Join-Path $resolvedProject 'monitor\supervisor.mjs')
+& node (Join-Path $resolvedProject 'monitor\main.mjs')
 exit $LASTEXITCODE

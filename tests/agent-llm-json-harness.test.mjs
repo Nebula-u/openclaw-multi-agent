@@ -18,7 +18,7 @@ const EXPECTED_SCHEMAS = [
   'component-build-result.schema.json', 'component-request.schema.json', 'context-manifest.schema.json',
   'evidence.schema.json', 'gate-result.schema.json', 'json-validation-error.schema.json',
   'release-decision.schema.json', 'result.schema.json', 'review-findings.schema.json', 'skill-package.schema.json',
-  'task.schema.json',
+  'route-plan.schema.json', 'task.schema.json',
 ];
 
 test('LLM 场景矩阵覆盖每份契约的 5 个不同需求', () => {
@@ -76,7 +76,7 @@ test('空回复与其他错误共享最多两次重写预算', async () => {
 
 test('空回复恢复为合法 JSON 时标记为成功', async () => {
   const scenario = LLM_SCENARIOS.find((item) => item.schemaFile === 'result.schema.json');
-  const responses = ['', '{"schema_version":1,"workflow_id":"WF-a","task_id":"TASK-a","run_id":"RUN-a","agent_id":"developer-agent","role":"worker","attempt":1,"started_at":"2026-08-03T00:00:00Z","finished_at":"2026-08-03T00:00:01Z","result_status":"BLOCKED","summary_for_user":"x","summary_for_manager":"x","worktree_path_abs":"D:/worktree","artifact_root_abs":"D:/artifact","isolation_mode":"UNSANDBOXED_LOCAL","self_validation":{"preflight_passed":false,"checks":[]}}'];
+  const responses = ['', '{"schema_version":1,"workflow_id":"WF-a","task_id":"TASK-a","run_id":"RUN-a","agent_id":"developer-agent","role":"worker","attempt":1,"started_at":"2026-08-03T00:00:00Z","finished_at":"2026-08-03T00:00:01Z","result_status":"BLOCKED","summary_for_user":"x","summary_for_manager":"x","worktree_path_abs":"D:/worktree","artifact_root_abs":"D:/artifact","input_commit":null,"output_commit":null,"isolation_mode":"UNSANDBOXED_LOCAL","self_validation":{"preflight_passed":false,"checks":[]},"artifact_manifest_hash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}'];
   const client = { send: async () => responses.shift() };
   const outcome = await runLlmCase({ client, scenario, testCase: scenario.cases[0], runId: 'empty-success-run' });
   assert.equal(outcome.classification, 'REPAIR_RETRY_SUCCEEDED');

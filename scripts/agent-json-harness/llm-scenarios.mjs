@@ -30,6 +30,7 @@ const SCHEMA_SPECS = [
   ['release-decision.schema.json', 'release-agent', false],
   ['result.schema.json', 'developer-agent', false],
   ['review-findings.schema.json', 'review-agent', false],
+  ['route-plan.schema.json', 'manager-agent', false],
   ['skill-package.schema.json', 'manager-agent', false],
   ['task.schema.json', 'manager-agent', false],
 ];

@@ -27,13 +27,11 @@ test('static dashboard opens without a build step and contains no external runti
   assert.match(css, /\.conversation-console\s*\{[^}]*overflow:\s*hidden;/u);
 });
 
-test('dashboard uses the same-origin /monitor API when deployed behind Tomcat', () => {
+test('dashboard connects directly to the loopback Node monitor backend', () => {
   const html = readFileSync(join(ROOT, 'monitor', 'ui', 'index.html'), 'utf8');
   const script = readFileSync(join(ROOT, 'monitor', 'ui', 'app.js'), 'utf8');
   const config = readFileSync(join(ROOT, 'monitor', 'ui', 'config.js'), 'utf8');
-  const deployedConfig = readFileSync(join(ROOT, 'deploy', 'tomcat-monitor', 'config.js'), 'utf8');
   assert.match(config, /apiUrl:\s*'http:\/\/127\.0\.0\.1:4319'/u);
-  assert.match(deployedConfig, /apiUrl:\s*'\/monitor'/u);
   assert.match(html, /default-src 'self' file:/u);
   assert.match(html, /connect-src 'self' http:\/\/127\.0\.0\.1:\*/u);
   assert.match(html, /script-src 'self' file:/u);
