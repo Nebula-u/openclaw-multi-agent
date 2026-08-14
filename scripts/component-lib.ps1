@@ -64,6 +64,45 @@ function Test-ProjectEnvironmentKey {
   return (($null -ne $processValue -and $processValue -ne '') -or ($DotEnv.ContainsKey($Name) -and [string]$DotEnv[$Name] -ne ''))
 }
 
+function Set-DirectoryDaclOnly {
+  param(
+    [Parameter(Mandatory)][string]$Path,
+    [Parameter(Mandatory)][System.Security.AccessControl.DirectorySecurity]$Acl
+  )
+  # Set-Acl can request the SACL security-information bit in PowerShell 7 on
+  # Windows, even when its input changed only Access rules.  Calling
+  # SetNamedSecurityInfo with DACL_SECURITY_INFORMATION explicitly prevents
+  # that privilege escalation and leaves owner, group and SACL untouched.
+  if ($null -eq ('OpenClaw.NativeArtifactAcl' -as [type])) {
+    Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+namespace OpenClaw {
+  public static class NativeArtifactAcl {
+    [DllImport("advapi32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    public static extern uint SetNamedSecurityInfo(
+      string objectName, int objectType, uint securityInformation,
+      IntPtr owner, IntPtr group, IntPtr dacl, IntPtr sacl);
+  }
+}
+'@ -ErrorAction Stop
+  }
+  $descriptor = New-Object System.Security.AccessControl.RawSecurityDescriptor($Acl.GetSecurityDescriptorBinaryForm(), 0)
+  if ($null -eq $descriptor.DiscretionaryAcl) { throw "artifact 目录没有可写入的 DACL：$Path" }
+  $daclBytes = New-Object byte[] $descriptor.DiscretionaryAcl.BinaryLength
+  $descriptor.DiscretionaryAcl.GetBinaryForm($daclBytes, 0)
+  $daclPointer = [System.Runtime.InteropServices.Marshal]::AllocHGlobal($daclBytes.Length)
+  try {
+    [System.Runtime.InteropServices.Marshal]::Copy($daclBytes, 0, $daclPointer, $daclBytes.Length)
+    # DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION.
+    $securityInformation = [Convert]::ToUInt32('80000004', 16)
+    $result = [OpenClaw.NativeArtifactAcl]::SetNamedSecurityInfo($Path, 1, $securityInformation, [IntPtr]::Zero, [IntPtr]::Zero, $daclPointer, [IntPtr]::Zero)
+    if ($result -ne 0) { throw (New-Object ComponentModel.Win32Exception([int]$result)) }
+  } finally {
+    [System.Runtime.InteropServices.Marshal]::FreeHGlobal($daclPointer)
+  }
+}
+
 function Set-RawArtifactAccessControl {
   param([Parameter(Mandatory)][string]$Path)
   $pathAbs = Get-NormalizedPath $Path
@@ -77,12 +116,20 @@ function Set-RawArtifactAccessControl {
     return [pscustomobject]@{ platform = 'unix'; protected = $true; mode = '0700'; path_abs = $pathAbs }
   }
 
-  $acl = New-Object System.Security.AccessControl.DirectorySecurity
+  # Start with the existing descriptor so ownership and audit configuration
+  # stay intact while only this directory's access rules are replaced.
+  $acl = Get-Acl -LiteralPath $pathAbs
   $acl.SetAccessRuleProtection($true, $false)
   $inheritance = [System.Security.AccessControl.InheritanceFlags]::ContainerInherit -bor [System.Security.AccessControl.InheritanceFlags]::ObjectInherit
   $propagation = [System.Security.AccessControl.PropagationFlags]::None
   $allow = [System.Security.AccessControl.AccessControlType]::Allow
   $currentSid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
+  $existingSids = @($acl.Access | ForEach-Object {
+    $_.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value
+  } | Sort-Object -Unique)
+  foreach ($sidValue in $existingSids) {
+    $acl.PurgeAccessRules((New-Object System.Security.Principal.SecurityIdentifier($sidValue)))
+  }
   foreach ($entry in @(
     @($currentSid, [System.Security.AccessControl.FileSystemRights]::FullControl),
     @((New-Object System.Security.Principal.SecurityIdentifier([System.Security.Principal.WellKnownSidType]::LocalSystemSid, $null)), [System.Security.AccessControl.FileSystemRights]::FullControl),
@@ -90,7 +137,7 @@ function Set-RawArtifactAccessControl {
   )) {
     $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($entry[0], $entry[1], $inheritance, $propagation, $allow)))
   }
-  Set-Acl -LiteralPath $pathAbs -AclObject $acl
+  Set-DirectoryDaclOnly -Path $pathAbs -Acl $acl
   $effective = Get-Acl -LiteralPath $pathAbs
   if (-not $effective.AreAccessRulesProtected) { throw "artifact 目录 DACL 未受保护：$pathAbs" }
   $currentRule = @($effective.Access | Where-Object {

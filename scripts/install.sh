@@ -358,7 +358,7 @@ for id in "${AGENT_IDS[@]}"; do
   printf "  %-24s dir=%s  model=%s active=%s\n" "" "${DIR[$id]}" "$mdl" "${ACTIVE[$id]}"
 done
 echo "  $MANAGER_ID subagents.allowAgents = ${WORKER_IDS[*]}"
-echo "  manager subagents.allowAgents = [] ; delegationMode = off（派发仅允许 StateGraph dispatch 节点）"
+echo "  manager subagents.allowAgents = [] ; delegationMode = prefer（派发仅允许 StateGraph dispatch 节点）"
 
 GENERATED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
@@ -599,7 +599,7 @@ for id in "${AGENT_IDS[@]}"; do
     fi
   fi
   if [ "$id" = "$MANAGER_ID" ]; then
-    set_json "agents.list[$idx].subagents" "{\"delegationMode\":\"off\",\"requireAgentId\":true,\"allowAgents\":[]}"
+    set_json "agents.list[$idx].subagents" "{\"delegationMode\":\"prefer\",\"requireAgentId\":true,\"allowAgents\":[]}"
   else
     set_json "agents.list[$idx].subagents" "{\"allowAgents\":${ALLOW_JSON[$id]}}"
   fi

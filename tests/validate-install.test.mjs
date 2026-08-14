@@ -29,6 +29,8 @@ test('installers materialize an explicit empty worker delegation allowlist', () 
   assert.match(powershell, /agents\.list\[\$idx\]\.subagents/u);
   assert.match(powershell, /function Get-OpenClawAgentsWithFallback/u);
   assert.match(powershell, /agents\.list 后备配置输出/u);
+  assert.match(powershell, /delegationMode = 'prefer'/u);
+  assert.doesNotMatch(powershell, /delegationMode = 'off'/u);
   assert.match(bash, /set_json "agents\.list\[\$idx\]\.subagents"/u);
   assert.match(bash, /ALLOW_JSON\[\$id\]/u);
 });

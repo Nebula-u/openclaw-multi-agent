@@ -385,7 +385,9 @@ try {
       }
     }
     $subagents = if ($p.role -eq 'manager') {
-      [ordered]@{ delegationMode = 'off'; requireAgentId = $true; allowAgents = @() }
+      # OpenClaw accepts only suggest/prefer.  An empty allowlist preserves the
+      # StateGraph-only dispatch boundary while keeping the native schema valid.
+      [ordered]@{ delegationMode = 'prefer'; requireAgentId = $true; allowAgents = @() }
     } else {
       [ordered]@{ allowAgents = @($p.allow_agents) }
     }
@@ -402,7 +404,7 @@ try {
     $desiredAllow = @(if ($p.role -eq 'manager') { $ManagerAllow } else { $p.allow_agents })
     $allowMatches = @($currentAllow).Count -eq @($desiredAllow).Count -and @($desiredAllow | Where-Object { @($currentAllow) -notcontains $_ }).Count -eq 0
     $subagentsMatch = if ($p.role -eq 'manager') {
-      $allowMatches -and $currentDelegationMode -eq 'off' -and $currentRequireAgentId
+      $allowMatches -and $currentDelegationMode -eq 'prefer' -and $currentRequireAgentId
     } else {
       # An omitted block currently inherits OpenClaw defaults.  Materialize an
       # explicit empty allowlist so a worker cannot acquire delegation through
