@@ -7,6 +7,14 @@
 - 移除测试镜像中的 `ENTRYPOINT ["sleep", "infinity"]`，避免 OpenClaw 启动沙箱时重复追加 `sleep infinity` 导致容器立即退出。
 - 保留镜像内的 `USER sandbox` 非 root 设置；Docker 沙箱本身不要求 root，后续真实会话会单独核验 OpenClaw 是否覆盖该用户。
 
+### 强制 test-agent 非 root 与运行时清理（Round 2，2026-08-14）
+
+- 将 test-agent Docker 用户固定为 `10001:10001`，同步策略、Agent package 和 OpenClaw 运行配置；沙箱使用不需要宿主机 root，但实际容器用户必须通过运行时核验。
+- 运行时拒绝 root、用户不匹配、镜像/挂载/资源限制不匹配的容器；验证失败保持 fail-closed，不会回退到宿主机执行。
+- 新增 `.orchestrator/test-sandbox-state.json`，把当前可执行容器、不可执行容器和历史停止记录分开保存，避免把历史记录误判为可用运行时。
+- 停止 session 后复查实际 Docker 状态，清理残留的已停止容器，并在状态文件中记录清理结果；若仍有运行容器则清理失败。
+- 验证：sandbox runtime 单测 `8/8` 通过，覆盖历史记录区分、root 拒绝、清理后的状态归档、Node 语法检查和 `git diff --check`。
+
 ### 强制 test-agent Docker sandbox（Round 4，2026-08-12）
 
 - 将 test-agent 的工具边界、身份、使命、永久规则和本地规则说明统一为强制 `SANDBOXED_DOCKER`；沙箱、动态挂载、配置或 attestation 不可验证时 `BLOCKED`，禁止宿主机回退。

@@ -1,12 +1,13 @@
 import { createHash } from 'node:crypto';
 import { copyFileSync, existsSync, lstatSync, mkdirSync, readFileSync, realpathSync } from 'node:fs';
 import { spawn } from 'node:child_process';
-import { basename, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { openClawSpawnSpec, terminateProcessTree } from './process-utils.mjs';
 import { atomicWriteJson } from '../runtime-core/atomic-store.mjs';
 
 export const TEST_SANDBOX_ISOLATION_MODE = 'SANDBOXED_DOCKER';
 export const TEST_SANDBOX_POLICY_RELATIVE_PATH = join('config', 'test-sandbox-policy.json');
+export const TEST_SANDBOX_CONTAINER_USER = '10001:10001';
 
 const REQUIRED_MOUNT_KEYS = ['worktree', 'input', 'agent_raw', 'raw_logs'];
 const CONTAINER_PATH_PATTERN = /^\/[A-Za-z0-9][A-Za-z0-9._/-]*$/u;
@@ -100,7 +101,8 @@ export function assertTestSandboxPolicy(policy) {
   if (policy.enabled !== true) fail('SANDBOX_POLICY_DISABLED', 'test sandbox policy is disabled');
   const docker = policy.docker;
   if (!docker || typeof docker !== 'object' || docker.image !== 'openclaw-test-node:22-slim'
-    || docker.workdir !== '/workspace' || docker.network !== 'none' || docker.read_only_root !== true || docker.pids_limit !== 256
+    || docker.workdir !== '/workspace' || docker.user !== TEST_SANDBOX_CONTAINER_USER || docker.network !== 'none'
+    || docker.read_only_root !== true || docker.pids_limit !== 256
     || docker.memory !== '2g' || docker.cpus !== 2 || docker.dangerously_allow_external_bind_sources !== true
     || docker.dangerously_allow_reserved_container_targets !== false || JSON.stringify(docker.cap_drop) !== JSON.stringify(['ALL'])) {
     fail('SANDBOX_POLICY_WEAK', 'test sandbox Docker limits do not match the required baseline', { docker });
@@ -316,6 +318,7 @@ function assertEffectiveAgentConfig(agent, policy) {
     ['sandbox.mode', sandbox.mode, policy.mode], ['sandbox.backend', sandbox.backend, policy.backend],
     ['sandbox.scope', sandbox.scope, policy.scope], ['sandbox.workspaceAccess', sandbox.workspaceAccess, policy.workspace_access],
     ['sandbox.docker.image', docker.image, policy.docker.image], ['sandbox.docker.workdir', docker.workdir, policy.docker.workdir],
+    ['sandbox.docker.user', docker.user, policy.docker.user],
     ['sandbox.docker.network', docker.network, policy.docker.network], ['sandbox.docker.readOnlyRoot', docker.readOnlyRoot, policy.docker.read_only_root],
     ['sandbox.docker.pidsLimit', docker.pidsLimit, policy.docker.pids_limit], ['sandbox.docker.memory', docker.memory, policy.docker.memory],
     ['sandbox.docker.cpus', docker.cpus, policy.docker.cpus],
@@ -373,11 +376,13 @@ export async function prepareTestSandboxSession({ projectRootInput, task, sessio
     throw error;
   }
   const leasePath = join(task.artifact_root_abs, '.orchestrator', 'test-sandbox-lease.json');
+  const statePath = join(task.artifact_root_abs, '.orchestrator', 'test-sandbox-state.json');
   mkdirSync(join(task.artifact_root_abs, '.orchestrator'), { recursive: true });
   const lease = {
     schema_version: 1, agent_id: 'test-agent', session_id: sessionId, session_key: sessionKey,
     project_root_abs: projectRoot, policy_path_abs: policyPath, policy_digest: sandboxPolicyDigest(policy), policy,
     config_index: index, previous_binds: previousBinds, desired_binds: desiredBinds, mount_plan: mountPlan,
+    state_path_abs: statePath,
     created_at: new Date().toISOString(), lease_path_abs: leasePath,
   };
   atomicWriteJson(leasePath, lease);
@@ -398,40 +403,227 @@ function inspectMounts(container, mountPlan) {
   if (unexpected.length > 0) fail('SANDBOX_RUNTIME_EXTRA_MOUNT', 'sandbox contains an unexpected host mount', { mount_destinations: unexpected });
 }
 
-export async function verifySandboxRuntime({ lease, commandRunner = null } = {}) {
-  const runner = (executable, args, options = {}) => runSandboxCommand(executable, args, { ...options, runner: commandRunner });
-  const listed = parseCommandJson(await runner('openclaw', ['sandbox', 'list', '--json']), 'openclaw sandbox list');
-  const container = (listed.containers ?? []).find((item) => item.sessionKey === lease.session_key && item.running === true);
-  if (!container) fail('SANDBOX_RUNTIME_MISSING', 'no running Docker sandbox was recorded for the test session', { session_key: lease.session_key });
-  const inspected = parseCommandJson(await runner('docker', ['inspect', container.runtimeLabel]), 'docker inspect');
-  const docker = inspected[0];
+function runtimeLabelOf(record) {
+  return typeof record?.runtimeLabel === 'string' && record.runtimeLabel.trim()
+    ? record.runtimeLabel.trim()
+    : (typeof record?.containerName === 'string' && record.containerName.trim() ? record.containerName.trim() : null);
+}
+
+/**
+ * OpenClaw's registry is a history of runtimes, not an availability check.
+ * A stopped record is deliberately kept out of current_candidates; a running
+ * record without a runtime label is unusable and must never be selected.
+ */
+export function classifySandboxContainerRecords(containers, sessionKey) {
+  const sessionRecords = (Array.isArray(containers) ? containers : [])
+    .filter((item) => item?.sessionKey === sessionKey);
+  return {
+    session_records: sessionRecords,
+    current_candidates: sessionRecords.filter((item) => item.running === true && runtimeLabelOf(item)),
+    historical_records: sessionRecords.filter((item) => item.running !== true),
+    unusable_records: sessionRecords.filter((item) => item.running === true && !runtimeLabelOf(item)),
+  };
+}
+
+function stateRecord(record, classification, details = {}) {
+  return { ...clone(record), classification, ...details };
+}
+
+function writeSandboxState(lease, state) {
+  if (!lease?.state_path_abs) return;
+  mkdirSync(dirname(lease.state_path_abs), { recursive: true });
+  atomicWriteJson(lease.state_path_abs, {
+    schema_version: 1,
+    agent_id: lease.agent_id,
+    session_id: lease.session_id,
+    session_key: lease.session_key,
+    lease_path_abs: lease.lease_path_abs,
+    ...state,
+    updated_at: new Date().toISOString(),
+  });
+}
+
+async function inspectRuntimeRecord(record, runner) {
+  const runtimeLabel = runtimeLabelOf(record);
+  if (!runtimeLabel) return { record, runtimeLabel: null, docker: null, reason: 'missing_runtime_label' };
+  const result = await runner('docker', ['inspect', runtimeLabel]);
+  if (result.exit_code !== 0) return {
+    record, runtimeLabel, docker: null, reason: 'docker_inspect_failed',
+    inspect_result: { exit_code: result.exit_code, stdout: result.stdout, stderr: result.stderr },
+  };
+  let parsed;
+  try { parsed = JSON.parse(result.stdout); }
+  catch (error) {
+    return { record, runtimeLabel, docker: null, reason: 'docker_inspect_invalid_json', error: error.message };
+  }
+  return { record, runtimeLabel, docker: Array.isArray(parsed) ? parsed[0] : null, reason: null };
+}
+
+function rootUserValue(value) {
+  const text = typeof value === 'string' ? value.trim().toLowerCase() : '';
+  return text === 'root' || text === 'root:root' || text.split(':')[0] === '0';
+}
+
+function assertDockerRuntime(docker, lease) {
+  const { policy, mount_plan: mountPlan } = lease;
   if (!docker?.Id) fail('SANDBOX_RUNTIME_INVALID', 'docker inspect returned no container identity');
-  if (docker.Config?.Image !== 'openclaw-test-node:22-slim') fail('SANDBOX_RUNTIME_IMAGE_MISMATCH', 'sandbox image does not match the policy', { image: docker.Config?.Image });
-  if (docker.Config?.WorkingDir !== '/workspace') fail('SANDBOX_RUNTIME_WORKDIR_MISMATCH', 'sandbox working directory does not match the policy', { working_dir: docker.Config?.WorkingDir });
-  if (docker.HostConfig?.NetworkMode !== 'none' || docker.HostConfig?.ReadonlyRootfs !== true
-    || JSON.stringify(docker.HostConfig?.CapDrop ?? []) !== JSON.stringify(['ALL'])
-    || Number(docker.HostConfig?.PidsLimit) !== 256 || Number(docker.HostConfig?.NanoCpus) !== 2_000_000_000
+  if (docker.Config?.Image !== policy.docker.image) fail('SANDBOX_RUNTIME_IMAGE_MISMATCH', 'sandbox image does not match the policy', { image: docker.Config?.Image });
+  if (docker.Config?.WorkingDir !== policy.docker.workdir) fail('SANDBOX_RUNTIME_WORKDIR_MISMATCH', 'sandbox working directory does not match the policy', { working_dir: docker.Config?.WorkingDir });
+  const actualUser = typeof docker.Config?.User === 'string' ? docker.Config.User.trim() : '';
+  if (rootUserValue(actualUser)) fail('SANDBOX_RUNTIME_ROOT_USER', 'sandbox runtime is running as root; refusing to execute test-agent work', { actual_user: actualUser, expected_user: policy.docker.user });
+  if (actualUser !== policy.docker.user) fail('SANDBOX_RUNTIME_USER_MISMATCH', 'sandbox runtime user does not match the non-root policy', { actual_user: actualUser, expected_user: policy.docker.user });
+  if (docker.HostConfig?.NetworkMode !== policy.docker.network || docker.HostConfig?.ReadonlyRootfs !== policy.docker.read_only_root
+    || JSON.stringify(docker.HostConfig?.CapDrop ?? []) !== JSON.stringify(policy.docker.cap_drop)
+    || Number(docker.HostConfig?.PidsLimit) !== policy.docker.pids_limit || Number(docker.HostConfig?.NanoCpus) !== policy.docker.cpus * 1_000_000_000
     || Number(docker.HostConfig?.Memory) !== 2 * 1024 * 1024 * 1024) {
     fail('SANDBOX_RUNTIME_POLICY_MISMATCH', 'Docker runtime limits do not match the test sandbox policy', { host_config: docker.HostConfig });
   }
-  inspectMounts(docker, lease.mount_plan);
+  inspectMounts(docker, mountPlan);
+}
+
+function runtimeStateSummary(lease, classifications, inspections, current = null, phase = 'VERIFYING') {
+  const inspectedNonExecutable = inspections
+    .filter((item) => !item.docker || item.docker.State?.Running !== true)
+    .map((item) => stateRecord(item.record, 'current_non_executable', { runtime_label: item.runtimeLabel, reason: item.reason ?? 'not_running' }));
+  return {
+    phase,
+    current_executable_container: current,
+    current_candidate_records: classifications.current_candidates.map((item) => stateRecord(item, 'current_candidate')),
+    historical_container_records: classifications.historical_records.map((item) => stateRecord(item, 'historical')),
+    non_executable_container_records: [
+      ...classifications.unusable_records.map((item) => stateRecord(item, 'current_non_executable', { reason: 'missing_runtime_label' })),
+      ...inspectedNonExecutable,
+    ],
+  };
+}
+
+export async function verifySandboxRuntime({ lease, commandRunner = null } = {}) {
+  const runner = (executable, args, options = {}) => runSandboxCommand(executable, args, { ...options, runner: commandRunner });
+  const listed = parseCommandJson(await runner('openclaw', ['sandbox', 'list', '--json']), 'openclaw sandbox list');
+  const classifications = classifySandboxContainerRecords(listed.containers, lease.session_key);
+  const inspections = [];
+  for (const record of classifications.current_candidates) inspections.push(await inspectRuntimeRecord(record, runner));
+  const running = inspections.filter((item) => item.docker?.State?.Running === true);
+  if (running.length !== 1) {
+    writeSandboxState(lease, runtimeStateSummary(lease, classifications, inspections, null, 'UNAVAILABLE'));
+    if (running.length > 1) fail('SANDBOX_RUNTIME_AMBIGUOUS', 'more than one currently running sandbox matches the test session', { session_key: lease.session_key, runtime_labels: running.map((item) => item.runtimeLabel) });
+    fail('SANDBOX_RUNTIME_MISSING', 'no currently executable Docker sandbox was found for the test session', {
+      session_key: lease.session_key, current_candidates: classifications.current_candidates, historical_records: classifications.historical_records,
+    });
+  }
+  const active = running[0];
+  try {
+    assertDockerRuntime(active.docker, lease);
+  } catch (error) {
+    writeSandboxState(lease, runtimeStateSummary(lease, classifications, inspections, null, 'UNAVAILABLE'));
+    const current = stateRecord(active.record, 'current_non_executable', { runtime_label: active.runtimeLabel, reason: error.code });
+    const state = JSON.parse(readFileSync(lease.state_path_abs, 'utf8'));
+    state.non_executable_container_records.push(current);
+    atomicWriteJson(lease.state_path_abs, state);
+    throw error;
+  }
+  const current = {
+    classification: 'current_executable', runtime_label: active.runtimeLabel, container_id: active.docker.Id,
+    session_key: lease.session_key, user: active.docker.Config.User, image: active.docker.Config.Image,
+  };
+  writeSandboxState(lease, runtimeStateSummary(lease, classifications, inspections, current, 'ACTIVE'));
+  lease.runtime_label = active.runtimeLabel;
+  lease.runtime_container_id = active.docker.Id;
+  if (lease.lease_path_abs) atomicWriteJson(lease.lease_path_abs, { ...lease, runtime_verified_at: new Date().toISOString() });
   return createSandboxAttestation({
     policy: lease.policy, mountPlan: lease.mount_plan, runtimeId: lease.session_key,
-    containerId: docker.Id, imageDigest: docker.Image, verifiedAt: new Date().toISOString(),
+    containerId: active.docker.Id, imageDigest: active.docker.Image, verifiedAt: new Date().toISOString(),
   });
+}
+
+async function collectPostStopState(lease, runner) {
+  const listed = parseCommandJson(await runner('openclaw', ['sandbox', 'list', '--json']), 'openclaw sandbox list');
+  const classifications = classifySandboxContainerRecords(listed.containers, lease.session_key);
+  const labels = new Set(classifications.session_records.map(runtimeLabelOf).filter(Boolean));
+  if (lease.runtime_label) labels.add(lease.runtime_label);
+  const inspections = [];
+  for (const runtimeLabel of labels) inspections.push(await inspectRuntimeRecord({ runtimeLabel, sessionKey: lease.session_key }, runner));
+  return { listed, classifications, inspections };
+}
+
+function existingRunning(inspections) {
+  return inspections.filter((item) => item.docker?.State?.Running === true);
+}
+
+async function removeStoppedOwnedRuntimes(lease, postStop, runner) {
+  const removed = [];
+  for (const item of postStop.inspections.filter((value) => value.docker && value.docker.State?.Running !== true)) {
+    const labels = item.docker.Config?.Labels ?? {};
+    if (labels['openclaw.sandbox'] !== '1' || labels['openclaw.sessionKey'] !== lease.session_key) {
+      fail('SANDBOX_CLEANUP_TARGET_MISMATCH', 'refusing to remove a container that is not owned by this sandbox session', { runtime_label: item.runtimeLabel, labels });
+    }
+    const result = await runner('docker', ['rm', '-f', item.runtimeLabel]);
+    if (result.exit_code !== 0) fail('SANDBOX_CLEANUP_FAILED', 'failed to remove the stopped sandbox container', { runtime_label: item.runtimeLabel, stdout: result.stdout, stderr: result.stderr });
+    removed.push(item.runtimeLabel);
+  }
+  return removed;
 }
 
 export async function cleanupTestSandboxSession({ lease, leasePath, commandRunner = null } = {}) {
   const runner = (executable, args, options = {}) => runSandboxCommand(executable, args, { ...options, runner: commandRunner });
-  const configResult = await runner('openclaw', ['config', 'get', 'agents.list', '--json']);
-  const { index, agent } = configAgent(parseCommandJson(configResult, 'openclaw config get agents.list'));
-  const currentBinds = [...(agent.sandbox?.docker?.binds ?? [])];
-  if (JSON.stringify(currentBinds) !== JSON.stringify(lease.desired_binds)) fail('SANDBOX_CONFIG_CHANGED_DURING_LEASE', 'test sandbox config changed while the run was active; refusing to overwrite it');
-  const writeResult = await runner('openclaw', ['config', 'set', `agents.list[${index}].sandbox.docker.binds`, JSON.stringify(lease.previous_binds), '--strict-json']);
-  if (writeResult.exit_code !== 0) fail('SANDBOX_CONFIG_RESTORE_FAILED', 'failed to restore the prior sandbox bind configuration', { stdout: writeResult.stdout, stderr: writeResult.stderr });
-  const recreated = await runner('openclaw', ['sandbox', 'recreate', '--session', lease.session_key, '--force']);
-  if (recreated.exit_code !== 0) fail('SANDBOX_CLEANUP_FAILED', 'failed to remove the test sandbox runtime', { stdout: recreated.stdout, stderr: recreated.stderr });
-  if (leasePath) atomicWriteJson(leasePath, { ...lease, cleaned_at: new Date().toISOString() });
+  let configError = null;
+  try {
+    const configResult = await runner('openclaw', ['config', 'get', 'agents.list', '--json']);
+    const { index, agent } = configAgent(parseCommandJson(configResult, 'openclaw config get agents.list'));
+    const currentBinds = [...(agent.sandbox?.docker?.binds ?? [])];
+    if (JSON.stringify(currentBinds) !== JSON.stringify(lease.desired_binds)) fail('SANDBOX_CONFIG_CHANGED_DURING_LEASE', 'test sandbox config changed while the run was active; refusing to overwrite it');
+    const writeResult = await runner('openclaw', ['config', 'set', `agents.list[${index}].sandbox.docker.binds`, JSON.stringify(lease.previous_binds), '--strict-json']);
+    if (writeResult.exit_code !== 0) fail('SANDBOX_CONFIG_RESTORE_FAILED', 'failed to restore the prior sandbox bind configuration', { stdout: writeResult.stdout, stderr: writeResult.stderr });
+  } catch (error) {
+    configError = error;
+  }
+
+  let stopError = null;
+  let postStop = null;
+  let removed = [];
+  try {
+    const recreated = await runner('openclaw', ['sandbox', 'recreate', '--session', lease.session_key, '--force']);
+    if (recreated.exit_code !== 0) fail('SANDBOX_CLEANUP_FAILED', 'failed to stop and remove the test sandbox runtime', { stdout: recreated.stdout, stderr: recreated.stderr });
+    postStop = await collectPostStopState(lease, runner);
+    removed = await removeStoppedOwnedRuntimes(lease, postStop, runner);
+    if (removed.length > 0) postStop = await collectPostStopState(lease, runner);
+    const running = existingRunning(postStop.inspections);
+    if (running.length > 0) fail('SANDBOX_CLEANUP_RUNTIME_REMAINS', 'a sandbox container is still running after cleanup', { runtime_labels: running.map((item) => item.runtimeLabel) });
+  } catch (error) {
+    stopError = error;
+  }
+
+  if (postStop) {
+    const inspections = postStop.inspections;
+    const running = existingRunning(inspections);
+    const nonExecutable = [
+      ...postStop.classifications.unusable_records.map((item) => stateRecord(item, 'current_non_executable', { reason: 'missing_runtime_label' })),
+      ...inspections.filter((item) => !item.docker || item.docker.State?.Running !== true)
+        .map((item) => stateRecord(item.record, 'historical_or_stopped', { runtime_label: item.runtimeLabel, reason: item.reason ?? 'not_running' })),
+    ];
+    writeSandboxState(lease, {
+      phase: (configError || stopError) ? 'CLEANED_WITH_ERRORS' : 'CLEANED',
+      current_executable_container: running.length > 0 ? running.map((item) => ({ classification: 'current_executable', runtime_label: item.runtimeLabel, container_id: item.docker.Id, session_key: lease.session_key })) : null,
+      current_candidate_records: postStop.classifications.current_candidates.map((item) => stateRecord(item, 'stopped_or_unverified')),
+      historical_container_records: postStop.classifications.historical_records.map((item) => stateRecord(item, 'historical')),
+      non_executable_container_records: nonExecutable,
+      cleanup: {
+        stop_requested: true, stop_verified: !stopError && running.length === 0, removed_runtime_labels: removed,
+        config_restored: !configError, config_error: configError?.code ?? null, stop_error: stopError?.code ?? null,
+      },
+    });
+  } else {
+    writeSandboxState(lease, {
+      phase: 'CLEANUP_FAILED', current_executable_container: null, cleanup: {
+        stop_requested: true, stop_verified: false, removed_runtime_labels: removed,
+        config_restored: !configError, config_error: configError?.code ?? null, stop_error: stopError?.code ?? null,
+      },
+    });
+  }
+
+  if (stopError) throw stopError;
+  if (configError) throw configError;
+  if (leasePath) atomicWriteJson(leasePath, { ...lease, cleaned_at: new Date().toISOString(), cleanup_state_path_abs: lease.state_path_abs });
   return true;
 }
 

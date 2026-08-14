@@ -11,7 +11,9 @@ import {
   createSandboxMountPlan,
   loadTestSandboxPolicy,
   cleanupTestSandboxSession,
+  classifySandboxContainerRecords,
   prepareTestSandboxSession,
+  verifySandboxRuntime,
   sandboxPolicyDigest,
   TEST_SANDBOX_ISOLATION_MODE,
 } from '../scripts/orchestrator/sandbox-runtime.mjs';
@@ -41,8 +43,21 @@ test('loads and validates the fail-closed Docker test sandbox policy', () => {
   assertTestSandboxPolicy(policy);
   assert.equal(policy.isolation_mode, TEST_SANDBOX_ISOLATION_MODE);
   assert.equal(policy.docker.network, 'none');
+  assert.equal(policy.docker.user, '10001:10001');
   assert.equal(policy.docker.read_only_root, true);
   assert.equal(sandboxPolicyDigest(policy).length, 64);
+});
+
+test('separates historical sandbox records from current candidates', () => {
+  const value = classifySandboxContainerRecords([
+    { sessionKey: 'session-test', running: false, runtimeLabel: 'historical-container' },
+    { sessionKey: 'session-test', running: true, runtimeLabel: 'current-container' },
+    { sessionKey: 'session-test', running: true },
+    { sessionKey: 'other-session', running: true, runtimeLabel: 'other-container' },
+  ], 'session-test');
+  assert.deepEqual(value.current_candidates.map((item) => item.runtimeLabel), ['current-container']);
+  assert.deepEqual(value.historical_records.map((item) => item.runtimeLabel), ['historical-container']);
+  assert.equal(value.unusable_records.length, 1);
 });
 
 test('creates an exact per-run mount plan under runtime roots', () => {
@@ -99,17 +114,51 @@ test('stages task context and declared inputs into container-visible paths', () 
   } finally { rmSync(value.root, { recursive: true, force: true }); }
 });
 
+test('fails closed when OpenClaw starts the sandbox as root', async () => {
+  const value = setup();
+  try {
+    const { policy } = loadTestSandboxPolicy(ROOT);
+    const mountPlan = createSandboxMountPlan({ task: value.task, policy, runtimeRootAbs: value.runtime });
+    const lease = {
+      agent_id: 'test-agent', session_id: 'session-root', session_key: 'agent:test-agent:session-root',
+      policy, mount_plan: mountPlan, state_path_abs: join(value.artifact, '.orchestrator', 'test-sandbox-state.json'),
+    };
+    const runner = ({ executable, args }) => {
+      if (executable === 'openclaw' && args[0] === 'sandbox' && args[1] === 'list') return {
+        exit_code: 0, stdout: JSON.stringify({ containers: [{ sessionKey: lease.session_key, running: true, runtimeLabel: 'root-container' }] }), stderr: '',
+      };
+      if (executable === 'docker' && args[0] === 'inspect') return {
+        exit_code: 0, stdout: JSON.stringify([{ Id: 'root-container', Image: 'sha256:image-test', Config: {
+          Image: policy.docker.image, WorkingDir: '/workspace', User: '0:0',
+        }, State: { Running: true }, HostConfig: {
+          NetworkMode: 'none', ReadonlyRootfs: true, CapDrop: ['ALL'], PidsLimit: 256,
+          NanoCpus: 2_000_000_000, Memory: 2 * 1024 * 1024 * 1024,
+        }, Mounts: mountPlan.mounts.map((mount) => ({ Destination: mount.container_path, Source: mount.host_path_abs, RW: mount.mode === 'rw' })) }]), stderr: '',
+      };
+      throw new Error(`unexpected command: ${executable} ${args.join(' ')}`);
+    };
+    await assert.rejects(
+      verifySandboxRuntime({ lease, commandRunner: runner }),
+      (error) => error.code === 'SANDBOX_RUNTIME_ROOT_USER',
+    );
+    const sandboxState = JSON.parse(readFileSync(lease.state_path_abs, 'utf8'));
+    assert.equal(sandboxState.phase, 'UNAVAILABLE');
+    assert.equal(sandboxState.current_executable_container, null);
+    assert.equal(sandboxState.non_executable_container_records.at(-1).reason, 'SANDBOX_RUNTIME_ROOT_USER');
+  } finally { rmSync(value.root, { recursive: true, force: true }); }
+});
+
 test('prepares, verifies, and restores a sandbox session through the command boundary', async () => {
   const value = setup();
   try {
     const { policy } = loadTestSandboxPolicy(ROOT);
-    const state = { binds: [], calls: [] };
+    const state = { binds: [], calls: [], recreateCalls: 0 };
     const runner = ({ executable, args }) => {
       state.calls.push({ executable, args });
       if (executable === 'openclaw' && args[0] === 'config' && args[1] === 'get') {
         return { exit_code: 0, stdout: JSON.stringify({ agents: { list: [{ id: 'test-agent', sandbox: {
           mode: 'all', backend: 'docker', scope: 'session', workspaceAccess: 'none', docker: {
-            image: policy.docker.image, workdir: policy.docker.workdir, network: 'none', readOnlyRoot: true,
+            image: policy.docker.image, workdir: policy.docker.workdir, user: policy.docker.user, network: 'none', readOnlyRoot: true,
             capDrop: ['ALL'], pidsLimit: 256, memory: '2g', cpus: 2,
             dangerouslyAllowExternalBindSources: true, dangerouslyAllowReservedContainerTargets: false,
             binds: state.binds,
@@ -120,16 +169,20 @@ test('prepares, verifies, and restores a sandbox session through the command bou
         if (valueIndex > 1) state.binds = JSON.parse(args[valueIndex]);
         return { exit_code: 0, stdout: '', stderr: '' };
       }
-      if (executable === 'openclaw' && args[0] === 'sandbox' && args[1] === 'recreate') return { exit_code: 0, stdout: '', stderr: '' };
+      if (executable === 'openclaw' && args[0] === 'sandbox' && args[1] === 'recreate') {
+        state.recreateCalls += 1;
+        return { exit_code: 0, stdout: '', stderr: '' };
+      }
       if (executable === 'openclaw' && args[0] === 'sandbox' && args[1] === 'explain') return {
         exit_code: 0, stdout: JSON.stringify({ sandbox: { sessionIsSandboxed: true, mode: 'all', backend: 'docker', scope: 'session', workspaceAccess: 'none', workspaceMounts: [{}, {}, {}, {}] } }), stderr: '',
       };
       if (executable === 'openclaw' && args[0] === 'sandbox' && args[1] === 'list') return {
-        exit_code: 0, stdout: JSON.stringify({ containers: [{ sessionKey: 'agent:test-agent:orchestrator:WF-test:TASK-test:RUN-test', running: true, runtimeLabel: 'container-test' }] }), stderr: '',
+        exit_code: 0, stdout: JSON.stringify({ containers: state.recreateCalls > 1 ? [] : [{ sessionKey: 'agent:test-agent:orchestrator:WF-test:TASK-test:RUN-test', running: true, runtimeLabel: 'container-test' }] }), stderr: '',
       };
       if (executable === 'docker' && args[0] === 'inspect') {
+        if (state.recreateCalls > 1) return { exit_code: 1, stdout: '', stderr: 'No such container' };
         const mountPlan = createSandboxMountPlan({ task: value.task, policy, runtimeRootAbs: value.runtime });
-        return { exit_code: 0, stdout: JSON.stringify([{ Id: 'container-test', Image: 'sha256:image-test', Config: { Image: policy.docker.image, WorkingDir: '/workspace' }, HostConfig: {
+        return { exit_code: 0, stdout: JSON.stringify([{ Id: 'container-test', Image: 'sha256:image-test', Config: { Image: policy.docker.image, WorkingDir: '/workspace', User: policy.docker.user, Labels: { 'openclaw.sandbox': '1', 'openclaw.sessionKey': 'agent:test-agent:orchestrator:WF-test:TASK-test:RUN-test' } }, State: { Running: true }, HostConfig: {
           NetworkMode: 'none', ReadonlyRootfs: true, CapDrop: ['ALL'], PidsLimit: 256, NanoCpus: 2_000_000_000, Memory: 2 * 1024 * 1024 * 1024,
         }, Mounts: mountPlan.mounts.map((mount) => ({ Destination: mount.container_path, Source: mount.host_path_abs, RW: mount.mode === 'rw' })) }]), stderr: '' };
       }
@@ -142,5 +195,9 @@ test('prepares, verifies, and restores a sandbox session through the command bou
     await cleanupTestSandboxSession({ lease: prepared.lease, leasePath: prepared.leasePath, commandRunner: runner });
     assert.deepEqual(state.binds, []);
     assert.ok(state.calls.some((call) => call.executable === 'docker'));
+    const sandboxState = JSON.parse(readFileSync(join(value.artifact, '.orchestrator', 'test-sandbox-state.json'), 'utf8'));
+    assert.equal(sandboxState.phase, 'CLEANED');
+    assert.equal(sandboxState.current_executable_container, null);
+    assert.equal(sandboxState.cleanup.stop_verified, true);
   } finally { rmSync(value.root, { recursive: true, force: true }); }
 });

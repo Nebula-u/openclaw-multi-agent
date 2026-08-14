@@ -22,6 +22,7 @@
     "docker": {
       "image": "openclaw-test-node:22-slim",
       "workdir": "/workspace",
+      "user": "10001:10001",
       "network": "none",
       "readOnlyRoot": true,
       "capDrop": ["ALL"],
