@@ -1,236 +1,148 @@
 # openclaw-multi-agent
 
-本项目使用 OpenClaw worker Agent 与本地 Orchestrator 完成受控的多 Agent 开发流程。
+本项目使用 LangGraph `StateGraph + checkpointer` 驱动本机多 Agent 软件交付流程。最新 checkpoint 是 workflow、路线、任务、审批、候选 commit 和事件链的唯一事实源；Manager、worker、launcher、日志和 monitor 都不能直接推进状态。
 
-状态、派发、结果接收和重试由本地代码决定；Agent 只执行已分配任务、修改指定 worktree，并写入暂存结果。看板为只读，只显示任务阶段、状态、负责 Agent 和用户可见对话。
+## 核心边界
 
-## 当前功能
-
-- Control DB 是 workflow、task、run、dispatch、receipt 和 completion 的唯一事实源。
-- 轻量 LangGraph `StateGraph` 作为可选执行编排层，每次从 Control DB 重建状态并只推进一个稳定动作；它不保存第二份 workflow 状态。
-- 本地 Orchestrator 从已验证 task 固定派生目标 Agent、session 和派发回执；Agent 不可自行派发或改状态。
-- Agent JSON/JSONL 只能写入 `<artifact_root>/.agent-raw/**`；本地代码统一清洗、Ajv 校验、原子发布最终文件。
-- JSON 解析、路径安全或 Schema 校验失败时，本地代码保留原始暂存文件，并写入 `.orchestrator-ingest/*.failure.json` 和 `.orchestrator-ingest/validation-errors.jsonl`。
-- Monitor 不提供写入、重试、催办或与 Agent 交互的入口；不展示思考、工具调用、session、路径和控制细节。
-
-## 前置条件
-
-- 已安装 OpenClaw，`openclaw --version` 可用。
-- Node.js 22.5+、npm、Git。
-- Windows 使用 PowerShell 7；Bash 安装脚本还需要 `jq`。
-
-Linux 服务器（以下以 Ubuntu/Debian 为例）从零安装系统依赖、Node.js 22 和 OpenClaw：
-
-```bash
-# Linux（Ubuntu/Debian）
-sudo apt-get update
-sudo apt-get install -y curl git jq
-curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
-sudo apt-get install -y nodejs
-sudo npm install -g openclaw
-node --version
-openclaw --version
+```text
+用户请求
+  -> Manager 仅提出 route-plan
+  -> 本地代码校验并生成路线确认审批
+  -> 人工确认后冻结 route_hash / steps / approval_plan
+  -> StateGraph dispatch 按 task kind 固定选择 Agent
+  -> Agent 在独立 worktree 执行并只写 .agent-raw / raw logs
+  -> 本地 ingestion + Gate 校验结果、证据、commit 和 sandbox
+  -> checkpointer 原子推进 candidate 与下一节点
 ```
 
-首次安装依赖：
+- 不存在第二套 workflow 状态库或 Agent 可写状态文件。
+- Manager 不指定 Agent、不派发、不审批、不轮询运行中的 worker。
+- worker 不持有 runtime/human capability，也不能调用其他 Agent。
+- 每个 Agent task 最多执行 3 次；失败后进入绑定当前任务的人工审批。
+- 同一 session 的非法 JSON 最多重新生成 2 次，只允许重写结构化输出。
+- DEVELOPMENT 和 TEST 必须提交真实 Git commit；TEST 可修改测试代码并推进 candidate。
+- TEST 强制使用 `SANDBOXED_DOCKER`，禁止主机执行、网络、提权和额外 mount。
+- monitor 是 Node.js 只读后端，只查询最新 checkpoints 和本地 telemetry。
+
+详细设计见 [docs/architecture.md](docs/architecture.md)。
+
+## 环境要求
+
+- Node.js 22.5+、npm、Git。
+- OpenClaw CLI 可用。
+- Windows 使用 PowerShell 7；Bash 安装器还需要 `jq`。
+- 执行 TEST 前需要 Docker Desktop/Linux Docker daemon，并构建 `openclaw-test-node:22-slim`。
 
 ```powershell
 npm install
+openclaw --version
+node --version
+git --version
 ```
 
-## 启动方式
+模型默认限制为：
 
-### 1. 启动 OpenClaw Gateway
+- context window：`200000`
+- max output：`32000`
+- Manager soft input budget：`120000` tokens（60%）
+- 单次紧凑 Manager prompt：`12000` 字符
+
+安装器会把这些限制同步到 OpenClaw provider/model 目录；模型行缺失或同一模型限制不一致时失败关闭。
+
+## 安装 Agent
+
+先执行 dry-run；dry-run 不修改 OpenClaw 配置或 artifact ACL。
 
 ```powershell
-openclaw gateway start
-openclaw gateway status
+pwsh -NoProfile -File scripts/install.ps1 -RuntimeRoot runtime
+pwsh -NoProfile -File scripts/install.ps1 -Apply -Yes -RuntimeRoot runtime
+pwsh -NoProfile -File scripts/validate-install.ps1
 ```
 
-状态应显示 `Runtime: running` 与 `Connectivity probe: ok`。
+```bash
+bash scripts/install.sh --runtime-root runtime
+bash scripts/install.sh --apply --yes --runtime-root runtime
+bash scripts/validate-install.sh
+```
 
-### 2. 初始化本地 Orchestrator
+可用 `-ModelConfig` / `--model-config` 指向 `config/agent-models.example.json`。安装 Apply 会将 `runtime/artifacts` 设置为 Windows 受保护 DACL，或 Unix `0700`。
 
-首次运行或 `runtime/control` 尚未初始化时执行一次：
+## 运行 Workflow
+
+初始化本地 runtime/human capability：
 
 ```powershell
-node scripts/orchestrator.mjs init --project-root .
+node scripts/workflow.mjs init --project-root .
 ```
 
-该命令创建本地 capability；不要读取、复制或打印 capability 文件内容。
+请求文件示例：
 
-### 3. 启动只读看板
+```json
+{
+  "text": "实现功能并完成评审、测试和发布准备",
+  "project_path_abs": "D:/absolute/path/to/target-repository"
+}
+```
+
+创建并推进 workflow：
 
 ```powershell
-npm run supervisor:start
+node scripts/workflow.mjs bootstrap --project-root . --workflow-id WF-example --request-file request.json
+node scripts/workflow.mjs run --project-root . --workflow-id WF-example
+node scripts/workflow.mjs snapshot --project-root . --workflow-id WF-example
+node scripts/workflow.mjs audit --project-root . --workflow-id WF-example
 ```
 
-另开浏览器打开 `monitor/ui/index.html`。默认 Supervisor API 为 `http://127.0.0.1:4319`。
-
-启动前检查：
+每次 `run` 只执行一个有界 StateGraph 动作。遇到 `WAITING_HUMAN` 时，用返回的 `decision_id` 和允许选项审批：
 
 ```powershell
-npm run supervisor:check
+node scripts/workflow.mjs approve --project-root . --workflow-id WF-example `
+  --decision-id DEC-example --choice APPROVE --decided-by human:operator
 ```
 
-### 4. 验证运行环境
-
-```powershell
-openclaw config validate --json
-node scripts/runtime-bundle.mjs verify --project-root . --runtime-root runtime
-node scripts/control-kernel.mjs snapshot --project-root .
-```
-
-### 5. 执行一个 StateGraph 编排轮次
-
-先由 Manager 完成 workflow bootstrap 和当前阶段所需 task package 注册；随后执行：
-
-```powershell
-node scripts/orchestrator.mjs workflow-run `
-  --project-root . `
-  --workflow-id WF-example
-```
-
-每次调用最多提交一个 workflow transition。动态路由依次经过安全守卫、结构化结果分类、阶段策略、合法边校验和命令构建五层。返回 `NEEDS_TASK`、`WAITING_HUMAN`、`HOLD`、`RUNNING` 或 `TERMINAL` 时应停止，并根据 Control DB 中的事实准备任务、处理审批或恢复流程。StateGraph 不启用独立 checkpointer；重新调用时从 SQLite 和已校验 artifact 恢复。
+路线确认后，代码会在每轮推进前重新验证冻结的 `route_hash`。任何路线、candidate、manifest、证据或事件链漂移都会停止流程。
 
 ## Agent 角色
 
-| Agent | 职责 |
+| Agent | 固定职责 |
 | --- | --- |
-| `manager-agent` | 与用户沟通、说明已验证事实、提交工作流意图；不直接派发、不改状态。 |
-| `requirement-agent` | 整理需求、验收标准与追踪关系。 |
-| `architect-agent` | 输出架构、接口、任务拆分、风险与测试策略。 |
-| `developer-agent` | 在 `runtime/worktrees/<workflow>/<task>/<run>/repo` 实现代码。 |
-| `review-agent` | 独立审查代码、测试和安全问题。 |
-| `test-agent` | 补充并执行测试；当前为本地无 sandbox 模式。 |
-| `release-agent` | 汇总发布前验证结论，不执行部署。 |
+| `manager-agent` | 分析请求并提出动态路线；不派发、不审批、不写状态 |
+| `requirement-agent` | 范围、边界与验收条件 |
+| `architect-agent` | 架构、设计、接口、风险与测试策略 |
+| `developer-agent` | 在授权 worktree 实现并提交候选 commit |
+| `review-agent` | 审查 checkpoint 当前 candidate |
+| `test-agent` | 在 Docker sandbox 中执行/补充测试并提交测试 commit |
+| `release-agent` | 校验 candidate、回滚信息和发布准备；不执行部署 |
 
-本地 Orchestrator 不是 LLM Agent。它负责读取 READY task、选择固定 worker、生成 session/receipt、调用 OpenClaw、接收暂存输出、验证结果并更新 Control DB。
-
-## JSON/JSONL 结果与错误日志
-
-Agent 只可写 `.agent-raw` 暂存文件，不能写最终 `output/*.json`。本地入库顺序为：
-
-```text
-.agent-raw 原始文件
-→ 确定性清洗与解析
-→ Ajv Schema 校验
-→ 原子发布 output 文件
-→ 成功 receipt 或失败 receipt/validation-errors.jsonl
-→ Control DB 完成或失败状态
-```
-
-错误证据位于任务的 artifact root：
-
-- `.agent-raw/**`：原始无效输出。
-- `.orchestrator-ingest/<输出相对路径>.failure.json`：该输出的失败收据、错误码和结构化诊断。
-- `.orchestrator-ingest/validation-errors.jsonl`：追加式错误日志，记录 Agent、workflow/task/run、原文 hash、脱敏摘要、Ajv/解析错误和时间。
-
-多条候选 JSON、截断、非 JSON、路径逃逸、软链接和 Schema 不匹配都会被拒绝；系统不会猜测、修复业务字段或把聊天内容当作结果。
-
-## 安装或更新 Agent
-
-源码规则变更后，需要重新同步 runtime Agent。该脚本只处理 workspace 与 agentDir 和本项目 manifest 精确匹配的 7 个项目 Agent；不会处理 `main`、其他项目 Agent 或未注册的 `dialogue-agent`。
-
-Windows（PowerShell，删除并重装已有项目 Agent）：
+## Node Monitor
 
 ```powershell
-# 先停止 Gateway，并查看计划
-openclaw gateway stop
-pwsh -NoProfile -File scripts/reinstall-agents.ps1 -RuntimeRoot runtime
-
-# 备份 → 删除已验证 Agent/runtime → 重装 → 校验
-pwsh -NoProfile -File scripts/reinstall-agents.ps1 `
-  -GatewayStopped -Apply -Yes -RuntimeRoot runtime
-
-# 启动并确认 Gateway
-openclaw gateway start
-openclaw gateway status
+npm run monitor:start
+# 或
+pwsh -NoProfile -File scripts/start-monitor.ps1 -Port 4319
 ```
-
-Linux（Bash，首次安装或幂等同步；该脚本不会删除已有 Agent）：
 
 ```bash
-# Linux：先在项目根目录安装 npm 依赖，再查看安装计划
-npm install
-bash scripts/install.sh --runtime-root runtime
-
-# Linux：写入 OpenClaw 配置并安装/同步项目 Agent
-bash scripts/install.sh --apply --yes --runtime-root runtime
-
-# Linux：验证安装、初始化控制面并启动 Gateway
-bash scripts/validate-install.sh
-node scripts/orchestrator.mjs init --project-root .
-openclaw gateway start
-openclaw gateway status
+bash scripts/start-monitor.sh
 ```
 
-备份位于 `runtime/control/reinstall-backups/<timestamp>/`。普通 `install.ps1` 不会删除已有 Agent；重装脚本要求显式 `-GatewayStopped`，且路径不匹配即拒绝删除。
+打开 `monitor/ui/index.html`。后端默认监听 `127.0.0.1:4319`，提供 GET-only API、SSE、checkpoint audit、自动续跑、会话目录、artifact 观察与健康分类。部署说明见 [docs/monitoring.md](docs/monitoring.md)。项目不包含 Java、Servlet 或 Tomcat monitor 代理。
 
-## 将 Monitor 部署为 Linux 服务
+## 运行目录
 
-`npm run supervisor:start` 在 Windows 和 Linux 中相同；Linux 服务器需要常驻部署时，可使用 systemd：
-
-```bash
-# Linux：将 <project-root>、<linux-user>、<linux-group> 替换为实际值
-sudo tee /etc/systemd/system/openclaw-monitor.service >/dev/null <<'EOF'
-[Unit]
-Description=OpenClaw SDLC Monitor
-After=network.target
-
-[Service]
-Type=simple
-User=<linux-user>
-Group=<linux-group>
-WorkingDirectory=<project-root>
-Environment=OPENCLAW_PROJECT_ROOT=<project-root>
-Environment=OPENCLAW_RUNTIME_ROOT=<project-root>/runtime
-Environment=MONITOR_PORT=4319
-ExecStart=/usr/bin/env bash <project-root>/scripts/start-monitor.sh
-Restart=on-failure
-RestartSec=3
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-sudo systemctl daemon-reload
-sudo systemctl enable --now openclaw-monitor
-sudo systemctl status openclaw-monitor --no-pager
-curl -fsS http://127.0.0.1:4319/api/health
+```text
+runtime/
+  stategraph/checkpoints.db
+  stategraph/test-sandbox-global.lock
+  artifacts/<workflow>/<task>/runs/<run>/
+    .agent-raw/
+    .stategraph-ingest/
+    logs/
+    output/
+  worktrees/<workflow>/<task>/<run>/repo/
 ```
 
-### 将实时 Monitor 发布到 Tomcat HTTPS
-
-适用于 Tomcat 10 直接承载 HTTPS 的 Linux 服务器。该方案把静态看板部署到 `/monitor/`，并在同一 Tomcat context 内部代理 `/monitor/api/*` 到本机 Monitor；端口 `4319` 继续只监听 `127.0.0.1`，不应配置防火墙公网放行。
-
-```bash
-# 1. 从模板生成与当前 Linux 用户、项目路径和 Node 路径匹配的 systemd 单元
-project_root="$(pwd -P)"
-run_user="$(id -un)"
-run_group="$(id -gn)"
-node_bin="$(dirname "$(command -v node)")"
-unit_file="$(mktemp)"
-sed -e "s|__RUN_USER__|$run_user|g" \
-    -e "s|__RUN_GROUP__|$run_group|g" \
-    -e "s|__PROJECT_ROOT__|$project_root|g" \
-    -e "s|__NODE_BIN__|$node_bin|g" \
-    deploy/openclaw-monitor.service > "$unit_file"
-sudo install -o root -g root -m 0644 "$unit_file" /etc/systemd/system/openclaw-monitor.service
-sudo systemctl daemon-reload
-sudo systemctl enable --now openclaw-monitor.service
-
-# 2. 编译 Servlet 并部署到 Tomcat 的 /monitor context
-bash scripts/deploy-monitor-tomcat.sh
-
-# 3. 验证本机 API 与 HTTPS 同源代理
-curl -fsS http://127.0.0.1:4319/api/health
-curl -fsS https://<domain>/monitor/api/health
-```
-
-页面地址为 `https://<domain>/monitor/`。上述 HTTPS 验证要求域名证书已被客户端信任；仅在排查证书问题时才临时使用 `curl -k`。Tomcat 自动发现 exploded webapp 可能需要数秒；若首次请求返回 404，等待部署日志完成后重试。页面会显示工作流、任务和 Agent 状态，应在 Tomcat 前增加访问认证或 IP 白名单。
-
-回滚时，停止 `openclaw-monitor.service`，恢复或移除 `/var/lib/tomcat10/webapps/monitor/`；该目录与 Tomcat `ROOT` 应用独立。
+原始 stdout、stderr、进程结果、Agent 原文和清洗变换会保留；最终发布文件由本地代码原子写入。
 
 ## 测试
 
@@ -238,4 +150,12 @@ curl -fsS https://<domain>/monitor/api/health
 npm test
 ```
 
-问题、已完成整改和仍需部署侧处理的风险见 [docs/problem](docs/problem/)。
+也可分组执行：
+
+```powershell
+node --test tests/stategraph-*.test.mjs
+node --test --test-concurrency=1 tests/monitor-*.test.mjs
+node --test tests/runtime-bundle.test.mjs tests/validate-install.test.mjs
+```
+
+当前自动化测试覆盖 checkpoint 恢复、路线冻结、候选 commit、证据 SHA、JSON 恢复、sandbox lease 和 monitor。Docker daemon 未运行时，mock command-boundary 测试仍可执行，但不能视为真实容器 E2E。

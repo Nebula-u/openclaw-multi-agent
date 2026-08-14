@@ -1,5 +1,26 @@
 # Changelog
 
+## 2026-08-14 - StateGraph/checkpointer 单框架重建
+
+### 更新内容
+
+- 以 `ef850ce6e8b71391203460f28670b1d85eb72c72` 为干净基点重建唯一 StateGraph/checkpointer workflow，规避后续已知混淆 JavaScript。
+- 删除旧控制框架、旧 workflow runner、监督/wake 代码和 Java monitor 代理；monitor 后端统一为 Node.js。
+- 固定 task kind 到 Agent 映射，冻结动态路线与审批计划，worker 不再持有状态、审批或派发能力。
+- 加入独立 Git worktree、context manifest、字节级 SHA、证据接收 Gate、candidate history 和双层重试。
+- TEST 强制 Docker sandbox，并补全动态 binds 的并发 lease、陈旧恢复和异常回滚。
+- Manager 上下文统一为 200k，输出保持 32k，软预算 120k，紧凑 prompt 保持 12k 字符。
+- 安装器同步真实 OpenClaw provider/model 目录，并设置 Windows 受保护 DACL 或 Unix 0700。
+- 测试入口更新为 StateGraph 26 项、Node monitor 13 项及安装验证 6 项。
+
+### 修改原因
+
+旧结构存在多套状态与派发权威，且 Java monitor 与项目 Node/Python 技术栈不一致。重建把状态、路线、审批、候选提交和恢复统一到最新 checkpoint，同时让实际模型目录、证据摘要和 sandbox 配置都在代码边界内 fail closed。
+
+### 已知限制
+
+- 当前机器的 Docker Desktop Linux daemon 未启动；真实容器 E2E 尚未执行，现有 sandbox 测试为 command-boundary 自动化验证。
+
 ## [Unreleased] - 2026-08-07
 
 ### 轻量 LangGraph StateGraph 编排层（2026-08-10）

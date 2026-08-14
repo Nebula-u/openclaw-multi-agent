@@ -1,92 +1,114 @@
-# 总体架构：Control Kernel v2
+# StateGraph + Checkpointer 架构
 
-> 文档日期：2026-08-10
+> 更新日期：2026-08-14
 
-## 核心结论
+## 设计结论
 
-项目以 SQLite Control Kernel v2 作为 workflow、task、run、dispatch、审批和监督事实的唯一当前状态源。OpenClaw Agent 负责执行已分配任务；本地 Orchestrator 负责确定性派发和结果接收；Monitor 只读观察，不直接修改控制状态。
-
-```text
-OpenClaw Agent 层
-  manager-agent ──> StateGraph Runner ──> Orchestrator ──> sessions_spawn ──> 工作 Agent
-                         │                    │
-                         └──────────┬─────────┘
-                                    ▼
-                  Control Kernel v2
-                    runtime/control/control.db
-                         │
-              ┌──────────┴──────────┐
-              ▼                     ▼
-       只读 v2 投影              Monitor / Dashboard
-    runtime/control/v2/**       只读查询与监督请求
-```
-
-StateGraph Runner 是轻量执行层，不是新的状态数据库。每轮先审计并读取 Control DB，只执行一个有界动作；所有 workflow mutation 仍提交给 Control Kernel reducer，task 派发仍由本地 Orchestrator 完成。`WAITING_HUMAN`、`HOLD` 和进程重启后均结束当前 Graph 调用，下次运行从 SQLite 重建，不依赖 LangGraph checkpoint。
-
-## 权威边界
-
-- `runtime/control/control.db` 是 workflow/task/run/dispatch/approval 的唯一当前事实源。
-- `config/control-state-machine-v2.json` 是新 workflow 的状态机；reducer 根据命令计算下一状态。
-- `runtime/control/v2/**` 是数据库派生的只读投影，删除或漂移后可由 `recover` 重建，不能反向写回数据库。
-- `active_workflows` 是 SQLite view，不再维护一份可写的活动数组。
-- Agent 聊天消息、Markdown 总结和投影文件都不能单独推动状态；只有通过契约、身份、路径和哈希校验的控制命令或结果才能推进流程。
-
-## 状态与人工审批
-
-v2 将阶段和条件分开：
-
-- `phase`：13 个 SDLC 阶段。
-- `condition`：`ACTIVE`、`WAITING_HUMAN`、`HOLD`、`TERMINAL`。
-- `outcome`：终态结果，如 `READY_FOR_OPERATIONS_HANDOFF`、`RELEASE_NO_GO`、`FAILED`、`CANCELLED`、`QUARANTINED`。
-- `resume_phase` / `resume_condition`：保存暂停前位置。
-
-人工审批通过 `WAIT_HUMAN` 创建绑定 workflow/task/run 的 `approval_requests` 记录，并将 workflow 置为 `condition=WAITING_HUMAN`。请求的 `status=PENDING` 是审批记录状态，不是第二套 workflow 状态。只有经过 Schema 和作用域校验的真实 `approval_response` 才能通过 `RESOLVE_HUMAN` 恢复；存在 PENDING request 时，直接 `RESUME` 会被拒绝。
-
-Demo 快速流程是受控例外：只有已解决且选择 `DEMO_FAST` 的实现取舍审批，才允许 `INTAKE → DEVELOPMENT`；否则使用标准 `REQUIREMENTS` 路径。
-
-## 任务、派发和结果
-
-1. `task-register` 注册任务，固定 workflow 的 contract set 和任务输出契约版本。
-2. `task-validate` 校验上下文身份、输入哈希、依赖、Agent 策略、路径和结构化输出声明，再把任务置为 `READY`。
-3. `dispatch-prepare` 在事务中记录 intent、task 状态和 outbox；Orchestrator 随后调用真实 session 工具。
-4. `dispatch-receipt` 记录真实 session 的 `SENT → ACKNOWLEDGED → RUNNING` 回执。
-5. `result-ingest` 重新读取并校验 completion、result 及全部声明的 JSON/JSONL 产物，成功后才提交任务终态。
-
-外部 session 创建无法与 SQLite 形成一个跨系统事务，因此 PENDING intent 必须通过真实 session 查询对账，不能靠猜测自动重试。
-
-## 结构化产物校验
-
-`scripts/runtime-guard.mjs` 保留稳定的 `validate-file` 和 `self-check` CLI，职责仅限当前 contracts/templates 的 Ajv 校验、JSONL 大小限制、重复证据 ID 检查和失败摘要脱敏。它不是状态机、数据库、dispatcher 或迁移器。
-
-Control Kernel 的 `result-ingest` 还会按 task 固定的 `structured_outputs` 重新校验产物；Runtime Guard 的 Agent 自检不能替代这次入库前复核。
-
-## 运行目录
+项目只保留 LangGraph `StateGraph + checkpointer` 作为 workflow 框架。重建基点为 `ef850ce6e8b71391203460f28670b1d85eb72c72`：该提交位于已知混淆 JavaScript 引入之前。后续实现只按文件静态审阅和重写，没有恢复受污染分支中的旧控制框架。
 
 ```text
-runtime/
-├── control/
-│   ├── control.db                         # v2 唯一当前状态源
-│   ├── v2/                                # 可删除重建的只读投影
-│   │   ├── active-workflows.json
-│   │   └── workflows/<workflow-id>/{workflow.json,events.jsonl,projection.json}
-│   ├── config-snapshots/                  # 安装配置备份
-│   └── reinstall-backups/                # Agent 重装备份
-├── artifacts/<workflow>/<task>/<run>/
-└── worktrees/<workflow>/<task>/<run>/repo/
+Manager route proposal
+        |
+        v
+route schema/rule validation
+        |
+        v
+ROUTE_PLAN_CONFIRMATION ----------> human capability
+        |
+        v
+frozen route_hash / steps / approvals
+        |
+        v
+prepare -> dispatch -> reconcile -> local Gate
+                       |               |
+                       |               +-> post-step human approval
+                       +-> JSON repair / task retry / error escalation
+        |
+        v
+latest LangGraph checkpoint
 ```
 
-历史 v1 归档和备份仍保留在运行目录中，但不被新代码读取，也不属于新 workflow 的输入；本次清理不删除这些历史数据。
+## 唯一事实源
 
-## Agent 职责
+SQLite checkpointer 保存 LangGraph checkpoint、pending writes 和 metadata。checkpoint 内状态包括：
 
-| Agent | 职责 |
-|---|---|
-| `manager-agent` | 与用户沟通、提交受控意图、处理审批和阶段编排；不直接写数据库或投影 |
-| `requirement-agent` | 需求、范围、验收标准与追踪关系 |
-| `architect-agent` | 架构、接口、风险、威胁模型和测试策略 |
-| `developer-agent` | 在指定 worktree 中实现代码并提交真实 commit |
-| `review-agent` | 对指定候选 commit 独立审查 |
-| `test-agent` | 编写并真实执行测试，提交测试证据 |
-| `release-agent` | 进行发布前验证并给出 GO/NO_GO/HOLD，不执行部署 |
+- workflow phase、condition、outcome 和 revision；
+- 冻结路线、审批计划和当前 step；
+- task/run/session/attempt、manifest 和 Gate；
+- base commit、candidate commit 和 candidate history；
+- pending human approval；
+- SHA-256 事件链和紧凑错误报告。
 
-只有 Orchestrator 可以创建工作 Agent session；工作 Agent 不得派生 Agent、修改控制状态或伪造回执。
+Agent 输出、launcher 状态、monitor telemetry、Git 分支名和 Markdown 报告都不是状态权威。所有状态变化必须经过 graph node，并由 runtime/human capability 调用。
+
+## 路线与派发
+
+Manager 只生成 `route-plan.json`，不得填写 Agent ID。`config/stategraph-policy.json` 固定 task kind 到 Agent 的映射，并校验：
+
+- 生命周期顺序和每个省略阶段的理由；
+- TEST_ONLY、FEATURE 等 request class 门槛；
+- 架构、安全、迁移、多组件等风险门槛；
+- DEVELOPMENT 后必须有 TEST；
+- 高风险路线必须包含阶段后人工审批。
+
+每轮始终先生成路线确认节点。批准后，`route_hash`、steps 和 approval plan 冻结；dispatch 是唯一 Agent 调用入口。
+
+## Git 候选边界
+
+每次 Agent attempt 使用独立 detached worktree：
+
+```text
+runtime/worktrees/<workflow>/<task>/<run>/repo
+```
+
+DEVELOPMENT/TEST 的 `output_commit` 必须是完整 commit SHA、基于 `input_commit`、并等于 worktree HEAD。通过 Gate 后才推进 candidate；若该 step 需要人工审批，则批准后才推进。REVIEW 和 RELEASE 只能读取 checkpoint 当前 candidate，不能替换它。
+
+## 上下文与结果边界
+
+每个 run 由代码生成 `context-manifest.json`，记录身份、input commit、授权路径、规则副本和 SHA-256。dispatch 前与 reconcile 前都会验证普通文件、非 symlink、路径归属和字节级 SHA。
+
+Agent 只写：
+
+- 本 run 的 `.agent-raw`；
+- 授权 worktree；
+- runner 指定的 raw logs。
+
+本地 ingestion 负责确定性 JSON 清洗、Ajv 校验、身份比对、report/CommandRecord/evidence 路径与 SHA 校验，以及原子发布。标准文件摘要直接对原始字节计算。
+
+## 重试与恢复
+
+- JSON 重新生成：同 session 最多 2 次，不创建新 task attempt。
+- Agent attempt：初次加 2 次自动重试，共 3 次，每次新 run/session/worktree。
+- 三次失败：生成 `ERROR_ESCALATION`，只能由人工选择同一 Agent 新批次重试或终止。
+- workflow 重启：从最新 checkpoint 恢复，不依赖聊天历史或进程内存。
+
+## TEST Docker sandbox
+
+TEST 固定使用 Docker：network none、只读 rootfs、drop ALL、PID 256、2GiB、2 CPU、非 root。每次 session 动态挂载 `/worktree`、`/input`、`/agent-raw`、`/raw-logs`。
+
+动态 bind 配置由全局 lease 串行化。lease 在写配置前持久化；attestation 失败、runner 异常或陈旧 lease 接管时，代码先验证当前 binds，再恢复原配置、重建 session 并释放锁。配置出现第三种未知值时失败关闭。
+
+## Monitor
+
+`monitor/main.mjs` 启动 Node.js 后端。它只调用 runtime 的 `list()` / `audit()` 读取 checkpoints，并把会话、artifact 和健康信息放入独立 telemetry 数据库。monitor 无审批、重试或状态写入 API。
+
+## 项目内实现
+
+未引入第二个编排框架。项目内自研部分包括 SQLite checkpointer、事件哈希链、双 capability、workflow lock、固定 dispatch、路线编译器、worktree 管理、context manifest、证据接收边界、sandbox attestation/lease、紧凑 Manager context 和 checkpoint monitor read model。
+
+## 复用与重做边界
+
+| 范围 | 处理 | 原因 |
+| --- | --- | --- |
+| 七个 Agent 角色与 workspace 目录 | 复用角色，重写永久规则 | 分工仍有效，但旧规则包含多控制面、Manager 派发和无沙箱假设 |
+| JSON 清洗、Ajv 校验与原子文件发布 | 复用经过测试的无状态工具 | 这些工具不拥有 workflow 状态，可继续作为本地 ingestion 基础 |
+| monitor 的 telemetry、脱敏、SSE 和会话解析 | 复用只读能力 | 展示能力与状态权威正交，改为读取 checkpoint 即可保留 |
+| workflow 状态、路由、审批与恢复 | 以 StateGraph/checkpointer 重做 | 必须消除多套状态库、命令面和恢复来源 |
+| Agent 派发与结果接收 | 以固定 dispatch/reconcile 重做 | 防止 Manager、worker 或 launcher 绕过代码映射和 Gate |
+| TEST 执行边界 | 以 Docker policy、attestation 和 lease 重做 | 旧本机执行无法证明隔离、mount 和异常恢复 |
+| monitor 服务入口 | 以 Node.js `monitor/main.mjs` 重做 | 与项目技术栈一致，并删除 Java/Tomcat 代理和第二部署链 |
+| 安装、模型限制和 artifact 权限 | 重写并跨平台验证 | 策略声明必须同步到实际 provider/model 与主机 ACL 才能成立 |
+
+## 成本边界
+
+Manager context 为 `200000`，max output 为 `32000`，软输入预算为 `120000`，实际单次紧凑 prompt 硬上限为 `12000` 字符。默认只携带最近 8 个事件和 4 个错误摘要；超限后进一步压缩。Manager 不轮询 worker。

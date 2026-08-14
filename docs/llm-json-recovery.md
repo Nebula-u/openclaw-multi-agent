@@ -1,45 +1,66 @@
-# LLM JSON 回复清洗与重写
+# Agent JSON 恢复与接收边界
 
-本文件定义所有 Agent 生成或接收 JSON/JSONL 契约时的失败处理。权威数据仍是通过 Runtime Guard + Ajv 的 artifact；会话文本只用于通知或重写。
+## 两类重试不可混淆
 
-## 处理顺序
+### JSON 重新生成
 
-1. 保存原始回复和 SHA-256。
-2. 仅做确定性清洗：BOM、唯一 JSON/JSONL Markdown fence、唯一解释性前后缀中的完整值。
-3. 保存清洗后 SHA-256 和转换记录；多个候选或无法完整解析时拒绝猜测。
-4. 用对应 Schema 运行 Ajv。`enum`、`type` 单独分类；`required`、`additionalProperties`、`const`、`pattern` 等归为 schema drift。
-5. 首次调用之外最多重写两次；空 content、截断、解析错误和 Schema 失败共用预算。失败链路完整保留。
+当 Agent 进程成功，但 `.agent-raw` 中的 JSON 无法解析、Schema 不合法或违反本地接收边界时，dispatcher 在同一个 run/session 中要求重写结构化文件。最多 2 次；不得重新执行任务、修改代码、切换 Agent 或改变 context manifest。
 
-不得自动“修复”业务值，也不得把 enum/type 违规改成猜测值。对模型的重写必须不改变已知事实、证据、命令结果或审批决定。
+### Agent attempt 重试
 
-## 固定模板摘录
+进程失败、Gate 失败或 JSON 恢复预算耗尽时，StateGraph 创建新 run/session/worktree。初次加 2 次自动重试，共 3 次；之后进入人工升级。
 
-enum/type：
+## 原始输出
+
+Agent 只写：
 
 ```text
-JSON_REWRITE_REQUEST kind=ENUM_VIOLATION retry=1/2.
-只返回一个完整的 JSON 对象（JSONL 时每行一个完整 JSON 对象）；不得输出 Markdown、代码围栏、解释或前后缀。
-校验诊断：[{"path":"/result_status","schema_keyword":"enum","message":"must be equal to one of the allowed values","params":{"allowedValues":["COMPLETED","BLOCKED"]}}]
-指定字段的类型或 enum 值不合法。仅修正诊断指向的字段，使其使用 Schema 中允许的类型和枚举值；其它事实保持不变。
+<artifact_root>/.agent-raw/route-plan.json.raw
+<artifact_root>/.agent-raw/result.json.raw
 ```
 
-截断：
+本地代码在清洗前把原文、原文字节 SHA、cycle 和 transformations 追加到 `logs/agent-output.jsonl`。stdout、stderr、launcher 和 process result 写入 `logs/agent-process.jsonl`。失败原文不覆盖。
+
+## 确定性清洗
+
+允许的变换仅包括 BOM、唯一 Markdown code fence 和唯一解释性前后缀。系统不会：
+
+- 猜测多个候选 JSON；
+- 补业务字段或修改 enum；
+- 把聊天回复当作文件结果；
+- 从截断 JSON 推断缺失内容；
+- 接受路径逃逸、目录、symlink 或 junction 代替文件。
+
+## Schema 与身份
+
+清洗后使用 Ajv 校验 `route-plan.schema.json` 或 `result.schema.json`。result 还必须精确匹配 checkpoint 中的 workflow、task、run、Agent、attempt、worktree、artifact root、input commit 和 context manifest SHA。
+
+TEST 必须声明 `SANDBOXED_DOCKER`，并逐字匹配 runner 通过 OpenClaw effective config、sandbox list/explain 和 `docker inspect` 交叉验证得到的 attestation。
+
+## 引用文件
+
+`report_files`、`command_record_refs` 和 `evidence_refs` 必须位于授权 worktree 或本 run artifact，且是普通非 symlink 文件。
+
+CommandRecord 逐行校验：
+
+- task/run/Agent/attempt 身份；
+- TEST 的 isolation mode；
+- stdout/stderr 文件存在；
+- 声明 SHA 与原始文件字节 SHA 一致。
+
+Evidence 逐行校验 Schema；存在 `locator_abs + sha256` 时重新计算字节 SHA。接收 receipt 记录所有引用文件的最终 SHA。
+
+## 原子发布
+
+只有全部校验通过后，清洗后的文件才会原子写入：
 
 ```text
-JSON_REWRITE_REQUEST kind=OUTPUT_TRUNCATED retry=2/2.
-上一轮 JSON 在结束前截断。请从头输出一个更精简但完整、闭合的 JSON；不要续写片段，确保不超过输出预算。
+<artifact_root>/output/route-plan.json
+<artifact_root>/output/result.json
 ```
 
-实际模板实现位于 `scripts/agent-json-harness/json-repair-prompts.mjs`；该模块同时覆盖空 content、JSON parse error 与 schema drift。
+同时写入 `.stategraph-ingest/*.receipt.json`。Agent 无权直接写最终 output，也不能通过自检替代本地 ingestion 或 Gate。
 
-## DeepSeek JSON Output
+## 错误传播
 
-DeepSeek 官方文档：<https://api-docs.deepseek.com/zh-cn/guides/json_mode>。当调用路径支持请求级参数时，对单 JSON 对象使用：
-
-```json
-{"response_format":{"type":"json_object"}}
-```
-
-同一 prompt 必须含 `json` 并包含输出形态示例；合理设置 `max_tokens` 防截断。JSON Output 不是 JSON Schema structured output，不能替代 Ajv。DeepSeek 也明确提示其有概率返回空 `content`，所以空输出仍计入上述两次重试预算。
-
-截至本仓库已核对的 OpenClaw Gateway 版本，`chat.send` 没有请求级 `responseFormat` 字段，不能把 JSON mode 假装成已启用。待 Gateway 支持透传后，限于最终单 JSON 契约调用开启；工具调用、普通分析、Markdown 摘要与 JSONL 不使用它。
+JSON 错误先进入 same-session repair；修复失败后作为 task attempt 错误写入 checkpoint 的紧凑 `managerReports` 和事件链。Manager prompt 只接收摘要与 locator，完整原文保留在 artifact，避免重复消耗上下文。

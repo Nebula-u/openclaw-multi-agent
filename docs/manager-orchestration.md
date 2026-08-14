@@ -1,113 +1,87 @@
-# Manager 编排协议（v2）
+# Manager 与 StateGraph 编排协议
 
-> 权威状态与命令说明见 [control-kernel-v2.md](control-kernel-v2.md)。
-> 本文只描述新 workflow；旧文件型 workflow 文档已归档。
+## Manager 的权限
 
-## 1. 总原则
+`manager-agent` 负责理解用户请求、解释已验证事实并提出本轮动态路线。它不是 dispatcher、审批者或状态写入器。
 
-`manager-agent` 是流程总控和用户交互者，但不是状态数据库写入器，也不是 Agent dispatcher。它只能提交 Control Kernel 命令、准备 task/intent/receipt/completion 事实，并根据返回结果决定下一步。
+Manager 可以：
 
-- 不读取聊天文本作为状态事实。
-- 不直接写 `control.db`、v2 投影或任务终态。
-- 不调用原生跨 Agent session 工具；由本地 Orchestrator 统一派发。
-- 不在人工审批时自行代替用户选择；用户沉默不等于批准。
-- 任一校验失败都停止推进，等待修复、审批或明确失败处理。
+- 读取代码提供的紧凑 checkpoint context；
+- 输出符合 `route-plan.schema.json` 的路线提案；
+- 说明风险、跳过理由和建议的阶段后审批点；
+- 在新一轮路线修订时吸收人工意见。
 
-## 2. Intake 与快速 Demo
+Manager 不可以：
 
-收到用户请求后，Manager 先通过 Control Kernel 建立 workflow，并确认目标项目路径、Git 状态、策略、Agent bundle 和 contract set。
+- 指定或调用 worker Agent；
+- 修改 task、attempt、candidate、route hash 或 approval 状态；
+- 使用 session 工具派发、催办或轮询；
+- 代表用户批准路线或步骤；
+- 把聊天文本、日志或自己的总结当作 checkpoint 事实。
 
-标准路径：
+## 路线生成
+
+首次 bootstrap 后，StateGraph 创建固定的 `MANAGER_ANALYSIS -> manager-agent` task。Manager 输出只包含 request class、summary、risk flags、steps 和 skipped stages；Agent ID 由代码注入。
+
+路线编译器会校验阶段顺序、跳过理由、request class、架构门槛、DEVELOPMENT/TEST 关系和审批门槛。通过后生成 `ROUTE_PLAN_CONFIRMATION`。人工确认前不派发任何 worker；确认后路线被冻结。
+
+## 单步推进
+
+每次 `node scripts/workflow.mjs run` 最多执行一个有界动作：
 
 ```text
-BOOTSTRAP → INTAKE → REQUIREMENTS → REQUIREMENT_GATE → ARCHITECTURE → …
+decide
+  -> prepare_manager / prepare_step
+  -> dispatch
+  -> reconcile
+  -> compile_plan / evaluate
+  -> apply_human / complete / hold
 ```
 
-Demo 快速路径不是默认路径。Manager 必须先提交 `WAIT_HUMAN`，在审批请求中明确 `IMPLEMENTATION_TRADEOFF` 和 `DEMO_FAST` 选项；只有用户通过真实交互返回、Control Kernel 将审批置为已解决后，才可提交 `INTAKE → DEVELOPMENT` 的 `ADVANCE_PHASE`。
+调用返回 `RUNNING`、`WAITING_HUMAN`、`HOLD` 或 `TERMINAL` 时，调用方停止本轮。monitor continuation 可以继续推进无人工阻塞的 workflow，但使用的仍是同一个 runtime capability 和 workflow lock。
 
-审批请求必须包含：
+## 固定派发
 
-- `workflow_id`，必要时包含 `task_id` / `run_id`；
-- 清晰的影响范围、风险、候选选项和推荐选项；
-- `decision_id`、审批触发器和可验证的响应范围。
+`config/stategraph-policy.json` 是 task kind 到 Agent ID 的代码策略。dispatch 会：
 
-请求写入数据库后，Manager 必须向用户展示实际待审批内容并等待明确回复。不能只在 Agent 内部生成“请审批”的文本，也不能用 Manager 自己生成的 APPROVED 文件恢复流程。
+1. 从 checkpoint 读取 task 与 candidate。
+2. 创建本 attempt 的 detached worktree。
+3. 生成并验证 context manifest。
+4. 为 TEST 准备并验证 Docker sandbox。
+5. 使用代码生成的 Agent ID、session 和 message 调用 OpenClaw。
+6. 保存 stdout、stderr、process result 和原始 JSON。
 
-## 3. 任务注册与派发
+worker 无法通过输出修改下一 Agent 或路线。
 
-每个任务都遵循以下顺序：
+## 结果与 candidate
 
-1. `task-register`：固定 workflow、任务类型、Agent、attempt、artifact root 和输出契约。
-2. `task-validate`：验证上下文包、规则快照、依赖、绝对路径、worktree 和 `structured_outputs`。
-3. `dispatch-prepare`：事务化记录派发 intent，并将 task 置为 `DISPATCHED`，写入 outbox。
-4. 本地 Orchestrator 从 READY task 固定派生 `agentId`、session key 和 intent，不接受 Agent 自选目标。
-5. 真实 session 返回后，依次记录 `dispatch-receipt`：`SENT`、`ACKNOWLEDGED`、`RUNNING`。
-6. Agent 只能写入 `artifact_root/.agent-raw/**`；Orchestrator 负责摄取、清洗、Schema 校验和原子发布。
+reconcile 先重新验证 context manifest，再接收 `.agent-raw`。只有本地 ingestion 和 Gate 全部通过，task 才能成为 `ACCEPTED`。
 
-PENDING dispatch intent 代表需要查询真实 session 后对账，不代表可以无条件重派。
+- REQUIREMENTS/ARCHITECTURE/DESIGN/REVIEW/RELEASE 不得推进 candidate。
+- DEVELOPMENT/TEST 必须返回真实 `output_commit`，并通过 ancestry 与 HEAD 校验。
+- TEST 无代码变化时返回 `input_commit`；有测试代码变化时可提交新 commit。
+- REVIEW/TEST/RELEASE 的输入始终来自 checkpoint 当前 candidate。
 
-## 4. 结果接收与阶段推进
+## 错误处理
 
-Manager 收到完成通知后，必须从 artifact 重新读取结果，而不是信任消息内容：
+- 非法 JSON：同一 session 最多重新生成 2 次。
+- Agent 执行或 Gate 失败：新 attempt，最多 3 次。
+- 重试不复用 worktree、run 或 session；失败 artifact 保留。
+- 三次失败后生成绑定 task/route/candidate 的人工升级节点。
+- 路线、事件链、candidate 或审批绑定不一致时进入 `HOLD`。
 
-- completion 必须绑定同一 workflow/task/run/agent/attempt/session；
-- `result.json`、evidence、command records 及任务声明的所有结构化产物必须通过 Schema、路径和哈希校验；
-- Git commit、diff 范围、worktree 状态和命令证据必须与 task 一致；
-- 仅在 `result-ingest` 成功后，才根据 Gate 和 Control Kernel 结果推进下一阶段。
+## Manager context 成本
 
-Control Kernel 负责计算 `phase + condition + outcome`，Manager 不自行计算 revision、事件链或恢复目标。
+Manager context window 为 200k，max output 为 32k，软输入预算为 120k。实际 prompt 最多 12k 字符，默认只包含最近 8 个事件和 4 个错误摘要；原始日志不进入 prompt。Manager 不轮询运行中的 Agent。
 
-## 5. 审批、HOLD 与恢复
+## 恢复检查
 
-需要用户决定时：
-
-1. 提交 `WAIT_HUMAN` 和完整 `approval_request`。
-2. 确认 workflow 为 `condition=WAITING_HUMAN`，task（如有）为 `WAITING_HUMAN`。
-3. 通过应用层真实交互向用户展示请求，等待用户返回具体选择。
-4. 将用户响应转换为绑定的 `approval_response`，提交 `RESOLVE_HUMAN`。
-5. 只有数据库返回已解决且状态恢复为 `ACTIVE` / `READY` 后，才继续派发或推进。
-
-一致性、权限、工具或证据问题使用 `HOLD`，不能伪装成审批已通过。存在 PENDING approval request 时，直接 `RESUME` 会被 Control Kernel 拒绝。
-
-## 6. 会话恢复与完成自检
-
-新 Manager 会话先查询：
+新会话或进程重启后只需要：
 
 ```powershell
-node scripts/control-kernel.mjs snapshot --project-root .
-node scripts/control-kernel.mjs audit --project-root .
-node scripts/control-kernel.mjs approval-list --project-root . --status PENDING
-node scripts/control-kernel.mjs dispatch-outbox --project-root .
+node scripts/workflow.mjs snapshot --project-root . --workflow-id WF-example
+node scripts/workflow.mjs audit --project-root . --workflow-id WF-example
+node scripts/workflow.mjs manager-context --project-root . --workflow-id WF-example
 ```
 
-按 audit 结果处理：
-
-- 数据库一致、投影损坏：执行 `recover` 重建只读投影；
-- PENDING dispatch：查询真实 session 后由 Orchestrator 对账；
-- PENDING approval：向用户展示并等待真实响应；
-- 数据库审计失败：保持 HOLD，不从投影、聊天或历史文件猜测恢复。
-
-宣布完成前必须确认：结果、Gate、release decision、审批、Git 候选、task/dispatch/outbox 和 Control Kernel audit 均一致；最终状态只能由 `COMPLETE`、`FAIL`、`CANCEL` 等受控命令产生。
-
-## 7. StateGraph 执行层
-
-Manager 可以通过以下命令请求本地 StateGraph 执行一个有界编排轮次：
-
-```powershell
-node scripts/orchestrator.mjs workflow-run --project-root . --workflow-id <workflow-id>
-```
-
-StateGraph 根据 Control DB 的 `phase + condition` 路由，复用现有 task validation、dispatch、result ingestion 和 transition command。动态路由依次经过安全守卫、结构化结果分类、阶段策略、状态机合法边校验和命令构建五层；五层共享同一轮读取的事实，不产生额外持久状态。它不会创建缺少上下文的 task package：当前阶段没有已注册 task 时返回 `NEEDS_TASK`；审批、HOLD、运行中 task 和终态均立即停止。失败分诊只有在结构化结果给出精确合法阶段，或调用方显式传入 `--target-phase` 时才推进。
-
-五层路由的最后一步只生成 Control Kernel command intent，不直接写状态。`repository.apply()` 仍负责 revision/CAS、reducer 合法性、事务、事件链和幂等。
-
-Graph 不使用独立持久化 checkpointer。命令 CAS、task operation 幂等、dispatch outbox、事件链和 workflow lock 共同承担并发与恢复边界。
-
-## 8. 相关文档
-
-- [architecture.md](architecture.md)
-- [control-kernel-v2.md](control-kernel-v2.md)
-- [agent-contracts.md](agent-contracts.md)
-- [gate-checklists.md](gate-checklists.md)
-- [human-approval.md](human-approval.md)
-- [git-worktree-strategy.md](git-worktree-strategy.md)
+若 audit 失败，不得继续派发或审批；应保留数据库与 artifact，排查事件链或 checkpoint 漂移。

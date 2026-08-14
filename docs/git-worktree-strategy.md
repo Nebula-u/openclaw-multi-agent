@@ -99,4 +99,4 @@ Input-Commit: <hash>
 
 ## 9. 相关文档
 
-`manager-orchestration.md`（合并前校验的完整清单）、`control-kernel-v2.md`（状态、投影与恢复）、`agent-contracts.md`（哪些角色需真实 commit）、`human-approval.md`（审批节点）。
+`manager-orchestration.md`（合并前校验的完整清单）、`architecture.md`（StateGraph 状态、checkpoint 与恢复）、`agent-contracts.md`（哪些角色需真实 commit）、`human-approval.md`（审批节点）。
