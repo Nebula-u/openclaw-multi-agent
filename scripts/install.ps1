@@ -121,6 +121,70 @@ function Set-OpenClawJson {
   $Changes.Add("set $Path")
 }
 
+function Sync-ModelCatalog {
+  param(
+    [Parameter(Mandatory)]$Packages,
+    [Parameter(Mandatory)][AllowEmptyCollection()][System.Collections.Generic.List[string]]$Changes
+  )
+  $seen = @{}
+  $providers = @{}
+  foreach ($p in @($Packages)) {
+    if (-not $p.model -or $p.model -notmatch '^([^/]+)/(.+)$') { continue }
+    $provider = [string]$Matches[1]
+    $modelId = [string]$Matches[2]
+    if (-not $providers.ContainsKey($provider)) {
+      $providers[$provider] = $p
+      $providerConfig = Get-OpenClawJsonListWithRetry -OcArgs @('config','get',"models.providers.$provider",'--json') -Description "Provider $provider 输出"
+      if ($p.transport_api_explicit -and [string]$providerConfig.api -ne [string]$p.api) {
+        Set-OpenClawJson -Path "models.providers.$provider.api" -Value ([string]$p.api) -Changes $Changes
+      }
+      if ($p.transport_base_url_explicit -and [string]$providerConfig.baseUrl -ne [string]$p.base_url) {
+        Set-OpenClawJson -Path "models.providers.$provider.baseUrl" -Value ([string]$p.base_url) -Changes $Changes
+      }
+    } else {
+      $priorProvider = $providers[$provider]
+      if (($p.transport_api_explicit -or $priorProvider.transport_api_explicit) -and [string]$p.api -ne [string]$priorProvider.api) {
+        throw "Provider '$provider' 在项目配置中出现不一致的 API 配置。"
+      }
+      if (($p.transport_base_url_explicit -or $priorProvider.transport_base_url_explicit) -and [string]$p.base_url -ne [string]$priorProvider.base_url) {
+        throw "Provider '$provider' 在项目配置中出现不一致的 base URL 配置。"
+      }
+    }
+
+    $key = "$provider/$modelId"
+    if ($seen.ContainsKey($key)) {
+      $prior = $seen[$key]
+      if ($prior.context_window_tokens -ne $p.context_window_tokens -or $prior.max_output_tokens -ne $p.max_output_tokens -or $prior.max_tokens_field -ne $p.max_tokens_field) {
+        throw "模型 '$key' 被多个 Agent 使用，但 context/max output/token 字段不一致。"
+      }
+      continue
+    }
+    $seen[$key] = $p
+    $models = @(Get-OpenClawJsonListWithRetry -OcArgs @('config','get',"models.providers.$provider.models",'--json') -Description "模型目录 $provider 输出")
+    $modelIndex = -1
+    for ($i = 0; $i -lt $models.Count; $i++) {
+      if ([string]$models[$i].id -eq $modelId) { $modelIndex = $i; break }
+    }
+    if ($modelIndex -lt 0) { throw "OpenClaw 模型目录中不存在 '$key'，无法应用项目声明的模型限制。" }
+    $model = $models[$modelIndex]
+    if ([int64]$model.contextWindow -ne [int64]$p.context_window_tokens) {
+      Set-OpenClawJson -Path "models.providers.$provider.models[$modelIndex].contextWindow" -Value ([int64]$p.context_window_tokens) -Changes $Changes
+    }
+    if ([int64]$model.maxTokens -ne [int64]$p.max_output_tokens) {
+      Set-OpenClawJson -Path "models.providers.$provider.models[$modelIndex].maxTokens" -Value ([int64]$p.max_output_tokens) -Changes $Changes
+    }
+    $compat = [ordered]@{}
+    if ($model.PSObject.Properties.Name -contains 'compat' -and $model.compat) {
+      foreach ($property in $model.compat.PSObject.Properties) { $compat[$property.Name] = $property.Value }
+    }
+    $currentField = if ($compat.Contains('maxTokensField')) { [string]$compat['maxTokensField'] } else { '' }
+    if ($currentField -ne [string]$p.max_tokens_field) {
+      $compat.maxTokensField = [string]$p.max_tokens_field
+      Set-OpenClawJson -Path "models.providers.$provider.models[$modelIndex].compat" -Value $compat -Changes $Changes
+    }
+  }
+}
+
 function Restore-ConfigOnFailure {
   param([string]$BackupPath, [string]$ConfigPath, [string]$Reason)
   Write-Host "`n[恢复] $Reason" -ForegroundColor Red
@@ -206,6 +270,7 @@ $Manifest = [ordered]@{
   project_root_abs = $ProjectRoot
   runtime_root_abs = $RuntimeRootAbs
   package_catalog_root_abs = (Join-Path $ProjectRoot 'agents\packages')
+  artifact_access_control = [ordered]@{ path_abs = (Join-Path $RuntimeRootAbs 'artifacts'); applied = $false; protected = $false; mode = if ($IsWindows) { 'protected-dacl' } else { '0700' } }
   agents = @()
   config_backup = $null
   config_changes = @()
@@ -221,6 +286,14 @@ foreach ($p in $RegisteredPackages) {
     workspace_abs = $p.workspace
     agentDir_abs = $p.agentDir
     model = $p.model
+    provider = $p.provider
+    api = $p.api
+    base_url = $p.base_url
+    context_window_tokens = $p.context_window_tokens
+    max_output_tokens = $p.max_output_tokens
+    max_tokens_field = $p.max_tokens_field
+    transport_api_explicit = $p.transport_api_explicit
+    transport_base_url_explicit = $p.transport_base_url_explicit
     capabilities = @($p.capabilities)
     register = $p.register
     active = $p.active
@@ -252,6 +325,8 @@ if (-not $Yes) {
 }
 
 foreach ($dir in $RuntimeDirs) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }
+$artifactAcl = Set-RawArtifactAccessControl -Path (Join-Path $RuntimeRootAbs 'artifacts')
+$Manifest.artifact_access_control = [ordered]@{ path_abs = $artifactAcl.path_abs; applied = $true; protected = $artifactAcl.protected; platform = $artifactAcl.platform; mode = $artifactAcl.mode }
 $snapshotDir = Join-Path $RuntimeRootAbs 'control\config-snapshots'
 $backupPath = $null
 if (Test-Path $ConfigFilePath) {
@@ -262,6 +337,7 @@ if (Test-Path $ConfigFilePath) {
 
 $changes = [System.Collections.Generic.List[string]]::new()
 try {
+  Sync-ModelCatalog -Packages $RegisteredPackages -Changes $changes
   $commonSource = Join-Path $ProjectRoot 'agents\common'
   $templatesSource = Join-Path $ProjectRoot 'templates'
   $systemSkillsSource = Join-Path $ProjectRoot 'agents\packages\system\skills'

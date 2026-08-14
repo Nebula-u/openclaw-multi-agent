@@ -28,6 +28,79 @@ function Read-JsonFile {
   }
 }
 
+function Read-DotEnv {
+  param([Parameter(Mandatory)][string]$ProjectRoot)
+  $values = @{}
+  $path = Join-Path $ProjectRoot '.env'
+  if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { return $values }
+  foreach ($rawLine in (Get-Content -LiteralPath $path)) {
+    $line = ([string]$rawLine).Trim()
+    if (-not $line -or $line.StartsWith('#')) { continue }
+    if ($line -notmatch '^(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$') { continue }
+    $value = $Matches[2].Trim()
+    if ($value.Length -ge 2 -and (($value.StartsWith('"') -and $value.EndsWith('"')) -or ($value.StartsWith("'") -and $value.EndsWith("'")))) {
+      $value = $value.Substring(1, $value.Length - 2)
+    }
+    $values[$Matches[1]] = $value
+  }
+  return $values
+}
+
+function Get-ProjectEnvironmentValue {
+  param(
+    [Parameter(Mandatory)][hashtable]$DotEnv,
+    [Parameter(Mandatory)][string]$Name,
+    [string]$Default = ''
+  )
+  $processValue = [Environment]::GetEnvironmentVariable($Name)
+  if ($null -ne $processValue -and $processValue -ne '') { return [string]$processValue }
+  if ($DotEnv.ContainsKey($Name) -and $null -ne $DotEnv[$Name] -and [string]$DotEnv[$Name] -ne '') { return [string]$DotEnv[$Name] }
+  return $Default
+}
+
+function Test-ProjectEnvironmentKey {
+  param([Parameter(Mandatory)][hashtable]$DotEnv, [Parameter(Mandatory)][string]$Name)
+  $processValue = [Environment]::GetEnvironmentVariable($Name)
+  return (($null -ne $processValue -and $processValue -ne '') -or ($DotEnv.ContainsKey($Name) -and [string]$DotEnv[$Name] -ne ''))
+}
+
+function Set-RawArtifactAccessControl {
+  param([Parameter(Mandatory)][string]$Path)
+  $pathAbs = Get-NormalizedPath $Path
+  if (-not (Test-Path -LiteralPath $pathAbs -PathType Container)) { throw "artifact 目录不存在：$pathAbs" }
+  if (-not $IsWindows) {
+    & chmod 700 $pathAbs
+    if ($LASTEXITCODE -ne 0) { throw "无法为 artifact 目录设置 0700：$pathAbs" }
+    $mode = [System.IO.File]::GetUnixFileMode($pathAbs)
+    $expected = [System.IO.UnixFileMode]::UserRead -bor [System.IO.UnixFileMode]::UserWrite -bor [System.IO.UnixFileMode]::UserExecute
+    if ($mode -ne $expected) { throw "artifact 目录权限不是 0700：$pathAbs ($mode)" }
+    return [pscustomobject]@{ platform = 'unix'; protected = $true; mode = '0700'; path_abs = $pathAbs }
+  }
+
+  $acl = New-Object System.Security.AccessControl.DirectorySecurity
+  $acl.SetAccessRuleProtection($true, $false)
+  $inheritance = [System.Security.AccessControl.InheritanceFlags]::ContainerInherit -bor [System.Security.AccessControl.InheritanceFlags]::ObjectInherit
+  $propagation = [System.Security.AccessControl.PropagationFlags]::None
+  $allow = [System.Security.AccessControl.AccessControlType]::Allow
+  $currentSid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
+  foreach ($entry in @(
+    @($currentSid, [System.Security.AccessControl.FileSystemRights]::FullControl),
+    @((New-Object System.Security.Principal.SecurityIdentifier([System.Security.Principal.WellKnownSidType]::LocalSystemSid, $null)), [System.Security.AccessControl.FileSystemRights]::FullControl),
+    @((New-Object System.Security.Principal.SecurityIdentifier([System.Security.Principal.WellKnownSidType]::BuiltinAdministratorsSid, $null)), [System.Security.AccessControl.FileSystemRights]::FullControl)
+  )) {
+    $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($entry[0], $entry[1], $inheritance, $propagation, $allow)))
+  }
+  Set-Acl -LiteralPath $pathAbs -AclObject $acl
+  $effective = Get-Acl -LiteralPath $pathAbs
+  if (-not $effective.AreAccessRulesProtected) { throw "artifact 目录 DACL 未受保护：$pathAbs" }
+  $currentRule = @($effective.Access | Where-Object {
+    $_.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value -eq $currentSid.Value -and
+    $_.AccessControlType -eq $allow -and ($_.FileSystemRights -band [System.Security.AccessControl.FileSystemRights]::Modify)
+  })
+  if ($currentRule.Count -eq 0) { throw "artifact 目录缺少当前用户写权限：$pathAbs" }
+  return [pscustomobject]@{ platform = 'windows'; protected = $true; mode = 'protected-dacl'; path_abs = $pathAbs }
+}
+
 function ConvertFrom-OpenClawJsonOutput {
   param(
     [Parameter(Mandatory)][AllowEmptyString()][string]$Output,
@@ -90,6 +163,7 @@ function Get-AgentPackages {
   if ($manifestPaths.Count -eq 0) { throw '未发现任何 Agent package manifest。' }
 
   $modelOverrides = $null
+  $dotEnv = Read-DotEnv -ProjectRoot $projectAbs
   if ($ModelConfig) {
     $modelPath = if ([System.IO.Path]::IsPathRooted($ModelConfig)) {
       Get-NormalizedPath $ModelConfig
@@ -143,13 +217,48 @@ function Get-AgentPackages {
     }
 
     $model = if ($m.PSObject.Properties.Name -contains 'model') { [string]$m.model } else { '' }
+    $agentOverride = $null
     if ($modelOverrides -and $modelOverrides.PSObject.Properties.Name -contains 'agents') {
       $agentProperty = $modelOverrides.agents.PSObject.Properties[$id]
-      if ($agentProperty -and $agentProperty.Value -and $agentProperty.Value.PSObject.Properties.Name -contains 'model') {
-        $override = [string]$agentProperty.Value.model
+      if ($agentProperty -and $agentProperty.Value) {
+        $agentOverride = $agentProperty.Value
+      }
+      if ($agentOverride -and $agentOverride.PSObject.Properties.Name -contains 'model') {
+        $override = [string]$agentOverride.model
         if ($override) { $model = $override }
       }
     }
+
+    $agentPrefix = 'OPENCLAW_AGENT_' + $id.Replace('-', '_').ToUpperInvariant() + '_'
+    $provider = Get-ProjectEnvironmentValue -DotEnv $dotEnv -Name ($agentPrefix + 'PROVIDER') -Default (Get-ProjectEnvironmentValue -DotEnv $dotEnv -Name 'OPENCLAW_LLM_PROVIDER')
+    $modelProvider = ''
+    if ($model -match '^([^/]+)/(.+)$') { $modelProvider = [string]$Matches[1]; $provider = $modelProvider }
+    if ($agentOverride -and $agentOverride.PSObject.Properties.Name -contains 'provider' -and [string]$agentOverride.provider) { $provider = [string]$agentOverride.provider }
+    if ($modelProvider -and $provider -ne $modelProvider) { throw "Agent '$id' 的 provider '$provider' 与模型引用 '$model' 不一致。" }
+    $providerPrefix = if ($provider) { 'OPENCLAW_PROVIDER_' + $provider.Replace('-', '_').ToUpperInvariant() + '_' } else { '' }
+    $api = Get-ProjectEnvironmentValue -DotEnv $dotEnv -Name ($agentPrefix + 'API') -Default (Get-ProjectEnvironmentValue -DotEnv $dotEnv -Name ($providerPrefix + 'API') -Default (Get-ProjectEnvironmentValue -DotEnv $dotEnv -Name 'OPENCLAW_LLM_API' -Default 'openai-completions'))
+    $baseUrl = Get-ProjectEnvironmentValue -DotEnv $dotEnv -Name ($agentPrefix + 'BASE_URL') -Default (Get-ProjectEnvironmentValue -DotEnv $dotEnv -Name ($providerPrefix + 'BASE_URL') -Default (Get-ProjectEnvironmentValue -DotEnv $dotEnv -Name 'OPENCLAW_LLM_BASE_URL' -Default 'https://api.openai.com/v1'))
+    $contextWindowTokens = [int64](Get-ProjectEnvironmentValue -DotEnv $dotEnv -Name ($agentPrefix + 'CONTEXT_WINDOW_TOKENS') -Default (Get-ProjectEnvironmentValue -DotEnv $dotEnv -Name 'OPENCLAW_LLM_CONTEXT_WINDOW_TOKENS' -Default '200000'))
+    $maxOutputTokens = [int64](Get-ProjectEnvironmentValue -DotEnv $dotEnv -Name ($agentPrefix + 'MAX_OUTPUT_TOKENS') -Default (Get-ProjectEnvironmentValue -DotEnv $dotEnv -Name 'OPENCLAW_LLM_MAX_OUTPUT_TOKENS' -Default '32000'))
+    $maxTokensField = Get-ProjectEnvironmentValue -DotEnv $dotEnv -Name ($agentPrefix + 'MAX_TOKENS_FIELD') -Default (Get-ProjectEnvironmentValue -DotEnv $dotEnv -Name 'OPENCLAW_LLM_MAX_TOKENS_FIELD' -Default 'max_output_tokens')
+    foreach ($propertyName in @('api','base_url','context_window_tokens','max_output_tokens','max_tokens_field')) {
+      if ($agentOverride -and $agentOverride.PSObject.Properties.Name -contains $propertyName -and $null -ne $agentOverride.$propertyName -and [string]$agentOverride.$propertyName -ne '') {
+        switch ($propertyName) {
+          'api' { $api = [string]$agentOverride.api }
+          'base_url' { $baseUrl = [string]$agentOverride.base_url }
+          'context_window_tokens' { $contextWindowTokens = [int64]$agentOverride.context_window_tokens }
+          'max_output_tokens' { $maxOutputTokens = [int64]$agentOverride.max_output_tokens }
+          'max_tokens_field' { $maxTokensField = [string]$agentOverride.max_tokens_field }
+        }
+      }
+    }
+    if ($contextWindowTokens -le 0 -or $contextWindowTokens -gt 200000) { throw "Agent '$id' 的 context window 必须是 1..200000 的整数。" }
+    if ($maxOutputTokens -le 0 -or $maxOutputTokens -gt $contextWindowTokens) { throw "Agent '$id' 的 max output 必须是正整数且不超过 context window。" }
+    if ([string]::IsNullOrWhiteSpace($maxTokensField)) { throw "Agent '$id' 的 max_tokens_field 不能为空。" }
+    $qualifiedModel = $model -match '/'
+    $globalTransport = (-not $qualifiedModel) -or ($provider -eq 'openai')
+    $apiExplicit = (Test-ProjectEnvironmentKey -DotEnv $dotEnv -Name ($agentPrefix + 'API')) -or (($providerPrefix) -and (Test-ProjectEnvironmentKey -DotEnv $dotEnv -Name ($providerPrefix + 'API'))) -or ($globalTransport -and (Test-ProjectEnvironmentKey -DotEnv $dotEnv -Name 'OPENCLAW_LLM_API')) -or ($agentOverride -and $agentOverride.PSObject.Properties.Name -contains 'api')
+    $baseUrlExplicit = (Test-ProjectEnvironmentKey -DotEnv $dotEnv -Name ($agentPrefix + 'BASE_URL')) -or (($providerPrefix) -and (Test-ProjectEnvironmentKey -DotEnv $dotEnv -Name ($providerPrefix + 'BASE_URL'))) -or ($globalTransport -and (Test-ProjectEnvironmentKey -DotEnv $dotEnv -Name 'OPENCLAW_LLM_BASE_URL')) -or ($agentOverride -and $agentOverride.PSObject.Properties.Name -contains 'base_url')
 
     $sandbox = $null
     if ($m.PSObject.Properties.Name -contains 'sandbox_mode' -and $null -ne $m.sandbox_mode) { $sandbox = [string]$m.sandbox_mode }
@@ -173,6 +282,14 @@ function Get-AgentPackages {
       role = [string]$m.role
       capabilities = @($m.capabilities | ForEach-Object { [string]$_ })
       model = $model
+      provider = $provider
+      api = $api
+      base_url = $baseUrl
+      context_window_tokens = $contextWindowTokens
+      max_output_tokens = $maxOutputTokens
+      max_tokens_field = $maxTokensField
+      transport_api_explicit = [bool]$apiExplicit
+      transport_base_url_explicit = [bool]$baseUrlExplicit
       callable_by_manager = [bool]$m.delegation.callable_by_manager
       allow_agents = @($m.delegation.allow_agents | ForEach-Object { [string]$_ })
       require_agent_id = if ($m.delegation.PSObject.Properties.Name -contains 'require_agent_id') { [bool]$m.delegation.require_agent_id } else { $false }

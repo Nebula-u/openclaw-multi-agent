@@ -33,6 +33,50 @@ test('installers materialize an explicit empty worker delegation allowlist', () 
   assert.match(bash, /ALLOW_JSON\[\$id\]/u);
 });
 
+test('installers synchronize model catalog limits and protect raw artifact storage', () => {
+  const powershell = readFileSync(join(ROOT, 'scripts', 'install.ps1'), 'utf8');
+  const componentLib = readFileSync(join(ROOT, 'scripts', 'component-lib.ps1'), 'utf8');
+  const bash = readFileSync(join(ROOT, 'scripts', 'install.sh'), 'utf8');
+  assert.match(powershell, /function Sync-ModelCatalog/u);
+  assert.match(powershell, /models\.providers\.\$provider\.models\[\$modelIndex\]\.contextWindow/u);
+  assert.match(powershell, /Set-RawArtifactAccessControl/u);
+  assert.match(componentLib, /SetAccessRuleProtection\(\$true, \$false\)/u);
+  assert.match(componentLib, /OPENCLAW_LLM_CONTEXT_WINDOW_TOKENS' -Default '200000'/u);
+  assert.match(componentLib, /OPENCLAW_LLM_MAX_OUTPUT_TOKENS' -Default '32000'/u);
+  assert.match(bash, /MODEL_SYNC_SEEN/u);
+  assert.match(bash, /ARTIFACT_ACL_MODE="protected-dacl"/u);
+  assert.match(bash, /chmod 700 "\$ARTIFACT_ROOT"/u);
+});
+
+test(
+  'PowerShell artifact ACL helper applies and verifies the platform protection',
+  { skip: PWSH_AVAILABLE ? false : 'pwsh unavailable in this environment' },
+  () => {
+    const temp = mkdtempSync(join(tmpdir(), 'openclaw-artifact-acl-'));
+    try {
+      const result = spawnSync('pwsh', [
+        '-NoProfile',
+        '-Command',
+        '. $env:COMPONENT_LIB; Set-RawArtifactAccessControl -Path $env:ARTIFACT_ROOT | ConvertTo-Json -Compress',
+      ], {
+        cwd: ROOT,
+        encoding: 'utf8',
+        env: {
+          ...process.env,
+          COMPONENT_LIB: join(ROOT, 'scripts', 'component-lib.ps1'),
+          ARTIFACT_ROOT: temp,
+        },
+      });
+      assert.equal(result.status, 0, result.stdout + result.stderr);
+      const acl = JSON.parse(result.stdout.trim());
+      assert.equal(acl.protected, true);
+      assert.equal(acl.mode, process.platform === 'win32' ? 'protected-dacl' : '0700');
+    } finally {
+      rmSync(temp, { recursive: true, force: true });
+    }
+  },
+);
+
 test('project Agent reinstall requires an explicit stopped-Gateway acknowledgement and deletes only verified runtime paths', () => {
   const reinstall = readFileSync(join(ROOT, 'scripts', 'reinstall-agents.ps1'), 'utf8');
   assert.match(reinstall, /\[switch\]\$GatewayStopped/u);
@@ -73,6 +117,10 @@ esac
     const manifest = JSON.parse(readFileSync(DRY_MANIFEST, 'utf8'));
     assert.equal(manifest.schema_version, 2);
     assert.equal(manifest.project_root_abs, ROOT);
+    assert.equal(manifest.artifact_access_control.applied, false);
+    assert.ok(manifest.agents.every((agent) => agent.context_window_tokens === 200000));
+    assert.ok(manifest.agents.every((agent) => agent.max_output_tokens === 32000));
+    assert.ok(manifest.agents.every((agent) => agent.max_tokens_field === 'max_output_tokens'));
   } finally {
     if (previousManifest === null) {
       rmSync(DRY_MANIFEST, { force: true });
@@ -126,6 +174,10 @@ exit /b 0
       const manifest = JSON.parse(readFileSync(DRY_MANIFEST, 'utf8'));
       assert.equal(manifest.schema_version, 2);
       assert.equal(manifest.project_root_abs, ROOT);
+      assert.equal(manifest.artifact_access_control.applied, false);
+      assert.ok(manifest.agents.every((agent) => agent.context_window_tokens === 200000));
+      assert.ok(manifest.agents.every((agent) => agent.max_output_tokens === 32000));
+      assert.ok(manifest.agents.every((agent) => agent.max_tokens_field === 'max_output_tokens'));
     } finally {
       if (previousManifest === null) {
         rmSync(DRY_MANIFEST, { force: true });

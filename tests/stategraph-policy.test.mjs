@@ -1,10 +1,47 @@
 import assert from 'node:assert/strict';
-import { resolve } from 'node:path';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
 import test from 'node:test';
 import { compileRoutePlan, loadStateGraphPolicy, verifyFrozenRoute } from '../scripts/stategraph/policy.mjs';
 
 const ROOT = resolve(import.meta.dirname, '..');
 const policy = loadStateGraphPolicy(ROOT);
+
+test('Manager policy keeps the 200k context, 32k output and 12k prompt limits aligned', () => {
+  assert.deepEqual(policy.manager, {
+    context_window_tokens: 200000,
+    max_output_tokens: 32000,
+    soft_budget_percent: 60,
+    prompt_max_chars: 12000,
+    recent_events: 8,
+    recent_error_reports: 4,
+  });
+  const sessionPolicy = JSON.parse(readFileSync(join(ROOT, 'config', 'manager-session-policy.json'), 'utf8'));
+  assert.equal(sessionPolicy.model_context_window_tokens, policy.manager.context_window_tokens);
+  assert.equal(sessionPolicy.max_output_tokens, policy.manager.max_output_tokens);
+  assert.equal(sessionPolicy.soft_budget_percent, policy.manager.soft_budget_percent);
+  assert.equal(sessionPolicy.soft_budget_tokens, 120000);
+  assert.equal(sessionPolicy.prompt_max_chars, policy.manager.prompt_max_chars);
+});
+
+test('stategraph policy fails closed when Manager limits overflow the model context', () => {
+  const temp = mkdtempSync(join(tmpdir(), 'stategraph-policy-'));
+  try {
+    mkdirSync(join(temp, 'config'));
+    writeFileSync(join(temp, 'config', 'stategraph-policy.json'), JSON.stringify({
+      manager: {
+        context_window_tokens: 200000,
+        max_output_tokens: 100000,
+        soft_budget_percent: 60,
+        prompt_max_chars: 12000,
+      },
+    }));
+    assert.throws(() => loadStateGraphPolicy(temp), { code: 'STATEGRAPH_POLICY_BUDGET_OVERFLOW' });
+  } finally {
+    rmSync(temp, { recursive: true, force: true });
+  }
+});
 
 function skipped(...included) {
   const all = ['REQUIREMENTS', 'ARCHITECTURE', 'DESIGN', 'DEVELOPMENT', 'CODE_REVIEW', 'TEST', 'RELEASE'];

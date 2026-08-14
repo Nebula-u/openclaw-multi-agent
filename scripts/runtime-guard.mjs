@@ -10,7 +10,7 @@ import addFormats from 'ajv-formats';
 // Runtime Guard remains the stable CLI name used by Agent workspaces. Its
 // current responsibility is deliberately narrow: validate structured JSON/
 // JSONL artifacts and compile the current contract/template set. Workflow
-// state, events, approvals, dispatch and recovery belong to Control Kernel v2.
+// StateGraph/checkpointer owns state, events, approvals, dispatch and recovery.
 
 const VALIDATOR_NAME = 'ajv';
 const JSONL_MAX_BYTES = 5 * 1024 * 1024;

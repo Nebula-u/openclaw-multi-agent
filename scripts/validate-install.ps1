@@ -140,6 +140,11 @@ if ($installDryRunSucceeded -and (Test-Path -LiteralPath $dryManifest)) {
     }
   }
   Add-Check 'dry-run package/source/runtime 路径全为绝对路径' $allAbsolute
+  $modelLimitsMatch = @($manifest.agents | Where-Object {
+    [int64]$_.context_window_tokens -ne 200000 -or [int64]$_.max_output_tokens -ne 32000 -or [string]$_.max_tokens_field -ne 'max_output_tokens'
+  }).Count -eq 0
+  Add-Check 'dry-run 模型限制为 200k context / 32k output' $modelLimitsMatch
+  Add-Check 'dry-run 不修改 artifact ACL' (-not [bool]$manifest.artifact_access_control.applied) ([string]$manifest.artifact_access_control.mode)
   if ($Packages.Count -gt 0) {
     $manager = Get-ManagerPackage $Packages
     $managerManifest = @($manifest.agents | Where-Object id -eq $manager.id)[0]

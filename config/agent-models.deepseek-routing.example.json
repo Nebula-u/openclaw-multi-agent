@@ -2,12 +2,12 @@
   "$comment": "Default project routing: all Agents use DeepSeek V4 Pro through the official DeepSeek Chat Completions API. Copy to an ignored *.local.json file before use.",
   "schema_version": 1,
   "agents": {
-    "manager-agent":     { "model": "deepseek/deepseek-v4-pro" },
-    "requirement-agent": { "model": "deepseek/deepseek-v4-pro" },
-    "architect-agent":   { "model": "deepseek/deepseek-v4-pro" },
-    "developer-agent":   { "model": "deepseek/deepseek-v4-pro" },
-    "review-agent":      { "model": "deepseek/deepseek-v4-pro" },
-    "test-agent":        { "model": "deepseek/deepseek-v4-pro" },
-    "release-agent":     { "model": "deepseek/deepseek-v4-pro" }
+    "manager-agent":     { "model": "deepseek/deepseek-v4-pro", "context_window_tokens": 200000, "max_output_tokens": 32000, "max_tokens_field": "max_tokens" },
+    "requirement-agent": { "model": "deepseek/deepseek-v4-pro", "context_window_tokens": 200000, "max_output_tokens": 32000, "max_tokens_field": "max_tokens" },
+    "architect-agent":   { "model": "deepseek/deepseek-v4-pro", "context_window_tokens": 200000, "max_output_tokens": 32000, "max_tokens_field": "max_tokens" },
+    "developer-agent":   { "model": "deepseek/deepseek-v4-pro", "context_window_tokens": 200000, "max_output_tokens": 32000, "max_tokens_field": "max_tokens" },
+    "review-agent":      { "model": "deepseek/deepseek-v4-pro", "context_window_tokens": 200000, "max_output_tokens": 32000, "max_tokens_field": "max_tokens" },
+    "test-agent":        { "model": "deepseek/deepseek-v4-pro", "context_window_tokens": 200000, "max_output_tokens": 32000, "max_tokens_field": "max_tokens" },
+    "release-agent":     { "model": "deepseek/deepseek-v4-pro", "context_window_tokens": 200000, "max_output_tokens": 32000, "max_tokens_field": "max_tokens" }
   }
 }

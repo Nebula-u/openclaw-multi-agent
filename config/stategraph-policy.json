@@ -6,7 +6,7 @@
   "json_regeneration_retries": 2,
   "agent_timeout_seconds": 900,
   "manager": {
-    "context_window_tokens": 1000000,
+    "context_window_tokens": 200000,
     "max_output_tokens": 32000,
     "soft_budget_percent": 60,
     "prompt_max_chars": 12000,

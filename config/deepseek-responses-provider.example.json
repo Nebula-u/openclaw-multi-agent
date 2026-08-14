@@ -9,8 +9,9 @@
       "api": "openai-responses",
       "reasoning": true,
       "input": ["text"],
-      "contextWindow": 1000000,
-      "maxTokens": 393216,
+      "contextWindow": 200000,
+      "maxTokens": 32000,
+      "compat": { "maxTokensField": "max_output_tokens" },
       "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }
     }
   ]

@@ -129,6 +129,10 @@ if [ "$INSTALL_DRYRUN_EXIT" -eq 0 ] && [ -f "$DRY_MANIFEST" ]; then
   count="$(jq_clean '.agents | length' "$dry_jq")"; [ "$count" -eq "$REGISTERED" ] && check "dry-run 数量来自 register=true packages" PASS "$count" || check "dry-run 数量来自 register=true packages" FAIL "$count/$REGISTERED"
   abs_ok="$(jq_clean -r '[.agents[] | (.manifest_abs,.workspace_source_abs,.workspace_abs,.agentDir_abs)] | all(startswith("/") or test("^[A-Za-z]:"))' "$dry_jq")"
   [ "$abs_ok" = true ] && check "dry-run 路径全为绝对路径" PASS || check "dry-run 路径全为绝对路径" FAIL
+  model_limits="$(jq_clean -r '[.agents[] | .context_window_tokens == 200000 and .max_output_tokens == 32000 and .max_tokens_field == "max_output_tokens"] | all' "$dry_jq")"
+  [ "$model_limits" = true ] && check "dry-run 模型限制为 200k context / 32k output" PASS || check "dry-run 模型限制为 200k context / 32k output" FAIL
+  acl_applied="$(jq_clean -r '.artifact_access_control.applied' "$dry_jq")"
+  [ "$acl_applied" = false ] && check "dry-run 不修改 artifact ACL" PASS || check "dry-run 不修改 artifact ACL" FAIL "$acl_applied"
   actual="$(jq_clean -r --arg id "$MANAGER_ID" '.agents[] | select(.id==$id) | .subagents_allow | sort | join(",")' "$dry_jq")"
   expected="$(printf '%s\n' "${EXPECTED_ALLOW[@]}" | sort | paste -sd, -)"
   [ "$actual" = "$expected" ] && check "manager 白名单来自 catalog" PASS "$actual" || check "manager 白名单来自 catalog" FAIL "actual=$actual expected=$expected"

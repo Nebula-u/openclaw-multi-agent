@@ -17,7 +17,29 @@ export class RoutePlanError extends Error {
 
 export function loadStateGraphPolicy(projectRootInput) {
   const projectRoot = resolve(projectRootInput);
-  return JSON.parse(readFileSync(join(projectRoot, 'config', 'stategraph-policy.json'), 'utf8'));
+  const policy = JSON.parse(readFileSync(join(projectRoot, 'config', 'stategraph-policy.json'), 'utf8'));
+  const manager = policy.manager;
+  if (!manager || typeof manager !== 'object') fail('STATEGRAPH_POLICY_MANAGER_MISSING', 'stategraph policy manager limits are required');
+  for (const field of ['context_window_tokens', 'max_output_tokens', 'soft_budget_percent', 'prompt_max_chars']) {
+    if (!Number.isSafeInteger(manager[field]) || manager[field] <= 0) {
+      fail('STATEGRAPH_POLICY_MANAGER_LIMIT_INVALID', `manager.${field} must be a positive safe integer`, { field, value: manager[field] });
+    }
+  }
+  if (manager.max_output_tokens > manager.context_window_tokens) {
+    fail('STATEGRAPH_POLICY_OUTPUT_EXCEEDS_CONTEXT', 'manager max output must not exceed the context window');
+  }
+  if (manager.soft_budget_percent > 100) {
+    fail('STATEGRAPH_POLICY_SOFT_BUDGET_INVALID', 'manager soft budget percent must be between 1 and 100');
+  }
+  const softBudgetTokens = Math.floor(manager.context_window_tokens * manager.soft_budget_percent / 100);
+  if (softBudgetTokens + manager.max_output_tokens > manager.context_window_tokens) {
+    fail('STATEGRAPH_POLICY_BUDGET_OVERFLOW', 'manager soft input budget plus max output exceeds the context window', {
+      soft_budget_tokens: softBudgetTokens,
+      max_output_tokens: manager.max_output_tokens,
+      context_window_tokens: manager.context_window_tokens,
+    });
+  }
+  return policy;
 }
 
 function schemaValidator(projectRoot) {
