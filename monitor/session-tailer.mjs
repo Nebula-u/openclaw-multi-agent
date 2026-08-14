@@ -5,11 +5,17 @@ import { parseSessionRecord } from './session-parser.mjs';
 
 function hash(value) { return createHash('sha256').update(value).digest('hex').slice(0, 24); }
 
-export function createSessionTailer({ controlDatabase, telemetry, sessionRoot, publish }) {
+export function createSessionTailer({ taskSource, telemetry, sessionRoot, publish }) {
   return {
     scan() {
-      const dispatches = controlDatabase.prepare(`SELECT dispatch_id, workflow_id, task_id, run_id, agent_id, session_id
-        FROM dispatches WHERE session_id IS NOT NULL AND status IN ('SENT', 'ACKNOWLEDGED', 'RUNNING') ORDER BY updated_at`).all();
+      const dispatches = taskSource().filter((task) => task.session_id).map((task) => ({
+        dispatch_id: task.dispatches?.at(-1)?.dispatch_id ?? null,
+        workflow_id: task.workflow_id,
+        task_id: task.task_id,
+        run_id: task.run_id,
+        agent_id: task.agent_id,
+        session_id: task.session_id,
+      }));
       const emitted = [];
       for (const dispatch of dispatches) {
         const path = resolve(join(sessionRoot, dispatch.agent_id, 'sessions', `${dispatch.session_id}.jsonl`));

@@ -12,8 +12,30 @@
   "role": "worker",
   "capabilities": ["testing.plan", "testing.implementation", "testing.execution"],
   "model": "",
-  "delegation": { "callable_by_manager": true, "allow_agents": [] },
-  "sandbox_mode": "off",
+  "delegation": { "callable_by_manager": false, "allow_agents": [] },
+  "sandbox_mode": "all",
+  "sandbox_config": {
+    "mode": "all",
+    "backend": "docker",
+    "scope": "session",
+    "workspaceAccess": "none",
+    "docker": {
+      "image": "openclaw-test-node:22-slim",
+      "workdir": "/workspace",
+      "network": "none",
+      "readOnlyRoot": true,
+      "capDrop": ["ALL"],
+      "pidsLimit": 256,
+      "memory": "2g",
+      "cpus": 2,
+      "dangerouslyAllowExternalBindSources": true,
+      "dangerouslyAllowReservedContainerTargets": false
+    }
+  },
+  "tools_config": {
+    "exec": { "host": "sandbox" },
+    "elevated": { "enabled": false }
+  },
   "assembly": { "include_common_rules": true, "include_templates": false },
   "skills": [],
   "lifecycle": { "register": true, "active": true }

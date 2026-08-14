@@ -9,7 +9,7 @@
     "schema_version", "workflow_id", "task_id", "run_id", "agent_id", "role",
     "attempt", "started_at", "finished_at", "result_status",
     "summary_for_user", "summary_for_manager", "worktree_path_abs",
-    "artifact_root_abs", "isolation_mode", "self_validation"
+    "artifact_root_abs", "input_commit", "output_commit", "isolation_mode", "self_validation", "artifact_manifest_hash"
   ],
   "properties": {
     "schema_version": { "type": "integer", "minimum": 1, "description": "所遵循的 result 契约版本。" },
@@ -46,7 +46,8 @@
     "decisions_required": { "type": "array", "items": { "type": "object" } },
     "recommended_next_action": { "type": "string" },
     "git_status_after_completion": { "type": ["string", "null"] },
-    "isolation_mode": { "type": "string", "enum": ["UNSANDBOXED_LOCAL"], "description": "实际执行隔离级别；当前部署仅允许 UNSANDBOXED_LOCAL。" },
+    "isolation_mode": { "type": "string", "enum": ["UNSANDBOXED_LOCAL", "SANDBOXED_DOCKER"], "description": "实际执行隔离级别；TEST 任务由代码强制要求 SANDBOXED_DOCKER。" },
+    "sandbox_attestation": { "type": ["object", "null"] },
     "self_validation": {
       "type": "object",
       "additionalProperties": true,
@@ -67,8 +68,14 @@
         }
       }
     },
-    "artifact_manifest_hash": { "type": ["string", "null"] }
+    "artifact_manifest_hash": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
   },
+  "allOf": [
+    {
+      "if": { "properties": { "isolation_mode": { "const": "SANDBOXED_DOCKER" } } },
+      "then": { "required": ["sandbox_attestation"], "properties": { "sandbox_attestation": { "type": "object" } } }
+    }
+  ],
   "definitions": {
     "claim": {
       "type": "object",

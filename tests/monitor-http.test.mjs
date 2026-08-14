@@ -1,55 +1,65 @@
 import assert from 'node:assert/strict';
-import { randomUUID } from 'node:crypto';
-import { resolve } from 'node:path';
+import { execFileSync } from 'node:child_process';
+import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
 import test from 'node:test';
-import { createControlRepository, openControlDatabase } from '../scripts/control-core/repository.mjs';
+import { createStateGraphRuntime } from '../scripts/stategraph/runtime.mjs';
 import { createMonitorServer } from '../monitor/server.mjs';
 
 const ROOT = resolve(import.meta.dirname, '..');
 const WORKFLOW_ID = 'WF-monitor-http';
 
 async function setup() {
-  const database = openControlDatabase(':memory:');
-  const controls = createControlRepository(ROOT, database);
-  controls.apply({
-    schema_version: 1, command_id: `CMD-${randomUUID()}`, workflow_id: WORKFLOW_ID,
-    expected_revision: 0, command_type: 'BOOTSTRAP', actor: 'manager-agent',
-    occurred_at: '2026-08-06T10:00:00.000Z', reason: 'monitor HTTP test',
-    payload: { contract_set_id: 'contracts-v2-test', agent_bundle_id: 'a'.repeat(64) },
-  });
+  const temp = mkdtempSync(join(tmpdir(), 'monitor-stategraph-'));
+  const target = join(temp, 'target');
+  mkdirSync(target, { recursive: true });
+  execFileSync('git', ['init'], { cwd: target, stdio: 'ignore' });
+  execFileSync('git', ['config', 'user.email', 'monitor-test@example.invalid'], { cwd: target, stdio: 'ignore' });
+  execFileSync('git', ['config', 'user.name', 'Monitor Test'], { cwd: target, stdio: 'ignore' });
+  execFileSync('git', ['commit', '--allow-empty', '-m', '初始化监控测试仓库'], { cwd: target, stdio: 'ignore' });
+  const runtime = createStateGraphRuntime({ projectRoot: ROOT, databasePath: join(temp, 'checkpoints.db'), skipAuthority: true,
+    dispatcher: { start: (task) => task, reconcile: (task) => ({ kind: 'WAITING', task }) } });
+  await runtime.bootstrap({ workflowId: WORKFLOW_ID, request: { text: 'monitor HTTP test', project_path_abs: target } });
   const monitor = createMonitorServer({
-    projectRoot: ROOT, databasePath: ':memory:', host: '127.0.0.1', port: 0, token: 'test-token',
-    allowedOrigins: ['null'], reconcileIntervalMs: 20, sseRetention: 100, requestBodyLimit: 65536,
-  }, { database });
+    projectRoot: ROOT, databasePath: join(temp, 'checkpoints.db'), monitorDatabasePath: ':memory:', host: '127.0.0.1', port: 0,
+    allowedOrigins: ['null'], reconcileIntervalMs: 2000, sseRetention: 100, requestBodyLimit: 65536,
+    telemetryMaxEvents: 1000, activityRetentionDays: 30, maintenanceIntervalMs: 3600000,
+    heartbeatStaleSeconds: 180, possiblyStalledSeconds: 300, startingTimeoutSeconds: 120, toolRunningGraceSeconds: 900,
+    workflowContinuationEnabled: false, workflowContinuationMaxTurns: 8, sessionRoot: join(temp, 'sessions'),
+  }, { stateRuntime: runtime });
   const address = await monitor.start();
-  return { monitor, database, base: `http://127.0.0.1:${address.port}`, close: () => monitor.close() };
+  return { monitor, runtime, temp, base: 'http://127.0.0.1:' + address.port, async close() { await monitor.close(); runtime.close(); rmSync(temp, { recursive: true, force: true }); } };
 }
 
-test('monitor HTTP exposes health, workflows and workflow snapshot', async () => {
+test('monitor reads workflows only from latest LangGraph checkpoints', async () => {
   const value = await setup();
   try {
-    const health = await fetch(`${value.base}/api/health`);
+    const health = await fetch(value.base + '/api/health');
     assert.equal(health.status, 200);
-    assert.equal((await health.json()).status, 'HEALTHY');
-    const clientConfig = await (await fetch(`${value.base}/api/client-config`, { headers: { origin: 'null' } })).json();
+    const healthBody = await health.json();
+    assert.equal(healthBody.status, 'HEALTHY');
+    assert.equal(healthBody.audit.database, 'LANGGRAPH_CHECKPOINTS');
+    const clientConfig = await (await fetch(value.base + '/api/client-config', { headers: { origin: 'null' } })).json();
     assert.equal(clientConfig.local_only, true);
     assert.equal(clientConfig.read_only, true);
-    const workflows = await (await fetch(`${value.base}/api/workflows`)).json();
+    assert.equal(clientConfig.source, 'LANGGRAPH_CHECKPOINTS');
+    const workflows = await (await fetch(value.base + '/api/workflows')).json();
     assert.equal(workflows.workflows[0].workflow_id, WORKFLOW_ID);
-    const snapshot = await (await fetch(`${value.base}/api/workflows/${WORKFLOW_ID}/snapshot`)).json();
+    assert.equal(workflows.workflows[0].protocol_version, 'stategraph-checkpoint-v1');
+    const snapshot = await (await fetch(value.base + '/api/workflows/' + WORKFLOW_ID + '/snapshot')).json();
     assert.equal(snapshot.snapshot.workflows[0].workflow_id, WORKFLOW_ID);
-    const missing = await fetch(`${value.base}/api/workflows/WF-missing/snapshot`);
-    assert.equal(missing.status, 404);
+    assert.equal((await fetch(value.base + '/api/workflows/WF-missing/snapshot')).status, 404);
   } finally { await value.close(); }
 });
 
-test('monitor remains reachable while reporting a degraded control audit', async () => {
+test('monitor remains reachable while reporting a tampered checkpoint event chain', async () => {
   const value = await setup();
   try {
-    const state = JSON.parse(value.database.prepare('SELECT state_json FROM workflows WHERE workflow_id=?').get(WORKFLOW_ID).state_json);
-    state.phase = 'TAMPERED';
-    value.database.prepare("UPDATE workflows SET phase='TAMPERED', state_json=? WHERE workflow_id=?").run(JSON.stringify(state), WORKFLOW_ID);
-    const health = await fetch(`${value.base}/api/health`);
+    const state = await value.runtime.state(WORKFLOW_ID);
+    const tampered = state.events.map((event, index) => index === 0 ? { ...event, type: 'TAMPERED' } : event);
+    await value.runtime.graph.updateState({ configurable: { thread_id: WORKFLOW_ID, checkpoint_ns: '' } }, { events: tampered });
+    const health = await fetch(value.base + '/api/health');
     const body = await health.json();
     assert.equal(health.status, 200);
     assert.equal(body.api_reachable, true);
@@ -58,37 +68,11 @@ test('monitor remains reachable while reporting a degraded control audit', async
   } finally { await value.close(); }
 });
 
-test('monitor rejects unknown origins and exposes no public mutation endpoint', async () => {
+test('monitor rejects unknown origins and exposes no mutation endpoint', async () => {
   const value = await setup();
   try {
-    const rejectedOrigin = await fetch(`${value.base}/api/workflows`, { headers: { origin: 'https://example.invalid' } });
-    assert.equal(rejectedOrigin.status, 403);
-    const body = {
-      schema_version: 1, request_id: 'SUP-monitor-http', idempotency_key: `${WORKFLOW_ID}/NUDGE/window-1`,
-      workflow_id: WORKFLOW_ID, request_type: 'NUDGE', source: 'LOCAL_USER', reason: 'Please report progress',
-      evidence: { source: 'dashboard' }, requested_at: '2026-08-06T10:00:01.000Z',
-    };
-    const supervisionWrite = await fetch(`${value.base}/api/supervision/request`, {
-      method: 'POST', headers: { 'content-type': 'application/json', origin: 'null' }, body: JSON.stringify(body),
-    });
-    assert.equal(supervisionWrite.status, 404);
-    const activityWrite = await fetch(`${value.base}/api/activity`, {
-      method: 'POST', headers: { 'content-type': 'application/json', origin: 'null' }, body: JSON.stringify({}),
-    });
-    assert.equal(activityWrite.status, 404);
-  } finally { await value.close(); }
-});
-
-test('monitor exposes only user-safe dialogue sourced by local collectors', async () => {
-  const value = await setup();
-  try {
-    value.monitor.telemetry.addEvent({
-      schema_version: 1, event_id: 'MEVT-monitor-dialogue', workflow_id: WORKFLOW_ID, task_id: null, run_id: null, session_id: 'session-1',
-      topic: 'agent.activity', event_type: 'session.assistant_output', producer: 'session-tailer', source: 'SESSION_TAILER',
-      timestamp: '2026-08-06T10:00:02.000Z', payload: { agent_id: 'manager-agent', summary: 'Control state is healthy' },
-      meta: { redacted: true, inferred: true, confidence: 'MEDIUM' },
-    });
-    const history = await (await fetch(`${value.base}/api/agents/manager-agent/activity`)).json();
-    assert.equal(history.dialogue[0].summary, 'Control state is healthy');
+    assert.equal((await fetch(value.base + '/api/workflows', { headers: { origin: 'https://example.invalid' } })).status, 403);
+    assert.equal((await fetch(value.base + '/api/activity', { method: 'POST', headers: { 'content-type': 'application/json', origin: 'null' }, body: '{}' })).status, 404);
+    assert.equal((await fetch(value.base + '/api/approve', { method: 'POST', headers: { 'content-type': 'application/json', origin: 'null' }, body: '{}' })).status, 404);
   } finally { await value.close(); }
 });

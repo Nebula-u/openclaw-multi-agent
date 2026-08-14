@@ -127,7 +127,7 @@ mapfile -t PACKAGE_MANIFESTS < <(
 AGENT_IDS=()
 WORKER_IDS=()
 MANAGER_ID=""
-declare -A WS DIR OC_WS OC_DIR MODEL SRC_WS ROLE ORIGIN PROTECTED ACTIVE REGISTER CALLABLE ALLOW_JSON SANDBOX INCLUDE_COMMON INCLUDE_TEMPLATES MANIFEST
+declare -A WS DIR OC_WS OC_DIR MODEL SRC_WS ROLE ORIGIN PROTECTED ACTIVE REGISTER CALLABLE ALLOW_JSON SANDBOX SANDBOX_JSON TOOLS_JSON INCLUDE_COMMON INCLUDE_TEMPLATES MANIFEST
 declare -A SEEN_IDS
 
 for mf in "${PACKAGE_MANIFESTS[@]}"; do
@@ -172,7 +172,7 @@ for mf in "${PACKAGE_MANIFESTS[@]}"; do
   OC_WS[$id]="$(native_path "${WS[$id]}")"; OC_DIR[$id]="$(native_path "${DIR[$id]}")"
   MODEL[$id]="$(jq_clean -r '.model // ""' "$mf_jq")"; ROLE[$id]="$role"; ORIGIN[$id]="$origin"; PROTECTED[$id]="$protected"
   REGISTER[$id]="$register"; ACTIVE[$id]="$active"; CALLABLE[$id]="$(jq_clean -r '.delegation.callable_by_manager' "$mf_jq")"
-  ALLOW_JSON[$id]="$(jq_clean -c '.delegation.allow_agents // []' "$mf_jq")"; SANDBOX[$id]="$(jq_clean -r '.sandbox_mode // ""' "$mf_jq")"
+  ALLOW_JSON[$id]="$(jq_clean -c '.delegation.allow_agents // []' "$mf_jq")"; SANDBOX[$id]="$(jq_clean -r '.sandbox_mode // ""' "$mf_jq")"; SANDBOX_JSON[$id]="$(jq_clean -c '.sandbox_config // null' "$mf_jq")"; TOOLS_JSON[$id]="$(jq_clean -c '.tools_config // null' "$mf_jq")"
   INCLUDE_COMMON[$id]="$(jq_clean -r '.assembly.include_common_rules' "$mf_jq")"; INCLUDE_TEMPLATES[$id]="$(jq_clean -r '.assembly.include_templates' "$mf_jq")"
   if [ "$register" = "true" ]; then AGENT_IDS+=("$id"); fi
 done
@@ -289,7 +289,7 @@ for id in "${AGENT_IDS[@]}"; do
   printf "  %-24s dir=%s  model=%s active=%s\n" "" "${DIR[$id]}" "$mdl" "${ACTIVE[$id]}"
 done
 echo "  $MANAGER_ID subagents.allowAgents = ${WORKER_IDS[*]}"
-echo "  manager subagents.requireAgentId = true ; delegationMode = prefer"
+echo "  manager subagents.allowAgents = [] ; delegationMode = off（派发仅允许 StateGraph dispatch 节点）"
 
 GENERATED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
@@ -301,18 +301,20 @@ write_manifest() {
   local out="$1" backup="$2"
   local agents_json="" first=1
   for id in "${AGENT_IDS[@]}"; do
-    local allow="${ALLOW_JSON[$id]}" reqid="false" sb="null"
+    local allow="${ALLOW_JSON[$id]}" reqid="false" sb="null" sbcfg="null" tools="null"
     if [ "$id" = "$MANAGER_ID" ]; then
       allow="$WORKER_ALLOW_JSON"
       reqid="true"
     fi
     [ -n "${SANDBOX[$id]}" ] && sb="\"$(json_escape "${SANDBOX[$id]}")\""
+    [ "${SANDBOX_JSON[$id]}" != "null" ] && sbcfg="${SANDBOX_JSON[$id]}"
+    [ "${TOOLS_JSON[$id]}" != "null" ] && tools="${TOOLS_JSON[$id]}"
     [ $first -eq 0 ] && agents_json="$agents_json,"
     first=0
     local ews edir emdl emft esrc eorigin
     ews="$(json_escape "$(native_path "${OC_WS[$id]}")")"; edir="$(json_escape "$(native_path "${OC_DIR[$id]}")")"; emdl="$(json_escape "${MODEL[$id]}")"
     emft="$(json_escape "$(native_path "${MANIFEST[$id]}")")"; esrc="$(json_escape "$(native_path "${SRC_WS[$id]}")")"; eorigin="$(json_escape "${ORIGIN[$id]}")"
-    agents_json="$agents_json{\"id\":\"$id\",\"origin\":\"$eorigin\",\"protected\":${PROTECTED[$id]},\"manifest_abs\":\"$emft\",\"workspace_source_abs\":\"$esrc\",\"workspace_abs\":\"$ews\",\"agentDir_abs\":\"$edir\",\"model\":\"$emdl\",\"register\":true,\"active\":${ACTIVE[$id]},\"subagents_allow\":$allow,\"require_agent_id\":$reqid,\"sandbox_mode\":$sb}"
+    agents_json="$agents_json{\"id\":\"$id\",\"origin\":\"$eorigin\",\"protected\":${PROTECTED[$id]},\"manifest_abs\":\"$emft\",\"workspace_source_abs\":\"$esrc\",\"workspace_abs\":\"$ews\",\"agentDir_abs\":\"$edir\",\"model\":\"$emdl\",\"register\":true,\"active\":${ACTIVE[$id]},\"subagents_allow\":$allow,\"require_agent_id\":$reqid,\"sandbox_mode\":$sb,\"sandbox_config\":$sbcfg,\"tools_config\":$tools}"
   done
   local ecfg epr err
   ecfg="$(json_escape "$(native_path "$CONFIG_FILE")")"; epr="$(json_escape "$(native_path "$PROJECT_ROOT")")"; err="$(json_escape "$(native_path "$RUNTIME_ROOT_ABS")")"
@@ -471,12 +473,17 @@ for id in "${AGENT_IDS[@]}"; do
     fi
   fi
   if [ "$id" = "$MANAGER_ID" ]; then
-    set_json "agents.list[$idx].subagents" "{\"delegationMode\":\"prefer\",\"requireAgentId\":true,\"allowAgents\":$WORKER_ALLOW_JSON}"
+    set_json "agents.list[$idx].subagents" "{\"delegationMode\":\"off\",\"requireAgentId\":true,\"allowAgents\":[]}"
   else
     set_json "agents.list[$idx].subagents" "{\"allowAgents\":${ALLOW_JSON[$id]}}"
   fi
   if [ -n "${SANDBOX[$id]}" ]; then
-    set_json "agents.list[$idx].sandbox" "{\"mode\":\"${SANDBOX[$id]}\"}"
+    sandbox_value="${SANDBOX_JSON[$id]}"
+    [ "$sandbox_value" = "null" ] && sandbox_value="{\"mode\":\"${SANDBOX[$id]}\"}"
+    set_json "agents.list[$idx].sandbox" "$sandbox_value"
+  fi
+  if [ "${TOOLS_JSON[$id]}" != "null" ]; then
+    set_json "agents.list[$idx].tools" "${TOOLS_JSON[$id]}"
   fi
 done
 

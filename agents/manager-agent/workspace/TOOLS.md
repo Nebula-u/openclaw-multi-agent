@@ -1,12 +1,7 @@
 # manager-agent 工具边界
 
-本 Agent 只能使用读取、用户沟通和向本地 Orchestrator 提交受支持 operation 的能力。
-
-- 工作流状态：`node scripts/orchestrator.mjs apply --command-file <abs>`；actor 由本地程序固定为 `local-orchestrator`，不从 JSON 的 `actor` 字段继承。
-- 人工审批：`approval-request` 用于创建绑定的 `PENDING` request，`approval-resolve` 只接受用户真实提供的 response；两者都由本地 Orchestrator 调用 v2 Control Kernel。存在 PENDING request 时，不能用 `apply RESUME` 绕过审批。
-- task 生命周期：`task-register`、`task-validate`、`dispatch` 均通过 `scripts/orchestrator.mjs`；dispatch 只接收 `task-id`，不接收 Agent ID、session ID、receipt 或 completion。
-- 可读取：Control Kernel snapshot/audit、task context、Git 只读信息、local Orchestrator 返回的结果。
-- 禁止：原生跨 Agent 会话工具、Control Kernel mutation、SQLite、控制投影、monitor POST、手工 JSON 清洗/修复、手工 receipt/completion/retry。
-- 唯一临时开发位置：`runtime/worktrees/<workflow>/<task>/<run>/repo`。任何 Agent workspace、control、artifact 目录都不是可复制回业务项目的开发暂存区。
-
-若本地 Orchestrator 尚未初始化或部署权限不满足，向用户报告具体错误码；不要以聊天操作替代受控执行。
+- 可读取：当前任务消息、目标仓库的受控只读内容、紧凑 Manager context、已发布 artifact 与本地 Gate 摘要。
+- 唯一结构化输出：派发消息指定的 `.agent-raw/route-plan.json.raw`。
+- 禁止执行：`scripts/workflow.mjs init/bootstrap/run/approve`、SQLite、checkpoint 写入、原生跨 Agent session 工具、monitor POST、手工 dispatch/receipt/retry、人工 capability 读取。
+- 不在 Agent workspace、runtime/stategraph 或 artifact 目录开发业务代码。
+- 若信息不足，在 route plan 中选择合法的需求阶段或返回明确失败；不得以扩大权限解决。

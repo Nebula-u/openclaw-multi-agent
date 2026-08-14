@@ -1,0 +1,87 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://openclaw.local/contracts/route-plan.schema.json",
+  "title": "ManagerRoutePlan",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "workflow_id",
+    "request_class",
+    "summary",
+    "risk_flags",
+    "steps",
+    "skipped_stages"
+  ],
+  "properties": {
+    "schema_version": { "type": "integer", "const": 1 },
+    "workflow_id": { "type": "string", "pattern": "^WF-[A-Za-z0-9][A-Za-z0-9-]*$" },
+    "request_class": {
+      "type": "string",
+      "enum": ["SMALL_CODE", "FEATURE", "TEST_ONLY", "ANALYSIS_ONLY", "RELEASE_ONLY"]
+    },
+    "summary": { "type": "string", "minLength": 1, "maxLength": 4000 },
+    "risk_flags": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "enum": [
+          "architecture_change",
+          "data_migration",
+          "public_api",
+          "security_boundary",
+          "multi_component",
+          "ui_change",
+          "destructive_operation",
+          "external_side_effect",
+          "manual_acceptance",
+          "release_risk"
+        ]
+      }
+    },
+    "steps": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 12,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["step_id", "kind", "title", "rationale", "human_approval_after", "approval_reason"],
+        "properties": {
+          "step_id": { "type": "string", "pattern": "^[a-z][a-z0-9-]{1,47}$" },
+          "kind": {
+            "type": "string",
+            "enum": ["REQUIREMENTS", "ARCHITECTURE", "DESIGN", "DEVELOPMENT", "CODE_REVIEW", "TEST", "RELEASE"]
+          },
+          "title": { "type": "string", "minLength": 1, "maxLength": 200 },
+          "rationale": { "type": "string", "minLength": 1, "maxLength": 1000 },
+          "human_approval_after": { "type": "boolean" },
+          "approval_reason": { "type": ["string", "null"], "maxLength": 1000 }
+        },
+        "allOf": [
+          {
+            "if": { "properties": { "human_approval_after": { "const": true } }, "required": ["human_approval_after"] },
+            "then": { "properties": { "approval_reason": { "type": "string", "minLength": 1 } } },
+            "else": { "properties": { "approval_reason": { "type": "null" } } }
+          }
+        ]
+      }
+    },
+    "skipped_stages": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["kind", "reason"],
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": ["REQUIREMENTS", "ARCHITECTURE", "DESIGN", "DEVELOPMENT", "CODE_REVIEW", "TEST", "RELEASE"]
+          },
+          "reason": { "type": "string", "minLength": 1, "maxLength": 1000 }
+        }
+      }
+    }
+  }
+}

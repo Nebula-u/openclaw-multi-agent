@@ -21,8 +21,8 @@ test('session tailer exposes only user-visible assistant dialogue and waits for 
   const database = openTelemetryDatabase(':memory:');
   try {
     const telemetry = createTelemetryRepository(ROOT, database);
-    const controlDatabase = { prepare: () => ({ all: () => [{ dispatch_id: 'DSP-1', workflow_id: 'WF-1', task_id: 'TASK-1', run_id: 'RUN-1', agent_id: 'developer-agent', session_id: 'session-1' }] }) };
-    const tailer = createSessionTailer({ controlDatabase, telemetry, sessionRoot: directory });
+    const taskSource = () => [{ workflow_id: 'WF-1', task_id: 'TASK-1', run_id: 'RUN-1', agent_id: 'developer-agent', session_id: 'session-1', dispatches: [{ dispatch_id: 'DSP-1' }] }];
+    const tailer = createSessionTailer({ taskSource, telemetry, sessionRoot: directory });
     const first = tailer.scan();
     assert.equal(first.length, 1);
     assert.ok(first.every((event) => !JSON.stringify(event).includes('private')));

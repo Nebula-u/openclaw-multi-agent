@@ -12,7 +12,7 @@
   "role": "worker",
   "capabilities": ["software.implementation", "code.change"],
   "model": "",
-  "delegation": { "callable_by_manager": true, "allow_agents": [] },
+  "delegation": { "callable_by_manager": false, "allow_agents": [] },
   "sandbox_mode": null,
   "assembly": { "include_common_rules": true, "include_templates": false },
   "skills": [],

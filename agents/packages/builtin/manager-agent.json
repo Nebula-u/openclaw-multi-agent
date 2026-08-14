@@ -12,7 +12,7 @@
   "role": "manager",
   "capabilities": ["workflow.orchestration", "agent.lifecycle", "skill.lifecycle"],
   "model": "",
-  "delegation": { "callable_by_manager": false, "allow_agents": [], "require_agent_id": true, "delegation_mode": "prefer" },
+  "delegation": { "callable_by_manager": false, "allow_agents": [], "require_agent_id": true, "delegation_mode": "off" },
   "sandbox_mode": null,
   "assembly": { "include_common_rules": true, "include_templates": true },
   "skills": ["skill-creator", "agent-package-manager"],

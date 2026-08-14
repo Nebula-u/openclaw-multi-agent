@@ -227,6 +227,8 @@ foreach ($p in $RegisteredPackages) {
     subagents_allow = @(if ($p.role -eq 'manager') { $ManagerAllow } else { $p.allow_agents })
     require_agent_id = ($p.role -eq 'manager' -and $p.require_agent_id)
     sandbox_mode = $p.sandbox_mode
+    sandbox_config = $p.sandbox_config
+    tools_config = $p.tools_config
   }
 }
 
@@ -307,7 +309,7 @@ try {
       }
     }
     $subagents = if ($p.role -eq 'manager') {
-      [ordered]@{ delegationMode = 'prefer'; requireAgentId = $true; allowAgents = @($ManagerAllow) }
+      [ordered]@{ delegationMode = 'off'; requireAgentId = $true; allowAgents = @() }
     } else {
       [ordered]@{ allowAgents = @($p.allow_agents) }
     }
@@ -324,7 +326,7 @@ try {
     $desiredAllow = @(if ($p.role -eq 'manager') { $ManagerAllow } else { $p.allow_agents })
     $allowMatches = @($currentAllow).Count -eq @($desiredAllow).Count -and @($desiredAllow | Where-Object { @($currentAllow) -notcontains $_ }).Count -eq 0
     $subagentsMatch = if ($p.role -eq 'manager') {
-      $allowMatches -and $currentDelegationMode -eq 'prefer' -and $currentRequireAgentId
+      $allowMatches -and $currentDelegationMode -eq 'off' -and $currentRequireAgentId
     } else {
       # An omitted block currently inherits OpenClaw defaults.  Materialize an
       # explicit empty allowlist so a worker cannot acquire delegation through
@@ -339,9 +341,13 @@ try {
       if ($currentAgent.PSObject.Properties.Name -contains 'sandbox' -and $currentAgent.sandbox -and $currentAgent.sandbox.PSObject.Properties.Name -contains 'mode') {
         $currentSandboxMode = [string]$currentAgent.sandbox.mode
       }
-      if ($currentSandboxMode -ne $p.sandbox_mode) {
-        Set-OpenClawJson -Path "agents.list[$idx].sandbox" -Value ([ordered]@{ mode = $p.sandbox_mode }) -Changes $changes
+      if ($currentSandboxMode -ne $p.sandbox_mode -or $p.sandbox_config) {
+        $desiredSandbox = if ($p.sandbox_config) { $p.sandbox_config } else { [ordered]@{ mode = $p.sandbox_mode } }
+        Set-OpenClawJson -Path "agents.list[$idx].sandbox" -Value $desiredSandbox -Changes $changes
       }
+    }
+    if ($p.tools_config) {
+      Set-OpenClawJson -Path "agents.list[$idx].tools" -Value $p.tools_config -Changes $changes
     }
   }
 

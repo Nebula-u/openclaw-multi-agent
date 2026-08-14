@@ -54,7 +54,7 @@ export function loadMonitorConfig(overrides = {}) {
   return {
     projectRoot,
     runtimeRoot,
-    databasePath: resolve(overrides.databasePath ?? fileConfig.database_path ?? join(runtimeRoot, 'control', 'control.db')),
+    databasePath: resolve(overrides.databasePath ?? fileConfig.database_path ?? join(runtimeRoot, 'stategraph', 'checkpoints.db')),
     monitorDatabasePath: overrides.monitorDatabasePath === ':memory:' ? ':memory:'
       : resolve(expandEnvironment(overrides.monitorDatabasePath ?? fileConfig.monitor_database_path ?? join(runtimeRoot, 'monitor', 'monitor.db'))),
     sessionRoot: resolve(expandEnvironment(overrides.sessionRoot ?? environment('OPENCLAW_SESSION_ROOT') ?? fileConfig.session_root
@@ -78,5 +78,7 @@ export function loadMonitorConfig(overrides = {}) {
     telemetryMaxEvents: integer(overrides.telemetryMaxEvents ?? fileConfig.telemetry_max_events, 100000),
     activityRetentionDays: integer(overrides.activityRetentionDays ?? fileConfig.activity_retention_days, 30),
     maintenanceIntervalMs: integer(overrides.maintenanceIntervalMs ?? fileConfig.maintenance_interval_ms, 3600000),
+    workflowContinuationEnabled: boolean(overrides.workflowContinuationEnabled ?? fileConfig.workflow_continuation_enabled, true),
+    workflowContinuationMaxTurns: integer(overrides.workflowContinuationMaxTurns ?? fileConfig.workflow_continuation_max_turns, 8),
   };
 }
