@@ -43,3 +43,7 @@ secrets.json
 
 # ---- cmdline history ----
 *.cmd
+
+# workbuddy
+CONOUT$
+.workbuddy/
