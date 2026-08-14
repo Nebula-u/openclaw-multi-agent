@@ -67,6 +67,76 @@ bash scripts/validate-install.sh
 
 可用 `-ModelConfig` / `--model-config` 指向 `config/agent-models.example.json`。安装 Apply 会将 `runtime/artifacts` 设置为 Windows 受保护 DACL，或 Unix `0700`。
 
+### 更新已安装 Agent
+
+修改以下任一内容后，都需要同步已安装 Agent，才能让 `runtime/agents/*/workspace` 中的副本、OpenClaw Agent 配置和 runtime bundle 与源码一致：
+
+- `agents/<agent-id>/workspace/` 中的角色说明、工具规则或身份说明；
+- `agents/common/` 中的通用规则；
+- `agents/packages/builtin/*.json` 中的 Agent、模型、sandbox 或工具配置；
+- 安装脚本、模板或会被安装流程复制到 Agent workspace 的内容。
+
+先运行 dry-run，再执行 Apply：
+
+**Windows（PowerShell；可用 `-AgentIds` 只同步指定 Agent）**
+
+```powershell
+# 全部项目 Agent：先预览，再同步
+pwsh -NoProfile -File scripts/install.ps1 -RuntimeRoot runtime
+pwsh -NoProfile -File scripts/install.ps1 -Apply -Yes -RuntimeRoot runtime
+
+# 只同步指定 Agent（逗号分隔）
+pwsh -NoProfile -File scripts/install.ps1 -Apply -Yes -RuntimeRoot runtime `
+  -AgentIds developer-agent,test-agent
+
+# 同步后验证
+pwsh -NoProfile -File scripts/validate-install.ps1
+```
+
+**Linux（Bash；当前 Bash 安装器会同步全部项目 Agent）**
+
+```bash
+# 全部项目 Agent：先预览，再同步
+bash scripts/install.sh --runtime-root runtime
+bash scripts/install.sh --apply --yes --runtime-root runtime
+
+# 同步后验证
+bash scripts/validate-install.sh
+```
+
+### 安全重装全部项目 Agent
+
+仅在 Agent 注册状态、runtime workspace/state 损坏，或常规更新无法恢复一致性时使用。重装会备份配置和受管理 runtime，删除**经路径校验确认属于本项目**的已安装 Agent，再重新安装；它不会自行停止或启动 OpenClaw Gateway。
+
+先手动停止 Gateway，再执行 dry-run 和 Apply：
+
+**Windows（PowerShell）**
+
+```powershell
+# Gateway 已停止后：先预览
+pwsh -NoProfile -File scripts/reinstall-agents.ps1 -RuntimeRoot runtime
+
+# Gateway 已停止后：执行安全重装；-GatewayStopped 是必填确认
+pwsh -NoProfile -File scripts/reinstall-agents.ps1 -Apply -Yes -GatewayStopped `
+  -RuntimeRoot runtime
+```
+
+**Linux（Bash；完整安全重装目前使用跨平台 PowerShell 7 脚本）**
+
+```bash
+# 先确认 pwsh 可用，并手动停止 OpenClaw Gateway
+pwsh --version
+
+# Gateway 已停止后：先预览
+pwsh -NoProfile -File scripts/reinstall-agents.ps1 -RuntimeRoot runtime
+
+# Gateway 已停止后：执行安全重装
+pwsh -NoProfile -File scripts/reinstall-agents.ps1 -Apply -Yes -GatewayStopped \
+  -RuntimeRoot runtime
+```
+
+重装完成后再启动 Gateway，并执行对应平台的 `validate-install` 命令。若将来新增 Bash 重装脚本或修改这些参数，必须同步更新本节命令。
+
 ## 运行 Workflow
 
 初始化本地 runtime/human capability：
@@ -77,6 +147,8 @@ node scripts/workflow.mjs init --project-root .
 
 请求文件示例：
 
+**Windows（PowerShell）**
+
 ```json
 {
   "text": "实现功能并完成评审、测试和发布准备",
@@ -84,9 +156,29 @@ node scripts/workflow.mjs init --project-root .
 }
 ```
 
+**Linux（Bash）**
+
+```json
+{
+  "text": "实现功能并完成评审、测试和发布准备",
+  "project_path_abs": "/absolute/path/to/target-repository"
+}
+```
+
 创建并推进 workflow：
 
+**Windows（PowerShell）**
+
 ```powershell
+node scripts/workflow.mjs bootstrap --project-root . --workflow-id WF-example --request-file request.json
+node scripts/workflow.mjs run --project-root . --workflow-id WF-example
+node scripts/workflow.mjs snapshot --project-root . --workflow-id WF-example
+node scripts/workflow.mjs audit --project-root . --workflow-id WF-example
+```
+
+**Linux（Bash）**
+
+```bash
 node scripts/workflow.mjs bootstrap --project-root . --workflow-id WF-example --request-file request.json
 node scripts/workflow.mjs run --project-root . --workflow-id WF-example
 node scripts/workflow.mjs snapshot --project-root . --workflow-id WF-example
@@ -97,6 +189,13 @@ node scripts/workflow.mjs audit --project-root . --workflow-id WF-example
 
 ```powershell
 node scripts/workflow.mjs approve --project-root . --workflow-id WF-example `
+  --decision-id DEC-example --choice APPROVE --decided-by human:operator
+```
+
+**Linux（Bash；续行符为反斜杠，不能使用 PowerShell 反引号）**
+
+```bash
+node scripts/workflow.mjs approve --project-root . --workflow-id WF-example \
   --decision-id DEC-example --choice APPROVE --decided-by human:operator
 ```
 
@@ -123,7 +222,7 @@ pwsh -NoProfile -File scripts/start-monitor.ps1 -Port 4319
 ```
 
 ```bash
-bash scripts/start-monitor.sh
+MONITOR_PORT=4319 bash scripts/start-monitor.sh
 ```
 
 打开 `monitor/ui/index.html`。后端默认监听 `127.0.0.1:4319`，提供 GET-only API、SSE、checkpoint audit、自动续跑、会话目录、artifact 观察与健康分类。部署说明见 [docs/monitoring.md](docs/monitoring.md)。项目不包含 Java、Servlet 或 Tomcat monitor 代理。
@@ -150,9 +249,23 @@ runtime/
 npm test
 ```
 
+**Linux（Bash；`npm test` 命令相同）**
+
+```bash
+npm test
+```
+
 也可分组执行：
 
 ```powershell
+node --test tests/stategraph-*.test.mjs
+node --test --test-concurrency=1 tests/monitor-*.test.mjs
+node --test tests/runtime-bundle.test.mjs tests/validate-install.test.mjs
+```
+
+**Linux（Bash；shell 会展开 `*` 通配符）**
+
+```bash
 node --test tests/stategraph-*.test.mjs
 node --test --test-concurrency=1 tests/monitor-*.test.mjs
 node --test tests/runtime-bundle.test.mjs tests/validate-install.test.mjs
