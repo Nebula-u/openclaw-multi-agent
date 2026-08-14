@@ -66,20 +66,34 @@ function clone(value) {
   return JSON.parse(JSON.stringify(value));
 }
 
-function acquireGlobalSandboxLock(projectRoot, staleMs = 20 * 60 * 1000) {
-  const path = join(projectRoot, 'runtime', 'stategraph', 'test-sandbox-global.lock');
+function globalSandboxLockPath(projectRoot) {
+  return join(projectRoot, 'runtime', 'stategraph', 'test-sandbox-global.lock');
+}
+
+function acquireGlobalSandboxLock(projectRoot) {
+  const path = globalSandboxLockPath(projectRoot);
   mkdirSync(resolve(path, '..'), { recursive: true });
   let descriptor;
   try { descriptor = openSync(path, 'wx', 0o600); }
   catch (error) {
     if (error.code !== 'EEXIST') throw error;
-    if (Date.now() - statSync(path).mtimeMs <= staleMs) fail('SANDBOX_GLOBAL_BUSY', 'another test-agent owns the global OpenClaw sandbox configuration lease');
-    unlinkSync(path);
-    descriptor = openSync(path, 'wx', 0o600);
+    fail('SANDBOX_GLOBAL_BUSY', 'another test-agent owns the global OpenClaw sandbox configuration lease');
   }
   const lock = { path, token: randomUUID(), acquired_at: new Date().toISOString() };
   writeFileSync(descriptor, JSON.stringify(lock));
   closeSync(descriptor);
+  return lock;
+}
+
+function updateGlobalSandboxLock(lock, patch) {
+  if (!lock?.path || !existsSync(lock.path)) fail('SANDBOX_GLOBAL_LOCK_INVALID', 'global sandbox lock is missing');
+  let recorded;
+  try { recorded = JSON.parse(readFileSync(lock.path, 'utf8')); }
+  catch { fail('SANDBOX_GLOBAL_LOCK_INVALID', 'global sandbox lock cannot be updated'); }
+  if (recorded.token !== lock.token) fail('SANDBOX_GLOBAL_LOCK_OWNERSHIP', 'refusing to update another sandbox lease');
+  const updated = { ...recorded, ...patch };
+  atomicWriteJson(lock.path, updated);
+  Object.assign(lock, updated);
   return lock;
 }
 
@@ -90,6 +104,57 @@ function releaseGlobalSandboxLock(lock) {
   catch { fail('SANDBOX_GLOBAL_LOCK_INVALID', 'global sandbox lock cannot be verified for release'); }
   if (recorded.token !== lock.token) fail('SANDBOX_GLOBAL_LOCK_OWNERSHIP', 'refusing to release another sandbox lease');
   unlinkSync(lock.path);
+}
+
+async function restoreSandboxLeaseConfig(lease, runner) {
+  const configResult = await runner('openclaw', ['config', 'get', 'agents.list', '--json']);
+  const { index, agent } = configAgent(parseCommandJson(configResult, 'openclaw config get agents.list'));
+  if (index !== lease.config_index) fail('SANDBOX_CONFIG_INDEX_CHANGED', 'test-agent config index changed during the sandbox lease', { expected: lease.config_index, actual: index });
+  const currentBinds = [...(agent.sandbox?.docker?.binds ?? [])];
+  if (JSON.stringify(currentBinds) === JSON.stringify(lease.desired_binds)) {
+    const writeResult = await runner('openclaw', ['config', 'set', `agents.list[${index}].sandbox.docker.binds`, JSON.stringify(lease.previous_binds), '--strict-json']);
+    if (writeResult.exit_code !== 0) fail('SANDBOX_CONFIG_RESTORE_FAILED', 'failed to restore the prior sandbox bind configuration', { stdout: writeResult.stdout, stderr: writeResult.stderr });
+  } else if (JSON.stringify(currentBinds) !== JSON.stringify(lease.previous_binds)) {
+    fail('SANDBOX_CONFIG_CHANGED_DURING_LEASE', 'test sandbox config diverged from both the leased and prior bind sets; refusing to overwrite it');
+  }
+  const recreated = await runner('openclaw', ['sandbox', 'recreate', '--session', lease.session_key, '--force']);
+  if (recreated.exit_code !== 0) fail('SANDBOX_CLEANUP_FAILED', 'failed to remove the test sandbox runtime', { stdout: recreated.stdout, stderr: recreated.stderr });
+  return true;
+}
+
+export async function recoverStaleSandboxLease({ projectRootInput, commandRunner = null, staleMs = 20 * 60 * 1000 } = {}) {
+  const projectRoot = resolve(projectRootInput);
+  const path = globalSandboxLockPath(projectRoot);
+  if (!existsSync(path)) return false;
+  if (Date.now() - statSync(path).mtimeMs <= staleMs) fail('SANDBOX_GLOBAL_BUSY', 'another test-agent owns the global OpenClaw sandbox configuration lease');
+  let lock;
+  try { lock = JSON.parse(readFileSync(path, 'utf8')); }
+  catch { fail('SANDBOX_GLOBAL_LOCK_INVALID', 'stale global sandbox lock is not valid JSON'); }
+  if (!lock.token) fail('SANDBOX_GLOBAL_LOCK_INVALID', 'stale global sandbox lock has no ownership token');
+  if (!lock.lease_path_abs) {
+    unlinkSync(path);
+    return true;
+  }
+  const artifactRoot = join(projectRoot, 'runtime', 'artifacts');
+  if (!isAbsolute(lock.lease_path_abs) || !isWithinPath(lock.lease_path_abs, artifactRoot)) {
+    fail('SANDBOX_STALE_LEASE_ESCAPE', 'stale global sandbox lock references a lease outside runtime/artifacts', { lease_path_abs: lock.lease_path_abs });
+  }
+  if (!existsSync(lock.lease_path_abs)) fail('SANDBOX_STALE_LEASE_MISSING', 'stale global sandbox lock references a missing lease', { lease_path_abs: lock.lease_path_abs });
+  if (!lstatSync(lock.lease_path_abs).isFile() || lstatSync(lock.lease_path_abs).isSymbolicLink()) {
+    fail('SANDBOX_STALE_LEASE_UNSAFE', 'stale sandbox lease must be a regular non-symlink file');
+  }
+  let lease;
+  try { lease = JSON.parse(readFileSync(lock.lease_path_abs, 'utf8')); }
+  catch { fail('SANDBOX_STALE_LEASE_INVALID', 'stale sandbox lease is not valid JSON'); }
+  if (resolve(lease.project_root_abs ?? '') !== projectRoot || resolve(lease.global_lock?.path ?? '') !== path) {
+    fail('SANDBOX_STALE_LEASE_IDENTITY', 'stale sandbox lease identity does not match the current project lock');
+  }
+  if (lease.global_lock?.token !== lock.token) fail('SANDBOX_GLOBAL_LOCK_OWNERSHIP', 'stale sandbox lease does not own the global lock');
+  const runner = (executable, args, options = {}) => runSandboxCommand(executable, args, { ...options, runner: commandRunner });
+  await restoreSandboxLeaseConfig(lease, runner);
+  atomicWriteJson(lock.lease_path_abs, { ...lease, recovered_at: new Date().toISOString(), recovery_reason: 'STALE_GLOBAL_LEASE' });
+  releaseGlobalSandboxLock(lock);
+  return true;
 }
 
 export function loadTestSandboxPolicy(projectRootInput) {
@@ -363,7 +428,10 @@ export async function prepareTestSandboxSession({ projectRootInput, task, sessio
   const projectRoot = resolve(projectRootInput);
   const { policy, policyPath } = loadTestSandboxPolicy(projectRoot);
   const mountPlan = createSandboxMountPlan({ task, policy, runtimeRootAbs });
+  await recoverStaleSandboxLease({ projectRootInput: projectRoot, commandRunner });
   const globalLock = acquireGlobalSandboxLock(projectRoot);
+  let lease = null;
+  let leasePath = null;
   try {
   const runner = (executable, args, options = {}) => runSandboxCommand(executable, args, { ...options, runner: commandRunner });
   const configResult = await runner('openclaw', ['config', 'get', 'agents.list', '--json']);
@@ -374,45 +442,43 @@ export async function prepareTestSandboxSession({ projectRootInput, task, sessio
   const setArgs = ['config', 'set', `agents.list[${index}].sandbox.docker.binds`, JSON.stringify(desiredBinds), '--strict-json', '--dry-run'];
   const dryRun = await runner('openclaw', setArgs);
   if (dryRun.exit_code !== 0) fail('SANDBOX_CONFIG_PATCH_REJECTED', 'OpenClaw rejected the dynamic sandbox bind plan', { stdout: dryRun.stdout, stderr: dryRun.stderr });
-  let applied = false;
-  try {
-    const writeResult = await runner('openclaw', setArgs.slice(0, -1));
-    if (writeResult.exit_code !== 0) fail('SANDBOX_CONFIG_PATCH_FAILED', 'OpenClaw failed to apply the dynamic sandbox bind plan', { stdout: writeResult.stdout, stderr: writeResult.stderr });
-    applied = true;
-    const recreated = await runner('openclaw', ['sandbox', 'recreate', '--session', sessionKey, '--force']);
-    if (recreated.exit_code !== 0) fail('SANDBOX_RECREATE_FAILED', 'OpenClaw failed to recreate the test sandbox session', { stdout: recreated.stdout, stderr: recreated.stderr });
-    const explained = parseCommandJson(await runner('openclaw', ['sandbox', 'explain', '--session', sessionKey, '--json']), 'openclaw sandbox explain');
-    const effective = explained.sandbox ?? {};
-    if (effective.sessionIsSandboxed !== true || effective.mode !== 'all' || effective.backend !== 'docker'
-      || effective.scope !== 'session' || effective.workspaceAccess !== 'none'
-      || !Array.isArray(effective.workspaceMounts) || effective.workspaceMounts.length < mountPlan.mounts.length) {
-      fail('SANDBOX_EFFECTIVE_POLICY_MISMATCH', 'OpenClaw did not resolve the required sandbox policy for the test session', { effective });
-    }
-  } catch (error) {
-    if (applied) {
-      try {
-        await runner('openclaw', ['config', 'set', `agents.list[${index}].sandbox.docker.binds`, JSON.stringify(previousBinds), '--strict-json']);
-        await runner('openclaw', ['sandbox', 'recreate', '--session', sessionKey, '--force']);
-      } catch (restoreError) {
-        error.details = { ...(error.details ?? {}), restore_error: restoreError.message };
-        error.code = 'SANDBOX_CONFIG_RESTORE_FAILED';
-      }
-    }
-    throw error;
-  }
-  const leasePath = join(task.artifact_root_abs, '.stategraph', 'test-sandbox-lease.json');
+  leasePath = join(task.artifact_root_abs, '.stategraph', 'test-sandbox-lease.json');
   mkdirSync(join(task.artifact_root_abs, '.stategraph'), { recursive: true });
-  const lease = {
+  lease = {
     schema_version: 1, agent_id: 'test-agent', session_id: sessionId, session_key: sessionKey,
     project_root_abs: projectRoot, policy_path_abs: policyPath, policy_digest: sandboxPolicyDigest(policy), policy,
     config_index: index, previous_binds: previousBinds, desired_binds: desiredBinds, mount_plan: mountPlan,
     created_at: new Date().toISOString(), lease_path_abs: leasePath, global_lock: globalLock,
   };
   atomicWriteJson(leasePath, lease);
+  updateGlobalSandboxLock(globalLock, { lease_path_abs: leasePath, session_key: sessionKey });
+  const writeResult = await runner('openclaw', setArgs.slice(0, -1));
+  if (writeResult.exit_code !== 0) fail('SANDBOX_CONFIG_PATCH_FAILED', 'OpenClaw failed to apply the dynamic sandbox bind plan', { stdout: writeResult.stdout, stderr: writeResult.stderr });
+  const recreated = await runner('openclaw', ['sandbox', 'recreate', '--session', sessionKey, '--force']);
+  if (recreated.exit_code !== 0) fail('SANDBOX_RECREATE_FAILED', 'OpenClaw failed to recreate the test sandbox session', { stdout: recreated.stdout, stderr: recreated.stderr });
+  const explained = parseCommandJson(await runner('openclaw', ['sandbox', 'explain', '--session', sessionKey, '--json']), 'openclaw sandbox explain');
+  const effective = explained.sandbox ?? {};
+  if (effective.sessionIsSandboxed !== true || effective.mode !== 'all' || effective.backend !== 'docker'
+    || effective.scope !== 'session' || effective.workspaceAccess !== 'none'
+    || !Array.isArray(effective.workspaceMounts) || effective.workspaceMounts.length < mountPlan.mounts.length) {
+    fail('SANDBOX_EFFECTIVE_POLICY_MISMATCH', 'OpenClaw did not resolve the required sandbox policy for the test session', { effective });
+  }
   const attestation = await verifySandboxRuntime({ lease, commandRunner });
   return { lease, leasePath, policy, mountPlan, attestation };
   } catch (error) {
-    try { releaseGlobalSandboxLock(globalLock); } catch (lockError) { error.details = { ...(error.details ?? {}), lock_error: lockError.message }; }
+    if (lease) {
+      try {
+        const runner = (executable, args, options = {}) => runSandboxCommand(executable, args, { ...options, runner: commandRunner });
+        await restoreSandboxLeaseConfig(lease, runner);
+        if (leasePath) atomicWriteJson(leasePath, { ...lease, recovered_at: new Date().toISOString(), recovery_reason: error.code ?? 'SANDBOX_PREPARE_FAILED' });
+        releaseGlobalSandboxLock(globalLock);
+      } catch (restoreError) {
+        error.details = { ...(error.details ?? {}), restore_error: restoreError.message, restore_code: restoreError.code ?? null };
+        error.code = 'SANDBOX_CONFIG_RESTORE_FAILED';
+      }
+    } else {
+      try { releaseGlobalSandboxLock(globalLock); } catch (lockError) { error.details = { ...(error.details ?? {}), lock_error: lockError.message }; }
+    }
     throw error;
   }
 }
@@ -455,14 +521,7 @@ export async function verifySandboxRuntime({ lease, commandRunner = null } = {})
 
 export async function cleanupTestSandboxSession({ lease, leasePath, commandRunner = null } = {}) {
   const runner = (executable, args, options = {}) => runSandboxCommand(executable, args, { ...options, runner: commandRunner });
-  const configResult = await runner('openclaw', ['config', 'get', 'agents.list', '--json']);
-  const { index, agent } = configAgent(parseCommandJson(configResult, 'openclaw config get agents.list'));
-  const currentBinds = [...(agent.sandbox?.docker?.binds ?? [])];
-  if (JSON.stringify(currentBinds) !== JSON.stringify(lease.desired_binds)) fail('SANDBOX_CONFIG_CHANGED_DURING_LEASE', 'test sandbox config changed while the run was active; refusing to overwrite it');
-  const writeResult = await runner('openclaw', ['config', 'set', `agents.list[${index}].sandbox.docker.binds`, JSON.stringify(lease.previous_binds), '--strict-json']);
-  if (writeResult.exit_code !== 0) fail('SANDBOX_CONFIG_RESTORE_FAILED', 'failed to restore the prior sandbox bind configuration', { stdout: writeResult.stdout, stderr: writeResult.stderr });
-  const recreated = await runner('openclaw', ['sandbox', 'recreate', '--session', lease.session_key, '--force']);
-  if (recreated.exit_code !== 0) fail('SANDBOX_CLEANUP_FAILED', 'failed to remove the test sandbox runtime', { stdout: recreated.stdout, stderr: recreated.stderr });
+  await restoreSandboxLeaseConfig(lease, runner);
   if (leasePath) atomicWriteJson(leasePath, { ...lease, cleaned_at: new Date().toISOString() });
   releaseGlobalSandboxLock(lease.global_lock);
   return true;

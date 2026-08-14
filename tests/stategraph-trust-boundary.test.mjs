@@ -6,11 +6,18 @@ import { join, resolve } from 'node:path';
 import test from 'node:test';
 import { createGitWorktreeManager } from '../scripts/stategraph/git-worktree.mjs';
 import { createContextManifest, verifyContextManifest } from '../scripts/stategraph/context-manifest.mjs';
+import { buildLocalGate } from '../scripts/stategraph/output-ingestion.mjs';
 
 const ROOT = resolve(import.meta.dirname, '..');
 
 function git(cwd, ...args) {
   const result = spawnSync('git', ['-C', cwd, ...args], { encoding: 'utf8', shell: false, windowsHide: true });
+  assert.equal(result.status, 0, result.stderr);
+  return result.stdout.trim();
+}
+
+function gitInput(cwd, input, ...args) {
+  const result = spawnSync('git', ['-C', cwd, ...args], { encoding: 'utf8', input, shell: false, windowsHide: true });
   assert.equal(result.status, 0, result.stderr);
   return result.stdout.trim();
 }
@@ -79,3 +86,43 @@ test('immutable context manifest detects input tampering before reconcile', () =
   }
 });
 
+test('local Gate rejects malformed, unrelated and HEAD-mismatched output commits', () => {
+  const temp = mkdtempSync(join(tmpdir(), 'stategraph-commit-gate-'));
+  try {
+    const { repo, commit } = repository(temp);
+    const manager = createGitWorktreeManager({ projectRoot: join(temp, 'framework') });
+    const task = {
+      workflow_id: 'WF-commit-gate', task_id: 'TASK-commit-gate-dev', run_id: 'RUN-commit-gate-dev-A1',
+      input_commit: commit, target_project_root_abs: repo, worktree_path_abs: null, kind: 'DEVELOPMENT',
+      artifact_root_abs: join(temp, 'artifact'),
+    };
+    task.worktree_path_abs = manager.pathFor(task);
+    manager.prepare(task);
+    mkdirSync(task.artifact_root_abs, { recursive: true });
+    const result = (outputCommit) => ({
+      result_status: 'COMPLETED', output_commit: outputCommit,
+      self_validation: { preflight_passed: true, checks: [] },
+    });
+
+    const malformed = buildLocalGate(task, result('not-a-full-sha'), [], undefined, { worktrees: manager });
+    assert.equal(malformed.gate.overall, 'FAIL');
+    assert.match(malformed.gate.items.find((item) => item.item_id === 'commit_binding').detail, /full output commit SHA/u);
+
+    const emptyTree = gitInput(repo, '', 'hash-object', '-t', 'tree', '-w', '--stdin');
+    const unrelated = gitInput(repo, 'unrelated\n', 'commit-tree', emptyTree);
+    const ancestry = buildLocalGate(task, result(unrelated), [], undefined, { worktrees: manager });
+    assert.equal(ancestry.gate.overall, 'FAIL');
+    assert.match(ancestry.gate.items.find((item) => item.item_id === 'commit_binding').detail, /not based on input_commit/u);
+
+    writeFileSync(join(task.worktree_path_abs, 'candidate.txt'), 'candidate\n');
+    git(task.worktree_path_abs, 'add', 'candidate.txt');
+    git(task.worktree_path_abs, 'commit', '-m', 'candidate');
+    const candidate = manager.head(task.worktree_path_abs);
+    const mismatch = buildLocalGate(task, result(commit), [], undefined, { worktrees: manager });
+    assert.equal(mismatch.gate.overall, 'FAIL');
+    assert.match(mismatch.gate.items.find((item) => item.item_id === 'commit_binding').detail, /does not equal output_commit/u);
+
+    const accepted = buildLocalGate(task, result(candidate), [], undefined, { worktrees: manager });
+    assert.equal(accepted.gate.overall, 'PASS');
+  } finally { rmSync(temp, { recursive: true, force: true }); }
+});

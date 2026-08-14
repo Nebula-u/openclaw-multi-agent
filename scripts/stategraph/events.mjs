@@ -13,7 +13,11 @@ export function canonicalJson(value) {
 }
 
 export function sha256(value) {
-  return createHash('sha256').update(typeof value === 'string' ? value : canonicalJson(value), 'utf8').digest('hex');
+  const hash = createHash('sha256');
+  if (typeof value === 'string') hash.update(value, 'utf8');
+  else if (ArrayBuffer.isView(value)) hash.update(Buffer.from(value.buffer, value.byteOffset, value.byteLength));
+  else hash.update(canonicalJson(value), 'utf8');
+  return hash.digest('hex');
 }
 
 export function appendStateEvent(state, changes, type, payload, occurredAt) {
