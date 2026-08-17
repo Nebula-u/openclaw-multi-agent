@@ -1,4 +1,6 @@
 import { createServer } from 'node:http';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { URL } from 'node:url';
 import { createStateGraphRuntime } from '../scripts/stategraph/runtime.mjs';
 import { MonitorEventHub, encodeSse } from './event-hub.mjs';
@@ -23,6 +25,17 @@ function sendJson(response, status, value, headers = {}) {
     ...headers,
   });
   response.end(body);
+}
+
+function sendAsset(response, asset, headers = {}) {
+  response.writeHead(200, {
+    'content-type': asset.contentType,
+    'content-length': asset.body.length,
+    'cache-control': 'no-cache',
+    'x-content-type-options': 'nosniff',
+    ...headers,
+  });
+  response.end(asset.body);
 }
 
 function originHeaders(request, config) {
@@ -103,6 +116,14 @@ export function createMonitorServer(config, { stateRuntime: providedRuntime = nu
   const telemetry = createTelemetryRepository(config.projectRoot, telemetryDatabase);
   telemetry.prune({ maxEvents: config.telemetryMaxEvents, activityRetentionDays: config.activityRetentionDays });
   const hub = eventHub ?? new MonitorEventHub({ retention: config.sseRetention });
+  const uiRoot = join(config.projectRoot, 'monitor', 'ui');
+  const uiAssets = new Map([
+    ['/', { contentType: 'text/html; charset=utf-8', body: readFileSync(join(uiRoot, 'index.html')) }],
+    ['/index.html', { contentType: 'text/html; charset=utf-8', body: readFileSync(join(uiRoot, 'index.html')) }],
+    ['/styles.css', { contentType: 'text/css; charset=utf-8', body: readFileSync(join(uiRoot, 'styles.css')) }],
+    ['/app.js', { contentType: 'text/javascript; charset=utf-8', body: readFileSync(join(uiRoot, 'app.js')) }],
+    ['/config.js', { contentType: 'text/javascript; charset=utf-8', body: readFileSync(join(uiRoot, 'config.js')) }],
+  ]);
   const publish = (type, payload, meta) => hub.publish(type, payload, meta);
   let authoritativeStates = [];
   let snapshot = { schema_version: 1, source: 'LANGGRAPH_CHECKPOINTS', generated_at: new Date().toISOString(), workflows: [] };
@@ -179,6 +200,7 @@ export function createMonitorServer(config, { stateRuntime: providedRuntime = nu
       if (request.method === 'OPTIONS') { response.writeHead(204, cors); return response.end(); }
       const url = new URL(request.url, `http://${config.host}:${config.port}`);
       const path = url.pathname;
+      if (request.method === 'GET' && uiAssets.has(path)) return sendAsset(response, uiAssets.get(path), cors);
       if (request.method === 'GET' && path === '/api/client-config') {
         return sendJson(response, 200, { ok: true, api_url: `http://${config.host}:${config.port}`, local_only: true, read_only: true, source: 'LANGGRAPH_CHECKPOINTS' }, cors);
       }

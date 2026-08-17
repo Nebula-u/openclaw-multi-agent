@@ -165,7 +165,7 @@ openclaw gateway restart
 openclaw gateway status
 ```
 
-插件默认接管 owner 发给 manager-agent 的 `tui-*`、`dashboard:*` 和 `main` 交互会话：渠道消息在入站阶段接管，经 Gateway 认证的 WebChat、Dashboard、TUI 和 CLI 直接 Agent 调用在 Agent 运行前接管。该运行前钩子需要显式启用 `allowConversationAccess`；其他渠道仍必须由 OpenClaw 标记为 owner。StateGraph 自己通过 CLI 启动的 `explicit:*` manager-agent 任务不会被再次接管，因此不会递归创建 workflow。发送 `/workflow status` 可读取并推进当前会话关联的 workflow；路线待确认时发送“确认”、“这条路线可以，就这么走”或 `/workflow approve` 会写入正式人工审批；Agent 三次失败后的错误升级节点也可用“确认重试”开启同一 Agent 的新重试批次。
+插件默认接管 owner 发给 manager-agent 的 `tui-*`、`dashboard:*` 和 `main` 交互会话：渠道消息在入站阶段接管，经 Gateway 认证的 WebChat、Dashboard、TUI 和 CLI 直接 Agent 调用由合成回复钩子接管，不调用 manager 模型，也不会显示为安全阻断错误。该会话钩子需要显式启用 `allowConversationAccess`；其他渠道仍必须由 OpenClaw 标记为 owner。StateGraph 自己通过 CLI 启动的 `explicit:*` manager-agent 任务不会被再次接管，因此不会递归创建 workflow。发送 `/workflow status` 可读取并推进当前会话关联的 workflow；路线待确认时发送“确认”、“这条路线可以，就这么走”或 `/workflow approve` 会写入正式人工审批；Agent 三次失败后的错误升级节点也可用“确认重试”开启同一 Agent 的新重试批次。
 
 初始化本地 runtime/human capability：
 
@@ -253,7 +253,7 @@ pwsh -NoProfile -File scripts/start-monitor.ps1 -Port 4319
 MONITOR_PORT=4319 bash scripts/start-monitor.sh
 ```
 
-打开 `monitor/ui/index.html`。后端默认监听 `127.0.0.1:4319`，提供 GET-only API、SSE、checkpoint audit、自动续跑、会话目录、artifact 观察与健康分类。部署说明见 [docs/monitoring.md](docs/monitoring.md)。项目不包含 Java、Servlet 或 Tomcat monitor 代理。
+启动后打开 `http://127.0.0.1:4319/`；面板与 GET-only API、SSE 使用同一个 Node 服务。后端还提供 checkpoint audit、自动续跑、会话目录、artifact 观察与健康分类。部署说明见 [docs/monitoring.md](docs/monitoring.md)。项目不包含 Java、Servlet 或 Tomcat monitor 代理。
 
 ## 运行目录
 

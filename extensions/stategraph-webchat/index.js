@@ -56,18 +56,19 @@ export default {
       }
       catch (error) { api.logger.error?.(`stategraph-webchat intake failed: ${error.stack ?? error.message}`); return { handled: true, reply: { text: `StateGraph 接入失败：${error.message}` } }; }
     });
-    // Dashboard, TUI and CLI turns bypass channel ingress. Gate them before
-    // the manager model runs; explicit graph child sessions still pass.
-    api.on('before_agent_run', async (event, ctx) => {
-      if (!isInteractiveManagerRun(ctx, event, { managerAgentId, sessionPrefixes })) return { outcome: 'pass' };
-      if (!event.prompt?.trim()) return { outcome: 'block', reason: 'empty workflow request', message: '需求内容不能为空。', category: 'stategraph_workflow' };
+    // Dashboard, TUI and CLI turns bypass channel ingress. Use OpenClaw's
+    // synthetic-reply hook so StateGraph remains the executor without turning
+    // a successfully handled workflow request into a security-block error.
+    api.on('before_agent_reply', async (event, ctx) => {
+      if (!isInteractiveManagerRun(ctx, event, { managerAgentId, sessionPrefixes })) return;
+      if (!event.cleanedBody?.trim()) return { handled: true, reply: { text: '需求内容不能为空。' }, reason: 'empty workflow request' };
       try {
-        const result = await handle(event.prompt, ctx.sessionKey, event.senderId);
-        return { outcome: 'block', reason: 'handled by StateGraph workflow', message: result.reply, category: 'stategraph_workflow' };
+        const result = await handle(event.cleanedBody, ctx.sessionKey, ctx.senderId);
+        return { handled: true, reply: { text: result.reply }, reason: 'handled by StateGraph workflow' };
       }
       catch (error) {
         api.logger.error?.(`stategraph-webchat intake failed: ${error.stack ?? error.message}`);
-        return { outcome: 'block', reason: 'StateGraph workflow intake failed', message: `StateGraph 接入失败：${error.message}`, category: 'stategraph_workflow_error' };
+        return { handled: true, reply: { text: `StateGraph 接入失败：${error.message}` }, reason: 'StateGraph workflow intake failed' };
       }
     }, { priority: 100, timeoutMs: 120000 });
     api.on('gateway_stop', async () => { clearInterval(timer); runtime?.close(); runtime = null; bridge = null; });

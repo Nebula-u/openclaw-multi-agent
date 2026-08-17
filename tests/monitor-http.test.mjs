@@ -8,9 +8,8 @@ import { createStateGraphRuntime } from '../scripts/stategraph/runtime.mjs';
 import { createMonitorServer } from '../monitor/server.mjs';
 
 const ROOT = resolve(import.meta.dirname, '..');
-const WORKFLOW_ID = 'WF-monitor-http';
-
 async function setup() {
+  const workflowId = `WF-monitor-http-${process.pid}-${Date.now().toString(36)}`;
   const temp = mkdtempSync(join(tmpdir(), 'monitor-stategraph-'));
   const target = join(temp, 'target');
   mkdirSync(target, { recursive: true });
@@ -20,7 +19,7 @@ async function setup() {
   execFileSync('git', ['commit', '--allow-empty', '-m', '初始化监控测试仓库'], { cwd: target, stdio: 'ignore' });
   const runtime = createStateGraphRuntime({ projectRoot: ROOT, databasePath: join(temp, 'checkpoints.db'), skipAuthority: true,
     dispatcher: { start: (task) => task, reconcile: (task) => ({ kind: 'WAITING', task }) } });
-  await runtime.bootstrap({ workflowId: WORKFLOW_ID, request: { text: 'monitor HTTP test', project_path_abs: target } });
+  await runtime.bootstrap({ workflowId, request: { text: 'monitor HTTP test', project_path_abs: target } });
   const monitor = createMonitorServer({
     projectRoot: ROOT, databasePath: join(temp, 'checkpoints.db'), monitorDatabasePath: ':memory:', host: '127.0.0.1', port: 0,
     allowedOrigins: ['null'], reconcileIntervalMs: 2000, sseRetention: 100, requestBodyLimit: 65536,
@@ -29,12 +28,17 @@ async function setup() {
     workflowContinuationEnabled: false, workflowContinuationMaxTurns: 8, sessionRoot: join(temp, 'sessions'),
   }, { stateRuntime: runtime });
   const address = await monitor.start();
-  return { monitor, runtime, temp, base: 'http://127.0.0.1:' + address.port, async close() { await monitor.close(); runtime.close(); rmSync(temp, { recursive: true, force: true }); } };
+  return { monitor, runtime, workflowId, temp, base: 'http://127.0.0.1:' + address.port, async close() { await monitor.close(); runtime.close(); rmSync(temp, { recursive: true, force: true }); } };
 }
 
 test('monitor reads workflows only from latest LangGraph checkpoints', async () => {
   const value = await setup();
   try {
+    const dashboard = await fetch(value.base + '/');
+    assert.equal(dashboard.status, 200);
+    assert.match(await dashboard.text(), /OpenClaw Mission Monitor/u);
+    assert.match(await (await fetch(value.base + '/app.js')).text(), /EventSource/u);
+    assert.match(await (await fetch(value.base + '/styles.css')).text(), /conversation-history/u);
     const health = await fetch(value.base + '/api/health');
     assert.equal(health.status, 200);
     const healthBody = await health.json();
@@ -45,10 +49,10 @@ test('monitor reads workflows only from latest LangGraph checkpoints', async () 
     assert.equal(clientConfig.read_only, true);
     assert.equal(clientConfig.source, 'LANGGRAPH_CHECKPOINTS');
     const workflows = await (await fetch(value.base + '/api/workflows')).json();
-    assert.equal(workflows.workflows[0].workflow_id, WORKFLOW_ID);
+    assert.equal(workflows.workflows[0].workflow_id, value.workflowId);
     assert.equal(workflows.workflows[0].protocol_version, 'stategraph-checkpoint-v1');
-    const snapshot = await (await fetch(value.base + '/api/workflows/' + WORKFLOW_ID + '/snapshot')).json();
-    assert.equal(snapshot.snapshot.workflows[0].workflow_id, WORKFLOW_ID);
+    const snapshot = await (await fetch(value.base + '/api/workflows/' + value.workflowId + '/snapshot')).json();
+    assert.equal(snapshot.snapshot.workflows[0].workflow_id, value.workflowId);
     assert.equal((await fetch(value.base + '/api/workflows/WF-missing/snapshot')).status, 404);
   } finally { await value.close(); }
 });
@@ -56,9 +60,9 @@ test('monitor reads workflows only from latest LangGraph checkpoints', async () 
 test('monitor remains reachable while reporting a tampered checkpoint event chain', async () => {
   const value = await setup();
   try {
-    const state = await value.runtime.state(WORKFLOW_ID);
+    const state = await value.runtime.state(value.workflowId);
     const tampered = state.events.map((event, index) => index === 0 ? { ...event, type: 'TAMPERED' } : event);
-    await value.runtime.graph.updateState({ configurable: { thread_id: WORKFLOW_ID, checkpoint_ns: '' } }, { events: tampered });
+    await value.runtime.graph.updateState({ configurable: { thread_id: value.workflowId, checkpoint_ns: '' } }, { events: tampered });
     const health = await fetch(value.base + '/api/health');
     const body = await health.json();
     assert.equal(health.status, 200);

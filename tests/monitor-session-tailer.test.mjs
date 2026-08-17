@@ -5,6 +5,7 @@ import { join, resolve } from 'node:path';
 import test from 'node:test';
 import { openTelemetryDatabase, createTelemetryRepository } from '../monitor/telemetry-repository.mjs';
 import { createSessionTailer } from '../monitor/session-tailer.mjs';
+import { parseSessionRecord } from '../monitor/session-parser.mjs';
 
 const ROOT = resolve(import.meta.dirname, '..');
 
@@ -32,4 +33,19 @@ test('session tailer exposes only user-visible assistant dialogue and waits for 
     appendFileSync(path, '}\n');
     assert.equal(tailer.scan().length, 0);
   } finally { database.close(); rmSync(directory, { recursive: true, force: true }); }
+});
+
+test('session parser normalizes OpenClaw epoch message timestamps for monitor schema', () => {
+  const record = {
+    type: 'message',
+    timestamp: '2026-08-17T02:22:35.673Z',
+    message: {
+      role: 'assistant',
+      content: [{ type: 'text', text: 'NO_REPLY' }],
+      timestamp: 1786933349733,
+    },
+  };
+  const [parsed] = parseSessionRecord(JSON.stringify(record));
+  assert.equal(parsed.timestamp, '2026-08-17T02:22:29.733Z');
+  assert.match(parsed.timestamp, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/u);
 });

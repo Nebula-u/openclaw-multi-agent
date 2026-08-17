@@ -13,12 +13,24 @@ function textBlocks(content) {
   return texts.filter((value) => value.trim());
 }
 
+function isoTimestamp(...candidates) {
+  for (const value of candidates) {
+    if (typeof value !== 'string' && typeof value !== 'number') continue;
+    const date = new Date(value);
+    if (!Number.isNaN(date.valueOf())) return date.toISOString();
+  }
+  return new Date().toISOString();
+}
+
 export function parseSessionRecord(line) {
   let record;
   try { record = JSON.parse(line); } catch { return []; }
   if (record.type !== 'message' || !record.message) return [];
   const message = record.message;
-  const timestamp = message.timestamp ?? record.timestamp ?? new Date().toISOString();
+  // OpenClaw session records use an ISO timestamp on the record but some
+  // providers put an epoch-millisecond timestamp on the nested message.
+  // Monitor events require one canonical RFC 3339 string.
+  const timestamp = isoTimestamp(message.timestamp, record.timestamp);
   const role = String(message.role ?? '').toLowerCase();
   const output = [];
   if (role === 'assistant') {

@@ -15,7 +15,7 @@ export async function runMonitor(overrides = {}) {
     backend: 'node',
     host: address.address,
     port: address.port,
-    dashboard: resolve(config.projectRoot, 'monitor', 'ui', 'index.html'),
+    dashboard: `http://${address.address}:${address.port}/`,
   })}\n`);
   const shutdown = async () => { await monitor.close(); process.exitCode = 0; };
   process.once('SIGINT', shutdown);

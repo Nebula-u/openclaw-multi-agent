@@ -17,7 +17,7 @@ MONITOR_PORT=4319 \
 bash scripts/start-monitor.sh
 ```
 
-启动成功会输出 `service=stategraph-monitor`、`backend=node`、监听地址和 dashboard 路径。打开 `monitor/ui/index.html`。
+启动成功会输出 `service=stategraph-monitor`、`backend=node`、监听地址和 dashboard URL。默认打开 `http://127.0.0.1:4319/`；面板、API 和 SSE 由同一个 Node 服务提供，不需要再直接打开本地 HTML 文件。
 
 ## 数据源
 
@@ -39,6 +39,8 @@ Monitor 通过 StateGraph runtime 读取最新 checkpoints，并执行事件链 
 - `GET /api/agents/:id/sessions`
 - `GET /api/agents/:id/sessions/:session/messages`
 - `GET /api/supervisor`（仅返回 Node continuation 状态，保留路径兼容）
+
+`GET /`、`GET /index.html`、`GET /styles.css`、`GET /config.js` 和 `GET /app.js` 只提供仓库内固定的 Monitor 静态资源，不接受任意文件路径。
 
 不存在审批、重试、派发、消息发送或状态修改端点。非 GET mutation 请求返回 404。
 
