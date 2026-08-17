@@ -14,7 +14,7 @@
 
 ### AGENT_DECISION_REQUIRED
 
-Agent 返回 `HUMAN_DECISION_REQUIRED` 时生成。人工决定不能把未过 Gate 的结果直接标为完成，只能携带决定让同一 Agent 重做，或终止。
+Agent 返回 `HUMAN_DECISION_REQUIRED` 时生成。该 pending approval 对象的 `kind` 字段实际值是 `AGENT_DECISION`（不带 `_REQUIRED` 后缀）；`AGENT_DECISION_REQUIRED` 是触发这次生成的 `stop_reason` 值，两者不是同一个字段，读取 checkpoint 时不要混淆。人工决定不能把未过 Gate 的结果直接标为完成，只能携带决定让同一 Agent 重做，或终止。
 
 ### ERROR_ESCALATION
 

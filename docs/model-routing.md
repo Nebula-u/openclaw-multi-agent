@@ -30,4 +30,4 @@ JSON/JSONL 契约回复先保存原文和 SHA-256，只做可证明安全的包�
 
 DeepSeek 官方 JSON Output 为 Chat Completions 请求的 `response_format: {"type":"json_object"}`；system 或 user prompt 必须包含 `json` 并给出输出形态示例，且应配置足够 `max_tokens`。它保证合法 JSON 字符串，不提供本项目 JSON Schema strict 校验，也可能返回空 `content`。因此本项目的 prompt、清洗、Ajv 与重试都保留。
 
-当前已安装 OpenClaw `2026.7.1-2` 的 Gateway `chat.send` 协议不接受/转发请求级 `responseFormat`，不能把该参数可靠地附加到已注册 Agent 的单次 JSON 契约调用；静态写入全部 Agent 的 `params.response_format` 会破坏工具调用和 Markdown 会话，未采用。升级或扩展 Gateway 增加请求级透传后，JSON 单对象调用应传 `response_format: {"type":"json_object"}`；JSONL 继续使用本地 Guard 路径。详见 [llm-json-recovery.md](llm-json-recovery.md)。
+当前已安装 OpenClaw `2026.7.1-2`（据 2026-07-23 探测，见 `docs/compatibility-report.md`；若环境已升级需人工复核当前实际版本）的 Gateway `chat.send` 协议不接受/转发请求级 `responseFormat`，不能把该参数可靠地附加到已注册 Agent 的单次 JSON 契约调用；静态写入全部 Agent 的 `params.response_format` 会破坏工具调用和 Markdown 会话，未采用。升级或扩展 Gateway 增加请求级透传后，JSON 单对象调用应传 `response_format: {"type":"json_object"}`；JSONL 继续使用本地 Guard 路径。详见 [llm-json-recovery.md](llm-json-recovery.md)。

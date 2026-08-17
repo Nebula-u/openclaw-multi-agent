@@ -8,7 +8,7 @@
 
 本文说明本项目**如何基于真实的 OpenClaw CLI 与 config schema 进行集成**：安装脚本从 Agent package catalog 读取所有 `register=true` 的 Agent，用 `agents add` 注册绝对 `workspace` / `agentDir`，用 `config set` 的 **bracket 路径**精确修改 `subagents` 与 `sandbox`，用 `config validate` 校验，用 `agents list --json` / `config get agents.list --json` 复核。所有字段名与参数以本机实测 `--help` 与 `config schema` 为准，**不依据记忆假定**。
 
-集成分工提醒：CLI 调用发生在**安装/配置阶段**（`install.ps1` / `install.sh`）；日常工作流只依赖 OpenClaw 原生 Agent、原生工具、文件与本地 Git。
+集成分工提醒：CLI 调用发生在**安装/配置阶段**（`install.ps1` / `install.sh`）；日常工作流只依赖 OpenClaw 原生 Agent、原生工具、文件与本地 Git。运行期的 WebChat 接入（`extensions/stategraph-webchat` Gateway 插件、`openclaw plugins install --link` 等）不在本文覆盖范围，见 README.md「OpenClaw WebChat 自动接入」一节。
 
 ## 2. 探测事实（OBSERVED，来源 artifacts/preflight）
 

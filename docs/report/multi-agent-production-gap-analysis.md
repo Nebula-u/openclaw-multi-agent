@@ -1,5 +1,7 @@
 # Multi-Agent Production Gap Analysis
 
+> **历史存档说明（2026-08-17 补注）**：本报告基于 2026-07-30 时点的旧三层架构撰写，已被 2026-08-14 的 LangGraph `StateGraph + checkpointer` 重建取代（见 `docs/report/2026-08-14-stategraph-rebuild-handoff.md`）。仅供历史参考，当前架构见 `docs/architecture.md`。
+>
 > 报告日期：2026-07-30  
 > 主题：当前多 Agent 软件开发系统与真实生产环境之间的差距  
 > 范围：角色划分、工作流、能力真实性、通信、上下文、成本、开发工程化能力。

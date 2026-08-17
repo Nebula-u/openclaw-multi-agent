@@ -42,3 +42,7 @@ TEST result 和 CommandRecord 必须声明 `SANDBOXED_DOCKER`，并包含代码�
 ## 重试
 
 JSON repair 使用同一 session，只重写结构化文件，最多 2 次。task attempt 重试使用新 run/session/worktree，最多 3 次。Agent 不自行决定或隐瞒重试。
+
+## 完整契约清单
+
+本文只覆盖 Agent 直接读写的输出契约。`contracts/` 目录当前共 22 个 schema，其余（`approval-request/response/assessment.schema.json`、`agent-package.schema.json`、`skill-package.schema.json`、`component-request/build-result.schema.json`、`gate-result.schema.json`、`release-decision.schema.json` 等）由代码内部在审批、组件管理、Gate 和发布决策环节使用，Agent 不直接读写这些文件。

@@ -96,6 +96,8 @@ TEST 固定使用 Docker：network none、只读 rootfs、drop ALL、PID 256、2
 
 未引入第二个编排框架。项目内自研部分包括 SQLite checkpointer、事件哈希链、双 capability、workflow lock、固定 dispatch、路线编译器、worktree 管理、context manifest、证据接收边界、sandbox attestation/lease、紧凑 Manager context 和 checkpoint monitor read model。
 
+`scripts/runtime-core/`（`atomic-store.mjs`、`json-ingestion.mjs`、`structured-output-ingestion.mjs`、`workflow-lock.mjs`）仍被 ingestion 相关逻辑复用；`scripts/control-core/`、`scripts/orchestrator/` 是旧三层架构遗留的空/半空目录，已随 2026-08-14 重建清空内容，仅作历史占位，不承载任何当前逻辑，后续清理时可直接删除。
+
 ## 复用与重做边界
 
 | 范围 | 处理 | 原因 |
@@ -111,4 +113,4 @@ TEST 固定使用 Docker：network none、只读 rootfs、drop ALL、PID 256、2
 
 ## 成本边界
 
-Manager context 为 `200000`，max output 为 `32000`，软输入预算为 `120000`，实际单次紧凑 prompt 硬上限为 `12000` 字符。默认只携带最近 8 个事件和 4 个错误摘要；超限后进一步压缩。Manager 不轮询 worker。
+Manager context window 为 `200000`，max output 为 `32000`。软输入预算按 `config/stategraph-policy.json` 的 `manager.soft_budget_percent`（当前 `60`）动态计算，即 `context_window_tokens × soft_budget_percent / 100`，当前等于 `120000`，并非硬编码常量。实际单次紧凑 prompt 硬上限为 `12000` 字符。默认只携带最近 8 个事件和 4 个错误摘要；超限后进一步压缩。Manager 不轮询 worker。
