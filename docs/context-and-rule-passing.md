@@ -30,4 +30,4 @@ TEST 会把 manifest 和输入复制到只读 `/input`，并将容器可见路�
 
 ## Manager context
 
-Manager 不接收完整 manifest 历史。宿主从 checkpoint 生成最多 12k 字符的紧凑 context，只包含当前路线、candidate、active task、最近事件和错误摘要；原始文件通过 locator 留在 artifact。
+Manager 不接收完整 manifest 历史。宿主从 checkpoint 生成最多 12k 字符的紧凑 context，实际字段为 `request`（用户原始请求）、`route_plan`、`active_task`、`pending_approval`、`recent_events`、`recent_error_reports` 和 `session_policy`（不含独立的 `candidate` 字段，candidate commit 相关信息通过 `active_task`/checkpoint 隐含体现）；原始文件通过 locator 留在 artifact。

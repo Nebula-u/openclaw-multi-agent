@@ -30,15 +30,15 @@ Manager 不可以：
 每次 `node scripts/workflow.mjs run` 最多执行一个有界动作：
 
 ```text
-decide
+initialize -> decide
   -> prepare_manager / prepare_step
   -> dispatch
   -> reconcile
   -> compile_plan / evaluate
-  -> apply_human / complete / hold
+  -> apply_human / complete / integrity_hold -> finish
 ```
 
-调用返回 `RUNNING`、`WAITING_HUMAN`、`HOLD` 或 `TERMINAL` 时，调用方停止本轮。monitor continuation 可以继续推进无人工阻塞的 workflow，但使用的仍是同一个 runtime capability 和 workflow lock。
+调用返回的顶层 `condition` 为 `ACTIVE`、`WAITING_HUMAN`、`HOLD` 或 `TERMINAL` 时，调用方停止本轮（更细的进展原因见 `stop_reason`，如 `TASK_RUNNING`、`ROUTE_PLAN_FROZEN` 等）。monitor continuation 可以继续推进无人工阻塞的 workflow，但使用的仍是同一个 runtime capability 和 workflow lock。
 
 ## 固定派发
 
@@ -72,7 +72,7 @@ reconcile 先重新验证 context manifest，再接收 `.agent-raw`。只有本�
 
 ## Manager context 成本
 
-Manager context window 为 200k，max output 为 32k，软输入预算为 120k。实际 prompt 最多 12k 字符，默认只包含最近 8 个事件和 4 个错误摘要；原始日志不进入 prompt。Manager 不轮询运行中的 Agent。
+Manager context window 为 200k，max output 为 32k，软输入预算按 `config/stategraph-policy.json` 的 `manager.soft_budget_percent`（当前 60%）动态计算得出，当前等于 120k，而非硬编码常量。实际 prompt 最多 12k 字符，默认只包含最近 8 个事件和 4 个错误摘要；原始日志不进入 prompt。Manager 不轮询运行中的 Agent。
 
 ## 恢复检查
 

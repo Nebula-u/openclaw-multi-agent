@@ -1,12 +1,16 @@
 # 当前进度评估
 
-> 评估日期：2026-08-14
+> 评估日期：2026-08-14（2026-08-17 补注：本评估未覆盖之后接入的 OpenClaw WebChat 自动接入插件，见下方补注段落）
 
 ## 结论
 
 StateGraph/checkpointer 单框架重建已完成代码、规则、安装、测试和主要文档迁移。旧控制框架和 Java monitor 代理已删除；Node monitor、固定 dispatch、Git candidate、证据接收和 Docker TEST sandbox 均已进入主测试入口。
 
 当前状态适合继续进行真实 OpenClaw/Docker 集成演练，但还不能宣称生产验收完成：本机 Docker Desktop Linux daemon 未启动，因此真实容器创建和完整 test-agent E2E 尚无本轮证据。
+
+> **2026-08-17 补注：WebChat 接入未纳入本次评估。** 2026-08-14 18:00 后新增了 `extensions/stategraph-webchat` Gateway 插件（`scripts/stategraph/webchat-bridge.mjs`），用于在 manager-agent 对话前接管 WebChat 入站消息并绑定 StateGraph workflow，详见 README.md「OpenClaw WebChat 自动接入」一节。该功能的验收状态本评估未覆盖，需单独核实。
+>
+> **2026-08-17 补注：与交接文档的口径差异。** `docs/report/2026-08-14-stategraph-rebuild-handoff.md` 第 6、8 节列出了若干"仍需重做"的遗留风险（worker 规则尚未同步、旧 supervisor/wake 模块引用审计等），本评估的"已完成"表格未逐条对应，读者不应仅凭本文档认为重建已无遗留缺口，请一并阅读该交接文档。
 
 ## 已完成
 
@@ -33,12 +37,12 @@ StateGraph/checkpointer 单框架重建已完成代码、规则、安装、测�
 
 ## 自动化验证
 
-当前 `npm test` 覆盖：
+当前 `npm test` 覆盖（2026-08-14 时点数字；2026-08-17 复核，随后续提交新增用例，StateGraph 侧已增至约 31 项顶层 test，具体以 `tests/stategraph-*.test.mjs` 当前文件为准）：
 
 - Runtime Guard：5 项；
 - Agent JSON：12 项；
 - runtime bundle：3 项；
-- StateGraph：26 项；
+- StateGraph：26 项（评估当时）；
 - Node monitor：13 项；
 - install validation：6 项。
 

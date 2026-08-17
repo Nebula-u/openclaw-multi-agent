@@ -1,5 +1,7 @@
 # Evidence、CommandRecord 与 Claims
 
+> 最后核对日期：2026-08-17（对照 `contracts/evidence.schema.json`、`contracts/command-record.schema.json` 当前版本核实一致）
+
 ## Evidence
 
 `evidence.jsonl` 每行遵循 `contracts/evidence.schema.json`。存在 `locator_abs` 时，路径必须位于授权 worktree 或本 run artifact；文件必须普通、非 symlink。声明 `sha256` 时，本地代码按原始字节重新计算。

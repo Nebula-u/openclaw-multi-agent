@@ -3,6 +3,7 @@
 > 版本: compatibility-report v1
 > 本报告只记录**已探测**事实。所有结论均指向 `artifacts\preflight\` 下的原始文件（每命令有 `.stdout.txt` / `.stderr.txt` / `.meta.txt`，另有 `index.tsv`）。**未探测的内容一律标 `UNVERIFIED`，不虚构。**
 > 散文用中文；命令、字段、枚举值、版本号用英文。
+> **有效期提示（2026-08-17 补注）**：本报告是 2026-07-23 单次探测的固定快照，不会随环境自动更新。若本机 Node/OpenClaw CLI 版本已变化（例如 2026-08-17 复核时发现本机 Node 版本已不满足 OpenClaw CLI 的最低要求，导致 `openclaw --version` 无法执行），本报告中的版本号和退出码不再代表当前真实环境，需重新运行 `scripts/preflight-probe.sh` 探测。
 
 ## 1. 探测环境与方法
 
