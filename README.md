@@ -148,6 +148,7 @@ pwsh -NoProfile -File scripts/reinstall-agents.ps1 -Apply -Yes -GatewayStopped \
 ```powershell
 openclaw plugins install --link extensions/stategraph-webchat
 openclaw config set plugins.entries.stategraph-webchat.enabled true --strict-json
+openclaw config set plugins.entries.stategraph-webchat.hooks.allowConversationAccess true --strict-json
 openclaw config set plugins.entries.stategraph-webchat.config.projectRoot '"D:/MicroConnect/project/openclaw-multi-agent"' --strict-json
 openclaw gateway restart
 openclaw gateway status
@@ -158,12 +159,13 @@ openclaw gateway status
 ```bash
 openclaw plugins install --link extensions/stategraph-webchat
 openclaw config set plugins.entries.stategraph-webchat.enabled true --strict-json
+openclaw config set plugins.entries.stategraph-webchat.hooks.allowConversationAccess true --strict-json
 openclaw config set plugins.entries.stategraph-webchat.config.projectRoot '"/absolute/path/openclaw-multi-agent"' --strict-json
 openclaw gateway restart
 openclaw gateway status
 ```
 
-插件默认只接管 `webchat` 且要求消息发送者是 owner。StateGraph 自己通过 CLI 启动的 manager-agent 任务不会被再次接管，因此不会递归创建 workflow。发送 `/workflow status` 可读取并推进当前会话关联的 workflow；路线待确认时发送“确认”或 `/workflow approve` 会写入正式人工审批。
+插件默认接管 owner 发给 manager-agent 的 `tui-*`、`dashboard:*` 和 `main` 交互会话：渠道消息在入站阶段接管，经 Gateway 认证的 WebChat、Dashboard、TUI 和 CLI 直接 Agent 调用在 Agent 运行前接管。该运行前钩子需要显式启用 `allowConversationAccess`；其他渠道仍必须由 OpenClaw 标记为 owner。StateGraph 自己通过 CLI 启动的 `explicit:*` manager-agent 任务不会被再次接管，因此不会递归创建 workflow。发送 `/workflow status` 可读取并推进当前会话关联的 workflow；路线待确认时发送“确认”、“这条路线可以，就这么走”或 `/workflow approve` 会写入正式人工审批；Agent 三次失败后的错误升级节点也可用“确认重试”开启同一 Agent 的新重试批次。
 
 初始化本地 runtime/human capability：
 

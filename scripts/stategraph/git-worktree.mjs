@@ -1,5 +1,6 @@
 import { existsSync, lstatSync, mkdirSync, realpathSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 
 const FULL_SHA = /^[0-9a-f]{40}$/u;
@@ -25,6 +26,11 @@ function normalized(path) {
 function inside(root, path) {
   const value = relative(resolve(root), resolve(path));
   return value === '' || (value !== '..' && !value.startsWith(`..${sep}`) && !isAbsolute(value));
+}
+
+function pathKey(kind, value) {
+  const digest = createHash('sha256').update(`${kind}:${String(value)}`).digest('hex').slice(0, 20);
+  return `${kind}-${digest}`;
 }
 
 function defaultRunGit(cwd, args) {
@@ -63,7 +69,14 @@ export function createGitWorktreeManager({ projectRoot: projectRootInput, runGit
   }
 
   function pathFor(task) {
-    return join(worktreesRoot, task.workflow_id, task.task_id, task.run_id, 'repo');
+    // Windows Git rejects deeply nested worktree admin paths with
+    // "'$GIT_DIR' too big". Stable hashes preserve per-run isolation and
+    // deterministic checkpoint binding without embedding unbounded IDs.
+    return join(worktreesRoot,
+      pathKey('w', task.workflow_id),
+      pathKey('t', task.task_id),
+      pathKey('r', task.run_id),
+      'repo');
   }
 
   function prepare(task) {
@@ -103,4 +116,3 @@ export function createGitWorktreeManager({ projectRoot: projectRootInput, runGit
 
   return { projectRoot, worktreesRoot, inspectTarget, pathFor, prepare, assertCommit, assertDescendant, head };
 }
-

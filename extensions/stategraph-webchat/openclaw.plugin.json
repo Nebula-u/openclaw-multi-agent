@@ -10,7 +10,7 @@
       "projectRoot": { "type": "string" },
       "targetProjectRoot": { "type": "string" },
       "managerAgentId": { "type": "string" },
-      "channels": { "type": "array", "items": { "type": "string" } },
+      "sessionPrefixes": { "type": "array", "items": { "type": "string", "minLength": 1 } },
       "scanIntervalMs": { "type": "integer", "minimum": 500 }
     }
   },

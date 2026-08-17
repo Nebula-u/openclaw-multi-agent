@@ -56,6 +56,14 @@ test('each run gets a detached worktree bound to the checkpoint input commit', (
     assert.notEqual(retry.worktree_path_abs, first.worktree_path_abs);
     assert.equal(existsSync(first.worktree_path_abs), true);
     assert.equal(manager.head(retry.worktree_path_abs), commit);
+    const longTask = {
+      ...first,
+      workflow_id: `WF-${'workflow'.repeat(30)}`,
+      task_id: `TASK-${'requirement'.repeat(30)}`,
+      run_id: `RUN-${'attempt'.repeat(30)}`,
+    };
+    assert.ok(manager.pathFor(longTask).length < join(temp, 'framework', 'runtime', 'worktrees').length + 90);
+    assert.notEqual(manager.pathFor(longTask), manager.pathFor(first));
   } finally { rmSync(temp, { recursive: true, force: true }); }
 });
 
