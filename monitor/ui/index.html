@@ -1,127 +1,54 @@
 <!doctype html>
-<html lang="zh-CN">
+<html lang="zh-CN" data-theme="light">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="color-scheme" content="dark">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self' file:; connect-src 'self' http://127.0.0.1:*; script-src 'self' file:; style-src 'self' file:; img-src 'self' data:; object-src 'none'; base-uri 'none'; form-action 'none'">
-  <title>OpenClaw Mission Monitor</title>
+  <meta name="color-scheme" content="light dark">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src 'self' http://127.0.0.1:*; script-src 'self'; style-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>OpenClaw · Workflow Desk</title>
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-  <div class="noise" aria-hidden="true"></div>
-  <header class="masthead">
-    <div class="brand-lockup">
-      <span class="eyebrow">STATEGRAPH CHECKPOINT / LOCAL OBSERVATORY</span>
-      <h1>Mission Monitor</h1>
-      <p>Workflow、任务阶段与 Agent 用户可见对话的本地只读看板</p>
-    </div>
-    <div class="connection-panel" aria-label="连接设置">
-      <label>API <input id="api-url" value="http://127.0.0.1:4319" spellcheck="false"></label>
-      <button id="connect-button" class="button primary">连接</button>
-      <span id="connection-state" class="signal offline"><i></i> OFFLINE</span>
-    </div>
-  </header>
-
-  <main>
-    <section class="telemetry-strip" aria-label="系统总览">
-      <article><span>ACTIVE WORKFLOWS</span><strong id="metric-workflows">—</strong></article>
-      <article><span>CREATED AGENTS</span><strong id="metric-running">—</strong></article>
-      <article><span>WAIT / BLOCK</span><strong id="metric-waiting">—</strong></article>
-      <article class="wide"><span>CHECKPOINT STATUS</span><strong id="metric-control">UNKNOWN</strong><small id="last-sync">尚未同步</small></article>
-    </section>
-
-    <section class="workspace-shell">
-      <aside class="workflow-index">
-        <div class="section-heading">
-          <span>01</span><div><h2>Workflows</h2><p>选择任务航线</p></div>
-        </div>
-        <div id="workflow-list" class="workflow-list empty-state">等待连接…</div>
-      </aside>
-
-      <section class="mission-canvas">
-        <div class="mission-header">
-          <div>
-            <span id="workflow-id" class="eyebrow">NO WORKFLOW SELECTED</span>
-            <h2 id="workflow-title">等待控制状态</h2>
-          </div>
-          <div class="mission-meta">
-            <span id="workflow-condition" class="pill neutral">UNKNOWN</span>
-            <span id="workflow-revision">REV —</span>
-          </div>
-        </div>
-
-        <div id="phase-rail" class="phase-rail" aria-label="Workflow 阶段"></div>
-
-        <div class="mission-grid">
-          <section class="board-panel">
-            <div class="section-heading compact">
-              <span>02</span><div><h2>Task Deck</h2><p>当前阶段任务与 session</p></div>
-            </div>
-            <div id="task-board" class="task-board empty-state">选择 workflow 查看任务</div>
-          </section>
-
-          <aside class="agent-panel">
-            <div class="section-heading compact">
-              <span>03</span><div><h2>Agent Relay</h2><p>角色与当前动作</p></div>
-            </div>
-            <div id="agent-tree" class="agent-tree empty-state">暂无 Agent 数据</div>
-          </aside>
-        </div>
-
-        <section class="conversation-panel" aria-label="Agent 对话控制台">
-          <div class="section-heading compact">
-            <span>04</span><div><h2>Agent Conversations</h2><p>持久 session 与用户可见完整对话</p></div>
-          </div>
-          <div class="conversation-console">
-            <aside class="agent-rail">
-              <div class="rail-label">ALL CREATED AGENTS</div>
-              <nav id="conversation-agent-list" aria-label="Agent 列表"><div class="empty-state">等待 Agent 索引…</div></nav>
-            </aside>
-            <section class="conversation-stage">
-              <header class="conversation-header">
-                <div><span id="conversation-agent-status" class="eyebrow">NO AGENT SELECTED</span><h3 id="conversation-agent-name">选择 Agent 查看对话</h3><p id="conversation-agent-meta">包括已结束与未激活的 Agent</p></div>
-                <label class="session-picker">SESSION<select id="session-select" disabled><option>暂无 session</option></select></label>
-              </header>
-              <div id="conversation-history" class="conversation-history" aria-live="polite"><div class="conversation-empty"><b>NO CONVERSATION SELECTED</b><span>从左侧选择 Agent，再切换其持久 session。</span></div></div>
-            </section>
-          </div>
-        </section>
-
-        <section class="event-panel">
-          <div class="section-heading compact">
-            <span>05</span><div><h2>Live Feed</h2><p>SSE 增量与 checkpoint 事件</p></div>
-          </div>
-          <div class="feed-tools">
-            <select id="feed-filter" aria-label="事件筛选">
-              <option value="all">全部事件</option>
-              <option value="activity">用户可见对话</option>
-              <option value="snapshot">控制快照</option>
-              <option value="health">健康状态</option>
-            </select>
-            <button id="clear-feed" class="button ghost">清空显示</button>
-          </div>
-          <ol id="event-feed" class="event-feed"><li class="empty-state">连接后显示实时事件</li></ol>
-        </section>
+  <div class="grid-wash" aria-hidden="true"></div>
+  <div class="app-shell">
+    <aside class="sidebar" aria-label="Workflow 导航">
+      <a class="brand" href="#top" aria-label="Workflow Desk 首页"><span class="brand-mark">✦</span><span>work<span>desk</span></span></a>
+      <p class="brand-note">STATEGRAPH<br>LOCAL CONTROL</p>
+      <section class="side-section">
+        <div class="side-heading"><span>进行中的流程</span><b id="workflow-count">0</b></div>
+        <button id="new-workflow" class="control-button primary" type="button">+ 新建 workflow</button>
+        <nav id="workflow-list" class="workflow-list" aria-label="Workflow 列表"><p class="side-empty">正在连接本机服务…</p></nav>
       </section>
-    </section>
-  </main>
-
-  <dialog id="task-dialog" class="task-dialog">
-    <form method="dialog"><button class="dialog-close" aria-label="关闭">×</button></form>
-    <div id="task-detail"></div>
-  </dialog>
-
-  <template id="task-card-template">
-    <button class="task-card">
-      <span class="task-card-top"><b class="task-type"></b><i class="task-status"></i></span>
-      <strong class="task-title"></strong>
-      <span class="task-agent"></span>
-      <span class="task-session"></span>
-      <span class="task-foot"><em class="task-attempt"></em><em class="task-time"></em></span>
-    </button>
-  </template>
-
+      <section class="side-footer" aria-label="本机连接状态">
+        <div class="connection"><i id="connection-dot"></i><span id="connection-state">正在连接</span></div>
+        <p>本机 Node 服务<br>checkpoint 为唯一事实源</p>
+      </section>
+    </aside>
+    <main id="top" class="workspace">
+      <header class="topbar">
+        <div class="crumb"><span>工作台</span><i>/</i><b id="workflow-crumb">选择 workflow</b></div>
+        <div class="top-actions"><span id="sync-state" class="sync-state">尚未同步</span><button id="run-workflow" class="control-button" type="button" disabled>推进一轮</button><button id="advance-workflow" class="control-button" type="button" disabled>连续推进</button><button id="audit-workflow" class="control-button" type="button" disabled>审计</button><button id="theme-toggle" class="theme-toggle" type="button" aria-label="切换深浅色主题"><span aria-hidden="true">☾</span><em>深色</em></button></div>
+      </header>
+      <section class="dialogue-layout" aria-live="polite">
+        <div class="dialogue">
+          <div id="empty-view" class="empty-view"><span class="spark">✦</span><h1>等待 StateGraph</h1><p>选择左侧 workflow 后查看实时进展。所有确认和变更均在 Manager CLI 对话中完成。</p></div>
+          <div id="conversation" class="conversation" hidden></div>
+          <section id="new-workflow-panel" class="control-panel" hidden>
+            <h2>新建本地 workflow</h2>
+            <label>需求<textarea id="new-workflow-text" rows="4" placeholder="描述要交付的内容"></textarea></label>
+            <label>目标仓库路径<input id="new-workflow-project" type="text" placeholder="留空使用当前项目"></label>
+            <div class="control-actions"><button id="cancel-new-workflow" class="control-button" type="button">取消</button><button id="submit-new-workflow" class="control-button primary" type="button">提交</button></div>
+            <p id="control-message" class="control-message" role="status"></p>
+          </section>
+        </div>
+        <aside class="context-panel" aria-label="流程上下文">
+          <section class="context-card workflow-overview"><span class="context-kicker">当前流程</span><h2 id="workflow-title">未选择</h2><p id="workflow-summary">—</p><div class="badge-row"><span id="workflow-condition" class="status-badge">UNKNOWN</span><span id="workflow-phase" class="phase-badge">—</span></div></section>
+          <section class="context-card"><div class="card-heading"><span>已确认流程</span><b id="revision">REV —</b></div><ol id="task-list" class="task-list"><li class="side-empty">暂无阶段</li></ol></section>
+          <section class="context-card quiet-card"><span class="context-kicker">只读监测</span><p>此页面只读取 checkpoint。请在 Manager CLI 中确认步骤、提交人工决定或提出后续流程变更。</p></section>
+        </aside>
+      </section>
+    </main>
+  </div>
   <script src="config.js"></script>
   <script src="app.js"></script>
 </body>

@@ -1,85 +1,109 @@
-(function () {
+(() => {
   'use strict';
-  const defaultApiUrl = window.MONITOR_CONFIG?.apiUrl || 'http://127.0.0.1:4319';
-  const fixedSameOriginApi = defaultApiUrl.startsWith('/');
-  const state = { apiUrl: fixedSameOriginApi ? defaultApiUrl : (localStorage.getItem('monitor.apiUrl') || defaultApiUrl), workflows: [], selectedId: null, source: null, feed: [], agents: [], selectedAgentId: null, sessions: [], selectedSessionId: null, conversationTimer: null };
+
+  const sameOrigin = window.location.protocol !== 'file:';
+  const defaultApi = window.MONITOR_CONFIG?.apiUrl || (sameOrigin ? window.location.origin : 'http://127.0.0.1:4319');
+  const state = { apiUrl: defaultApi.replace(/\/$/u, ''), workflows: [], selectedId: localStorage.getItem('workdesk.workflow') || null, source: null, workflowListKey: null, dialogueKey: null, interactive: false, controlHeader: 'x-stategraph-control' };
   const $ = (id) => document.getElementById(id);
-  const escapeHtml = (value) => String(value ?? '').replace(/[&<>'"]/gu, (char) => ({ '&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;' }[char]));
-  const formatTime = (value) => { const date = new Date(value); return Number.isNaN(date.valueOf()) ? '—' : date.toLocaleTimeString('zh-CN',{hour12:false}); };
+  const escapeHtml = (value) => String(value ?? '').replace(/[&<'"]/gu, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[char]));
   const selected = () => state.workflows.find((workflow) => workflow.workflow_id === state.selectedId) || null;
-  const request = async (path) => { const response = await fetch(`${state.apiUrl}${path}`); const body = await response.json(); if (!response.ok) throw new Error(body.message || body.error || `HTTP ${response.status}`); return body; };
-  function setConnection(status, label) { const node = $('connection-state'); node.className = `signal ${status}`; node.innerHTML = `<i></i> ${escapeHtml(label)}`; }
-  function renderMetrics(health) {
-    const tasks = state.workflows.flatMap((workflow) => workflow.tasks || []);
-    $('metric-workflows').textContent = state.workflows.filter((workflow) => workflow.condition !== 'TERMINAL').length;
-    $('metric-running').textContent = state.agents.length;
-    $('metric-waiting').textContent = tasks.filter((task) => ['WAITING_HUMAN','BLOCKED','NEEDS_REWORK'].includes(task.status) || ['STALE','POSSIBLY_STALLED'].includes(task.health?.health)).length;
-    $('metric-control').textContent = health?.status || 'CONNECTED';
-    $('last-sync').textContent = `LAST SYNC ${new Date().toLocaleTimeString('zh-CN',{hour12:false})}`;
+  const request = async (path, options = {}) => {
+    const response = await fetch(`${state.apiUrl}${path}`, options);
+    const body = await response.json();
+    if (!response.ok) throw new Error(body.message || body.error || `HTTP ${response.status}`);
+    return body;
+  };
+  const controlRequest = (path, options = {}) => request(path, { ...options, headers: { 'content-type': 'application/json', [state.controlHeader]: '1', ...(options.headers || {}) } });
+  const messageTime = (value) => value ? new Date(value).toLocaleString('zh-CN', { hour12: false }) : '刚刚';
+  const taskRenderState = (task) => [task.task_id, task.title, task.task_type, task.status, task.assigned_agent, task.attempt, task.health?.health, task.last_error?.code, task.last_error?.message];
+  const workflowRenderState = (workflow) => workflow ? [workflow.workflow_id, workflow.revision, workflow.title, workflow.condition, workflow.phase, workflow.route_status, workflow.status_reason, workflow.summary, workflow.created_at, workflow.updated_at, workflow.pending_approval, (workflow.tasks || []).map(taskRenderState), (workflow.manager_reports || []).at(-1)] : null;
+
+  function setConnection(connected, label) { $('connection-dot').classList.toggle('online', connected); $('connection-state').textContent = label; }
+  function applyTheme(theme) {
+    document.documentElement.dataset.theme = theme; localStorage.setItem('workdesk.theme', theme);
+    const dark = theme === 'dark'; $('theme-toggle').querySelector('span').textContent = dark ? '☀' : '☾'; $('theme-toggle').querySelector('em').textContent = dark ? '浅色' : '深色';
   }
-  function renderWorkflowList() {
-    const root = $('workflow-list');
-    if (!state.workflows.length) { root.className = 'workflow-list empty-state'; root.textContent = '当前没有 workflow'; return; }
-    root.className = 'workflow-list'; root.innerHTML = '';
-    state.workflows.forEach((workflow) => { const button = document.createElement('button'); button.className = `workflow-button ${workflow.workflow_id === state.selectedId ? 'active' : ''}`;
-      button.innerHTML = `<strong>${escapeHtml(workflow.workflow_id)}</strong><span>${escapeHtml(workflow.phase)} / ${escapeHtml(workflow.condition)} · ${workflow.tasks?.length || 0} TASKS</span>`;
-      button.addEventListener('click', () => selectWorkflow(workflow.workflow_id)); root.appendChild(button); });
+  function renderWorkflows() {
+    const renderKey = JSON.stringify([state.selectedId, state.workflows.map((workflow) => [workflow.workflow_id, workflow.revision, workflow.title, workflow.condition, workflow.phase, (workflow.tasks || []).map(taskRenderState)])]);
+    if (renderKey === state.workflowListKey) return;
+    state.workflowListKey = renderKey;
+    const root = $('workflow-list'); $('workflow-count').textContent = state.workflows.filter((item) => item.condition !== 'TERMINAL').length;
+    if (!state.workflows.length) { root.innerHTML = '<p class="side-empty">尚未发现 workflow</p>'; return; }
+    root.innerHTML = state.workflows.map((workflow) => `<button class="workflow-item ${workflow.workflow_id === state.selectedId ? 'active' : ''}" data-workflow-id="${escapeHtml(workflow.workflow_id)}" type="button"><span class="workflow-item-top"><i class="mini-status ${escapeHtml(String(workflow.condition).toLowerCase())}"></i>${escapeHtml(workflow.condition === 'WAITING_HUMAN' ? '等待 CLI 确认' : workflow.phase.replaceAll('_', ' '))}</span><strong>${escapeHtml(workflow.title || workflow.workflow_id)}</strong><small>${escapeHtml(workflow.workflow_id.slice(-12))} · ${workflow.steps?.length || 0} 个阶段</small></button>`).join('');
+    root.querySelectorAll('[data-workflow-id]').forEach((button) => button.addEventListener('click', () => selectWorkflow(button.dataset.workflowId)));
   }
-  function renderPhaseRail(workflow) { const steps = workflow?.steps || []; const nodes = [{label:'MANAGER ANALYSIS',status:workflow?.route_status === 'FROZEN' ? 'COMPLETED' : 'RUNNING'},...steps.map((step) => ({label:step.kind,status:step.status})),{label:'COMPLETE',status:workflow?.condition === 'TERMINAL' ? 'COMPLETED' : 'PENDING'}]; $('phase-rail').innerHTML = nodes.map((node) => `<span class="phase-node ${node.status === 'COMPLETED' ? 'done' : ['RUNNING','WAITING_HUMAN'].includes(node.status) ? 'current' : ''}">${escapeHtml(node.label.replaceAll('_',' '))}</span>`).join(''); }
-  const latestDispatch = (task) => task.dispatches?.at(-1) || null;
-  function renderTasks(workflow) {
-    const root = $('task-board'); const tasks = workflow?.tasks || [];
-    if (!tasks.length) { root.className = 'task-board empty-state'; root.textContent = '这个 workflow 尚无 task'; return; }
-    root.className = 'task-board'; root.innerHTML = '';
-    tasks.forEach((task) => { const card = $('task-card-template').content.firstElementChild.cloneNode(true); const dispatch = latestDispatch(task);
-      card.querySelector('.task-type').textContent = task.task_type || 'TASK'; card.querySelector('.task-status').textContent = task.health?.health || task.status;
-      card.querySelector('.task-title').textContent = task.title || task.task_id; card.querySelector('.task-agent').textContent = `AGENT / ${task.assigned_agent || 'UNASSIGNED'}`;
-      card.querySelector('.task-session').textContent = `EXECUTION / ${dispatch?.status || 'NOT STARTED'}`;
-      card.querySelector('.task-attempt').textContent = `ATTEMPT ${task.attempt || 0}/${task.max_attempts || '—'}`; card.querySelector('.task-time').textContent = formatTime(task.updated_at);
-      card.addEventListener('click', () => openTask(task)); root.appendChild(card); });
+  function renderContext(workflow) {
+    $('workflow-crumb').textContent = workflow ? workflow.workflow_id : '选择 workflow'; $('workflow-title').textContent = workflow?.title || '未选择';
+    const progress = workflow?.condition === 'ACTIVE' ? workflowProgress(workflow) : null;
+    $('workflow-summary').textContent = workflow?.route_status === 'PROPOSED' ? '路线已生成，等待你冻结本轮执行计划。' : progress || workflow?.status_reason || workflow?.summary || '—';
+    $('workflow-condition').textContent = workflow?.condition || 'UNKNOWN'; $('workflow-condition').className = `status-badge ${String(workflow?.condition || 'unknown').toLowerCase()}`;
+    $('workflow-phase').textContent = workflow?.phase?.replaceAll('_', ' ') || '—'; $('revision').textContent = `REV ${workflow?.revision ?? '—'}`;
+    const steps = workflow?.steps || [];
+    $('task-list').innerHTML = steps.length ? steps.map((step, index) => `<li><i class="task-dot ${escapeHtml(String(step.status || (index < workflow.current_step_index ? 'COMPLETED' : 'PENDING')).toLowerCase())}"></i><div><strong>${escapeHtml(step.title || step.kind)}</strong><span>${escapeHtml(step.kind)} · ${escapeHtml(step.status || (index < workflow.current_step_index ? 'COMPLETED' : 'PENDING'))}</span></div></li>`).join('') : '<li class="side-empty">尚未确认流程</li>';
   }
-  function renderAgents(workflow) { const root = $('agent-tree'); const tasks = workflow?.tasks || []; const agents = new Map(); tasks.forEach((task) => agents.set(task.assigned_agent || 'unassigned', task));
-    if (!agents.size) { root.className = 'agent-tree empty-state'; root.textContent = '暂无 Agent 数据'; return; } root.className = 'agent-tree'; root.innerHTML = `<div class="agent-node running"><strong>stategraph-dispatch</strong><span>强制分发 / ${escapeHtml(workflow.phase)}</span></div>`;
-    agents.forEach((task, agent) => { const health = task.health?.health || task.status; const node = document.createElement('div'); node.className = `agent-node ${String(health).toLowerCase()}`; node.innerHTML = `<strong>${escapeHtml(agent)}</strong><span>${escapeHtml(health)} · ${escapeHtml(task.title || task.task_id)}</span>`; root.appendChild(node); }); }
-  function renderConversationAgents() { const root = $('conversation-agent-list'); if (!state.agents.length) { root.innerHTML = '<div class="empty-state">没有发现 Agent</div>'; return; }
-    root.innerHTML = ''; state.agents.forEach((agent) => { const button = document.createElement('button'); const active = agent.agent_id === state.selectedAgentId; button.className = `conversation-agent ${active ? 'active' : ''}`;
-      button.innerHTML = `<i class="agent-state ${escapeHtml(agent.status)}"></i><span><strong>${escapeHtml(agent.agent_id)}</strong><small>${escapeHtml(agent.status)} · ${agent.session_count} SESSIONS</small></span><em>${agent.active_session_count || ''}</em>`;
-      button.addEventListener('click', () => selectConversationAgent(agent.agent_id)); root.appendChild(button); }); }
-  function formatDateTime(value) { const date = new Date(value); return Number.isNaN(date.valueOf()) ? '时间未知' : date.toLocaleString('zh-CN',{hour12:false}); }
-  function renderSessionOptions() { const select = $('session-select'); select.disabled = !state.sessions.length; select.innerHTML = state.sessions.length ? state.sessions.map((session) => `<option value="${escapeHtml(session.session_id)}" ${session.session_id === state.selectedSessionId ? 'selected' : ''}>${escapeHtml(formatDateTime(session.updated_at || session.started_at))} · ${escapeHtml(session.status)}${session.total_tokens === null ? '' : ` · ${session.total_tokens.toLocaleString()} tok`}</option>`).join('') : '<option>暂无 session</option>'; }
-  function renderConversation(messages, session, truncated) { const root = $('conversation-history'); if (!session) { root.innerHTML = '<div class="conversation-empty"><b>NO SESSION</b><span>这个 Agent 尚未产生持久会话。</span></div>'; return; }
-    if (!messages.length) { root.innerHTML = '<div class="conversation-empty"><b>EMPTY SESSION</b><span>当前 session 没有可公开的 user / assistant 文本。</span></div>'; return; }
-    root.innerHTML = `${truncated ? '<div class="history-notice">只显示最近 500 条安全对话</div>' : ''}${messages.map((message) => `<article class="message ${escapeHtml(message.role)}"><header><b>${message.role === 'user' ? 'USER' : 'AGENT'}</b><time>${escapeHtml(formatDateTime(message.timestamp))}</time></header><div>${escapeHtml(message.text)}</div></article>`).join('')}`; root.scrollTop = root.scrollHeight; }
-  async function loadConversation() { if (!state.selectedAgentId || !state.selectedSessionId) { renderConversation([],null,false); return; }
-    const root = $('conversation-history'); root.setAttribute('aria-busy','true'); try { const body = await request(`/api/agents/${encodeURIComponent(state.selectedAgentId)}/sessions/${encodeURIComponent(state.selectedSessionId)}/messages?limit=500`); renderConversation(body.messages || [],body.session,body.truncated); } catch (error) { root.innerHTML = `<div class="conversation-empty error"><b>CONVERSATION UNAVAILABLE</b><span>${escapeHtml(error.message)}</span></div>`; } finally { root.removeAttribute('aria-busy'); } }
-  async function selectConversationAgent(agentId) { state.selectedAgentId = agentId; localStorage.setItem('monitor.agentId',agentId); renderConversationAgents(); const agent = state.agents.find((item) => item.agent_id === agentId);
-    $('conversation-agent-name').textContent = agentId; $('conversation-agent-status').textContent = agent?.status || 'UNKNOWN'; $('conversation-agent-meta').textContent = `${agent?.session_count || 0} sessions · ${agent?.latest_session_at ? `最近活动 ${formatDateTime(agent.latest_session_at)}` : '尚无活动'}`;
-    try { state.sessions = (await request(`/api/agents/${encodeURIComponent(agentId)}/sessions`)).sessions || []; const saved = localStorage.getItem(`monitor.session.${agentId}`); state.selectedSessionId = state.sessions.some((item) => item.session_id === saved) ? saved : state.sessions[0]?.session_id || null; renderSessionOptions(); await loadConversation(); } catch (error) { state.sessions=[]; state.selectedSessionId=null; renderSessionOptions(); renderConversation([],null,false); } }
-  async function loadAgents({ preserve = true } = {}) { const body = await request('/api/agents'); state.agents = body.agents || []; let selectedId = preserve ? state.selectedAgentId : null; if (!state.agents.some((item) => item.agent_id === selectedId)) { const saved = localStorage.getItem('monitor.agentId'); selectedId = state.agents.some((item) => item.agent_id === saved) ? saved : state.agents[0]?.agent_id || null; }
-    renderConversationAgents(); if (selectedId && selectedId !== state.selectedAgentId) await selectConversationAgent(selectedId); else if (!selectedId) renderConversation([],null,false); }
-  function renderSelected() { const workflow = selected(); renderWorkflowList(); if (!workflow) return;
-    $('workflow-id').textContent = workflow.workflow_id; $('workflow-title').textContent = workflow.title || workflow.phase.replaceAll('_',' '); $('workflow-condition').textContent = workflow.condition; $('workflow-condition').className = `pill ${String(workflow.condition).toLowerCase()}`; $('workflow-revision').textContent = `REV ${workflow.revision}`;
-    renderPhaseRail(workflow); renderTasks(workflow); renderAgents(workflow); }
-  function summaryOf(event) { const payload = event.payload || {}; if (event.type === 'snapshot') return `控制快照已同步 · ${payload.workflows?.length ?? '—'} workflows`;
-    if (event.type === 'activity' && payload.event_type === 'session.assistant_output') return payload.payload?.summary || 'Agent 已输出用户可见消息';
-    if (event.type === 'activity') return '任务产物或状态已由本地采集器更新';
-    return payload.health || payload.status || payload.error || event.type; }
-  function addFeed(event) { if (event.type === 'activity' && event.payload?.event_type !== 'session.assistant_output') return; state.feed.unshift(event); state.feed = state.feed.slice(0,200); renderFeed(); }
-  function renderFeed() { const filter = $('feed-filter').value; const events = state.feed.filter((event) => filter === 'all' || event.type === filter || (filter === 'health' && event.type === 'monitor-health'));
-    $('event-feed').innerHTML = events.length ? events.map((event) => `<li class="event-row"><time>${formatTime(event.timestamp)}</time><b>${escapeHtml(event.type)}</b><p>${escapeHtml(summaryOf(event))}</p></li>`).join('') : '<li class="empty-state">当前筛选没有事件</li>'; }
-  function openTask(task) { const dialog = $('task-dialog');
-    $('task-detail').innerHTML = `<span class="eyebrow">${escapeHtml(task.task_id)}</span><h2 class="detail-title">${escapeHtml(task.title || task.task_type)}</h2><div class="detail-grid">
-      ${[['STATUS',task.status],['HEALTH',task.health?.health || 'UNKNOWN'],['AGENT',task.assigned_agent],['ATTEMPT',`${task.attempt || 0}/${task.max_attempts || '—'}`]].map(([label,value]) => `<div class="detail-cell"><span>${label}</span><strong>${escapeHtml(value)}</strong></div>`).join('')}</div>
-      <p class="detail-hint">完整对话已统一收敛到 Agent Conversations。请在左侧选择 <b>${escapeHtml(task.assigned_agent || '对应 Agent')}</b>，并切换关联 session。</p>`;
-    dialog.showModal(); }
-  function selectWorkflow(id) { state.selectedId = id; renderSelected(); connectStream(); }
-  function connectStream() { state.source?.close(); const workflow = selected(); if (!workflow) return; const after = Number(localStorage.getItem(`monitor.seq.${workflow.workflow_id}`) || 0);
-    const source = new EventSource(`${state.apiUrl}/api/workflows/${encodeURIComponent(workflow.workflow_id)}/stream?after=${after}`); state.source = source;
-    ['snapshot','activity','health','monitor-health'].forEach((type) => source.addEventListener(type,(message) => { const event = JSON.parse(message.data); if (event.sequence) localStorage.setItem(`monitor.seq.${workflow.workflow_id}`,event.sequence); if (type === 'snapshot') { const workflows = event.payload.workflows; if (workflows) { state.workflows = workflows; if (!state.workflows.some((item) => item.workflow_id === state.selectedId)) state.selectedId = state.workflows[0]?.workflow_id || null; renderSelected(); renderMetrics(); } } addFeed(event); }));
-    source.onopen = () => setConnection('online','LIVE / SSE'); source.onerror = () => setConnection('degraded','RECONNECTING'); }
-  async function connect() { state.apiUrl = $('api-url').value.trim().replace(/\/$/u,''); localStorage.setItem('monitor.apiUrl',state.apiUrl); setConnection('degraded','CONNECTING');
-    try { const [health,workflows] = await Promise.all([request('/api/health'),request('/api/workflows'),loadAgents({preserve:false})]); state.workflows = workflows.workflows || []; if (!state.workflows.some((item) => item.workflow_id === state.selectedId)) state.selectedId = state.workflows[0]?.workflow_id || null; renderMetrics(health); renderSelected(); setConnection(health.ok ? 'online':'degraded',health.status); connectStream(); clearInterval(state.conversationTimer); state.conversationTimer = setInterval(async () => { try { await loadAgents(); if (state.selectedSessionId) await loadConversation(); } catch (_) { /* keep last persistent view during transient refresh errors */ } },5000); }
-    catch (error) { setConnection('offline','OFFLINE'); $('metric-control').textContent = 'UNREACHABLE'; addFeed({type:'monitor-health',timestamp:new Date().toISOString(),payload:{error:error.message}}); } }
-  async function bootstrap() { if (!fixedSameOriginApi) { for (const apiUrl of [...new Set([defaultApiUrl, state.apiUrl])]) { try { const response = await fetch(`${apiUrl}/api/client-config`); if (!response.ok) continue; const config = await response.json(); state.apiUrl = config.api_url || apiUrl; $('api-url').value = state.apiUrl; localStorage.setItem('monitor.apiUrl',state.apiUrl); break; } catch (_) { /* try the saved address after the configured default */ } } } await connect(); }
-  $('api-url').value = state.apiUrl; $('connect-button').addEventListener('click',connect); $('feed-filter').addEventListener('change',renderFeed); $('clear-feed').addEventListener('click',() => { state.feed=[]; renderFeed(); }); $('session-select').addEventListener('change',async (event) => { state.selectedSessionId=event.target.value; localStorage.setItem(`monitor.session.${state.selectedAgentId}`,state.selectedSessionId); await loadConversation(); }); window.addEventListener('beforeunload',() => { state.source?.close(); clearInterval(state.conversationTimer); }); void bootstrap();
-}());
+  function createMessage(kind, label, text, time = null) { return `<article class="message ${kind}"><div class="message-avatar">${kind === 'human' ? '你' : '✦'}</div><div class="message-body"><header><b>${escapeHtml(label)}</b><time>${escapeHtml(messageTime(time))}</time></header><div class="message-copy">${escapeHtml(text)}</div></div></article>`; }
+  function workflowProgress(workflow) {
+    const active = (workflow.tasks || []).find((task) => ['READY', 'REPAIR_READY', 'DISPATCHED', 'STARTING', 'RUNNING'].includes(task.status));
+    if (!active) return null;
+    const agent = active.assigned_agent || 'Agent';
+    const task = active.title || active.task_type || '当前任务';
+    const health = active.health?.health;
+    const previousError = active.last_error?.message || active.last_error?.code;
+    if (health === 'POSSIBLY_STALLED' || health === 'STALE') return `${agent} 的「${task}」可能已停滞；${previousError ? `最近错误：${previousError}` : '请检查执行记录。'}`;
+    if (active.status === 'REPAIR_READY') return `${agent} 正在准备修复「${task}」的结构化输出。`;
+    return `${agent} 正在执行「${task}」（第 ${active.attempt || 1} 次尝试）${previousError ? `；已记录上次错误：${previousError}` : ''}`;
+  }
+  function renderDialogue() {
+    const workflow = selected();
+    const renderKey = JSON.stringify(workflowRenderState(workflow));
+    if (renderKey === state.dialogueKey) return;
+    state.dialogueKey = renderKey;
+    $('empty-view').hidden = Boolean(workflow); $('conversation').hidden = !workflow; renderContext(workflow); if (!workflow) return;
+    const root = $('conversation'); root.innerHTML = '';
+    root.insertAdjacentHTML('beforeend', createMessage('human', '你的任务', workflow.title || workflow.workflow_id, workflow.created_at));
+    const routeText = workflow.route_status === 'PROPOSED' ? 'Manager 已提出流程，正在等待你在 CLI 中确认。' : workflow.condition === 'WAITING_HUMAN' ? '流程已暂停，等待你在 Manager CLI 中作出决定。' : workflow.condition === 'TERMINAL' ? `本轮流程已结束：${workflow.outcome || workflow.status_reason || '已完成'}。` : `StateGraph 正在推进「${workflow.phase.replaceAll('_', ' ')}」。任务状态会在此实时更新。`;
+    root.insertAdjacentHTML('beforeend', createMessage('assistant', 'WorkDesk · StateGraph', routeText, workflow.updated_at));
+    if (workflow.manager_reports?.length) { const report = workflow.manager_reports.at(-1); root.insertAdjacentHTML('beforeend', createMessage('system', '最近的执行记录', report.error?.message || report.error?.code || '已记录任务状态变化', report.reported_at)); }
+    const progress = !workflow.pending_approval && workflow.condition !== 'TERMINAL' ? workflowProgress(workflow) : null;
+    if (progress) root.insertAdjacentHTML('beforeend', `<div class="waiting-line"><i></i><span>${escapeHtml(progress)}</span></div>`);
+  }
+  function selectWorkflow(workflowId) { state.selectedId = workflowId; localStorage.setItem('workdesk.workflow', workflowId); renderWorkflows(); renderDialogue(); renderControls(); }
+  function renderControls() {
+    const enabled = state.interactive && Boolean(selected());
+    ['run-workflow', 'advance-workflow', 'audit-workflow'].forEach((id) => { const element = $(id); if (element) element.disabled = !enabled; });
+    $('new-workflow').disabled = !state.interactive;
+  }
+  function showControlMessage(message, error = false) { const element = $('control-message'); if (element) { element.textContent = message; element.dataset.error = error ? 'true' : 'false'; } }
+  async function runSelected(kind) {
+    const workflow = selected(); if (!workflow) return;
+    try { await controlRequest(`/api/workflows/${encodeURIComponent(workflow.workflow_id)}/${kind}`, { method: 'POST', body: '{}' }); await reload(); showControlMessage('操作已提交。'); }
+    catch (error) { showControlMessage(error.message, true); }
+  }
+  function connectStream() {
+    if (state.source) return;
+    const source = new EventSource(`${state.apiUrl}/api/workflows/stream`); state.source = source;
+    source.addEventListener('snapshot', (event) => { const values = JSON.parse(event.data).payload?.workflows; if (values) { state.workflows = values; if (!state.workflows.some((item) => item.workflow_id === state.selectedId)) state.selectedId = state.workflows[0]?.workflow_id || null; renderWorkflows(); renderDialogue(); $('sync-state').textContent = `已同步 · ${new Date().toLocaleTimeString('zh-CN', { hour12: false })}`; } });
+    source.onerror = () => setConnection(false, '连接正在恢复');
+  }
+  async function reload() {
+    try {
+      const [client, workflows] = await Promise.all([request('/api/client-config'), request('/api/workflows')]); state.interactive = client.interactive_controls === true; state.controlHeader = client.control_token_header || 'x-stategraph-control'; state.workflows = workflows.workflows || [];
+      if (!state.workflows.some((item) => item.workflow_id === state.selectedId)) state.selectedId = state.workflows[0]?.workflow_id || null;
+      renderWorkflows(); renderDialogue(); renderControls(); connectStream(); setConnection(true, client.mode === 'READ_ONLY' ? '只读监测已连接' : '交互控制已连接'); $('sync-state').textContent = `已同步 · ${new Date().toLocaleTimeString('zh-CN', { hour12: false })}`;
+    } catch (error) { setConnection(false, '服务暂不可达'); $('sync-state').textContent = `连接失败 · ${error.message}`; }
+  }
+  $('theme-toggle').addEventListener('click', () => applyTheme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark'));
+  $('new-workflow').addEventListener('click', () => { $('new-workflow-panel').hidden = false; $('empty-view').hidden = true; $('conversation').hidden = true; $('new-workflow-text').focus(); });
+  $('cancel-new-workflow').addEventListener('click', () => { $('new-workflow-panel').hidden = true; $('empty-view').hidden = !selected(); $('conversation').hidden = !selected(); });
+  $('submit-new-workflow').addEventListener('click', async () => {
+    const text = $('new-workflow-text').value.trim(); if (!text) return showControlMessage('请填写需求。', true);
+    try { await controlRequest('/api/workflows', { method: 'POST', body: JSON.stringify({ text, project_path_abs: $('new-workflow-project').value.trim() || undefined }) }); $('new-workflow-text').value = ''; $('new-workflow-panel').hidden = true; await reload(); showControlMessage('workflow 已创建。'); }
+    catch (error) { showControlMessage(error.message, true); }
+  });
+  $('run-workflow').addEventListener('click', () => runSelected('run'));
+  $('advance-workflow').addEventListener('click', () => runSelected('advance'));
+  $('audit-workflow').addEventListener('click', async () => { const workflow = selected(); if (!workflow) return; try { const result = await request(`/api/workflows/${encodeURIComponent(workflow.workflow_id)}/audit`); showControlMessage(result.ok ? '事件链审计通过。' : JSON.stringify(result)); } catch (error) { showControlMessage(error.message, true); } });
+  applyTheme(localStorage.getItem('workdesk.theme') || (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'));
+  window.addEventListener('beforeunload', () => state.source?.close());
+  void reload();
+})();

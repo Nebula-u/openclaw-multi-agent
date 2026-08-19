@@ -54,7 +54,8 @@ export function loadMonitorConfig(overrides = {}) {
   return {
     projectRoot,
     runtimeRoot,
-    databasePath: resolve(overrides.databasePath ?? fileConfig.database_path ?? join(runtimeRoot, 'stategraph', 'checkpoints.db')),
+    // PG 是默认事实源；databasePath 仅作为显式 SQLite 兼容入口保留。
+    databasePath: overrides.databasePath ?? fileConfig.database_path ?? null,
     monitorDatabasePath: overrides.monitorDatabasePath === ':memory:' ? ':memory:'
       : resolve(expandEnvironment(overrides.monitorDatabasePath ?? fileConfig.monitor_database_path ?? join(runtimeRoot, 'monitor', 'monitor.db'))),
     sessionRoot: resolve(expandEnvironment(overrides.sessionRoot ?? environment('OPENCLAW_SESSION_ROOT') ?? fileConfig.session_root
@@ -72,7 +73,9 @@ export function loadMonitorConfig(overrides = {}) {
     telemetryMaxEvents: integer(overrides.telemetryMaxEvents ?? fileConfig.telemetry_max_events, 100000),
     activityRetentionDays: integer(overrides.activityRetentionDays ?? fileConfig.activity_retention_days, 30),
     maintenanceIntervalMs: integer(overrides.maintenanceIntervalMs ?? fileConfig.maintenance_interval_ms, 3600000),
-    workflowContinuationEnabled: boolean(overrides.workflowContinuationEnabled ?? fileConfig.workflow_continuation_enabled, true),
+    workflowContinuationEnabled: boolean(overrides.workflowContinuationEnabled ?? environment('MONITOR_CONTINUATION') ?? fileConfig.workflow_continuation_enabled, false),
     workflowContinuationMaxTurns: integer(overrides.workflowContinuationMaxTurns ?? fileConfig.workflow_continuation_max_turns, 8),
+    interactiveControlsEnabled: boolean(overrides.interactiveControlsEnabled ?? environment('MONITOR_INTERACTIVE') ?? fileConfig.interactive_controls_enabled, false),
+    controlTokenHeader: overrides.controlTokenHeader ?? environment('MONITOR_CONTROL_HEADER') ?? fileConfig.control_token_header ?? 'x-stategraph-control',
   };
 }

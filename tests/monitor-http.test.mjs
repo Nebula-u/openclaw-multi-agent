@@ -36,9 +36,9 @@ test('monitor reads workflows only from latest LangGraph checkpoints', async () 
   try {
     const dashboard = await fetch(value.base + '/');
     assert.equal(dashboard.status, 200);
-    assert.match(await dashboard.text(), /OpenClaw Mission Monitor/u);
+    assert.match(await dashboard.text(), /Workflow Desk/u);
     assert.match(await (await fetch(value.base + '/app.js')).text(), /EventSource/u);
-    assert.match(await (await fetch(value.base + '/styles.css')).text(), /conversation-history/u);
+    assert.match(await (await fetch(value.base + '/styles.css')).text(), /workflow-item/u);
     const health = await fetch(value.base + '/api/health');
     assert.equal(health.status, 200);
     const healthBody = await health.json();
@@ -46,11 +46,15 @@ test('monitor reads workflows only from latest LangGraph checkpoints', async () 
     assert.equal(healthBody.audit.database, 'LANGGRAPH_CHECKPOINTS');
     const clientConfig = await (await fetch(value.base + '/api/client-config', { headers: { origin: 'null' } })).json();
     assert.equal(clientConfig.local_only, true);
-    assert.equal(clientConfig.read_only, true);
+    assert.equal(clientConfig.interactive_controls, false);
+    assert.equal(clientConfig.mode, 'READ_ONLY');
     assert.equal(clientConfig.source, 'LANGGRAPH_CHECKPOINTS');
     const workflows = await (await fetch(value.base + '/api/workflows')).json();
     assert.equal(workflows.workflows[0].workflow_id, value.workflowId);
     assert.equal(workflows.workflows[0].protocol_version, 'stategraph-checkpoint-v1');
+    await value.runtime.graph.updateState({ configurable: { thread_id: value.workflowId, checkpoint_ns: '' } }, { workflowTitle: '监控标题' });
+    const titled = await (await fetch(value.base + '/api/workflows')).json();
+    assert.equal(titled.workflows[0].title, '监控标题');
     const snapshot = await (await fetch(value.base + '/api/workflows/' + value.workflowId + '/snapshot')).json();
     assert.equal(snapshot.snapshot.workflows[0].workflow_id, value.workflowId);
     assert.equal((await fetch(value.base + '/api/workflows/WF-missing/snapshot')).status, 404);
@@ -72,11 +76,42 @@ test('monitor remains reachable while reporting a tampered checkpoint event chai
   } finally { await value.close(); }
 });
 
-test('monitor rejects unknown origins and exposes no mutation endpoint', async () => {
+test('monitor preserves read-only availability when PostgreSQL state source is unavailable', async () => {
+  const temp = mkdtempSync(join(tmpdir(), 'monitor-degraded-'));
+  const stateRuntime = {
+    async list() { throw Object.assign(new Error('postgres unavailable'), { code: 'ECONNREFUSED' }); },
+    async audit() { throw Object.assign(new Error('postgres unavailable'), { code: 'ECONNREFUSED' }); },
+  };
+  const monitor = createMonitorServer({
+    projectRoot: ROOT, databasePath: null, monitorDatabasePath: ':memory:', host: '127.0.0.1', port: 0,
+    allowedOrigins: ['null'], reconcileIntervalMs: 2000, sseRetention: 100, requestBodyLimit: 65536,
+    telemetryMaxEvents: 1000, activityRetentionDays: 30, maintenanceIntervalMs: 3600000,
+    heartbeatStaleSeconds: 180, possiblyStalledSeconds: 300, startingTimeoutSeconds: 120, toolRunningGraceSeconds: 900,
+    sessionRoot: join(temp, 'sessions'),
+  }, { stateRuntime });
+  try {
+    const address = await monitor.start();
+    const base = `http://127.0.0.1:${address.port}`;
+    const workflows = await (await fetch(`${base}/api/workflows`)).json();
+    assert.equal(workflows.ok, true);
+    assert.deepEqual(workflows.workflows, []);
+    const health = await (await fetch(`${base}/api/health`)).json();
+    assert.equal(health.api_reachable, true);
+    assert.equal(health.status, 'DEGRADED');
+    assert.equal(health.audit.error.code, 'ECONNREFUSED');
+  } finally {
+    await monitor.close();
+    rmSync(temp, { recursive: true, force: true });
+  }
+});
+
+test('monitor rejects unknown origins and every state mutation', async () => {
   const value = await setup();
   try {
     assert.equal((await fetch(value.base + '/api/workflows', { headers: { origin: 'https://example.invalid' } })).status, 403);
-    assert.equal((await fetch(value.base + '/api/activity', { method: 'POST', headers: { 'content-type': 'application/json', origin: 'null' }, body: '{}' })).status, 404);
-    assert.equal((await fetch(value.base + '/api/approve', { method: 'POST', headers: { 'content-type': 'application/json', origin: 'null' }, body: '{}' })).status, 404);
+    assert.equal((await fetch(value.base + '/api/activity', { method: 'POST', headers: { 'content-type': 'application/json', origin: 'null' }, body: '{}' })).status, 403);
+    assert.equal((await fetch(value.base + '/api/workflows/' + value.workflowId + '/decisions', {
+      method: 'POST', headers: { 'content-type': 'application/json', origin: 'null' }, body: '{}',
+    })).status, 403);
   } finally { await value.close(); }
 });
