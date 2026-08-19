@@ -137,6 +137,31 @@ command -v jq >/dev/null 2>&1 || {
 HAS_JQ=1
 jq_clean() { jq "$@" | tr -d '\r'; }
 
+is_retired_stategraph_webchat_path() {
+  [[ "$1" =~ (^|[\\/])stategraph-webchat[\\/]*$ ]]
+}
+
+has_retired_stategraph_webchat_config() {
+  [ -f "$CONFIG_FILE_SHELL" ] || return 1
+  jq -e '
+    ((.plugins.load.paths? // []) | any(type == "string" and test("(^|[\\\\/])stategraph-webchat[\\\\/]*$"; "i"))) or
+    (.plugins.entries? | type == "object" and has("stategraph-webchat"))
+  ' "$(native_path "$CONFIG_FILE_SHELL")" >/dev/null 2>&1
+}
+
+remove_retired_stategraph_webchat_config() {
+  local temp
+  temp="${CONFIG_FILE_SHELL}.tmp-$$"
+  jq '
+    if (.plugins? | type) == "object" then
+      (if (.plugins.load? | type) == "object" and (.plugins.load.paths? | type) == "array"
+       then .plugins.load.paths |= map(select((type != "string") or (test("(^|[\\\\/])stategraph-webchat[\\\\/]*$"; "i") | not)))
+       else . end) |
+      (if (.plugins.entries? | type) == "object" then del(.plugins.entries["stategraph-webchat"]) else . end)
+    else . end
+  ' "$(native_path "$CONFIG_FILE_SHELL")" > "$temp" && mv "$temp" "$CONFIG_FILE_SHELL"
+}
+
 mapfile -t PACKAGE_MANIFESTS < <(
   find "$PROJECT_ROOT/agents/packages/builtin" -maxdepth 1 -type f -name '*.json' -print 2>/dev/null
   find "$PROJECT_ROOT/agents/packages/generated/agents" -mindepth 2 -maxdepth 2 -type f -name 'agent.json' -print 2>/dev/null
@@ -289,15 +314,33 @@ command -v openclaw >/dev/null 2>&1 || { echo "未找到 openclaw CLI，请先�
 
 OPENCLAW_VERSION="$(openclaw --version 2>&1 || true)"
 echo "OpenClaw 版本 : $OPENCLAW_VERSION"
-CONFIG_FILE="$(openclaw config file 2>/dev/null | tr -d '\r' | head -1 || true)"
+CONFIG_FILE_RAW="$(openclaw config file 2>&1 || true)"
+CONFIG_FILE="$(printf '%s\n' "$CONFIG_FILE_RAW" | sed -n 's/.*File:[[:space:]]*\([^[:space:]]*\).*/\1/p' | head -1)"
+[ -n "$CONFIG_FILE" ] || CONFIG_FILE="$(printf '%s\n' "$CONFIG_FILE_RAW" | tr -d '\r' | head -1)"
+if [[ "$CONFIG_FILE" == '~/'* ]]; then CONFIG_FILE="$HOME/${CONFIG_FILE#~/}"; fi
+if [[ "$CONFIG_FILE" == '~\\'* ]]; then CONFIG_FILE="$HOME/${CONFIG_FILE#~\\}"; fi
+if [ ! -f "$(shell_path "$CONFIG_FILE")" ]; then
+  fallback_config="$HOME/.openclaw/openclaw.json"
+  [ -f "$fallback_config" ] && CONFIG_FILE="$fallback_config"
+fi
 CONFIG_FILE_SHELL="$(shell_path "$CONFIG_FILE")"
 echo "配置文件      : $CONFIG_FILE"
+RETIRED_STATEGRAPH_WECHAT=0
+if has_retired_stategraph_webchat_config; then
+  RETIRED_STATEGRAPH_WECHAT=1
+  echo "检测到已移除的 StateGraph WebChat 配置。"
+  [ "$APPLY" -eq 1 ] || echo "[DRYRUN] APPLY 时将先备份并移除这些已废弃引用。"
+fi
 
 # 现有 Agent id 列表（需要 jq；无 jq 时 dry-run 仍可继续，apply 则报错）
 EXISTING_IDS=""
 EXISTING_JSON="[]"
 if [ "$HAS_JQ" -eq 1 ]; then
-  EXISTING_JSON="$(openclaw agents list --json 2>/dev/null || printf '[]')"
+  if [ "$RETIRED_STATEGRAPH_WECHAT" -eq 1 ]; then
+    EXISTING_JSON="$(jq -c '.agents.list // []' "$(native_path "$CONFIG_FILE_SHELL")")"
+  else
+    EXISTING_JSON="$(openclaw agents list --json 2>/dev/null || printf '[]')"
+  fi
   EXISTING_IDS="$(printf '%s' "$EXISTING_JSON" | jq -r '.[].id' 2>/dev/null | tr -d '\r' | tr '\n' ' ' || true)"
 fi
 
@@ -483,6 +526,14 @@ restore_on_failure() {
   fi
   echo "[恢复] 可能残留的本项目 runtime 目录（不会自动删除）：$RUNTIME_ROOT_ABS" >&2
 }
+
+# This happens after the backup and restore helper are available, but before
+# any OpenClaw CLI mutation.  The retired plugin is the only invalid-config
+# migration this installer is allowed to perform automatically.
+if [ "$RETIRED_STATEGRAPH_WECHAT" -eq 1 ]; then
+  remove_retired_stategraph_webchat_config || { restore_on_failure "移除已废弃 StateGraph WebChat 配置失败"; exit 1; }
+  echo "已移除已废弃的 StateGraph WebChat 插件配置。"
+fi
 
 # 7.3 复制 workspace prompt + 共享规则 + 模板 到绝对 workspace（自包含）
 SRC_COMMON="$PROJECT_ROOT/agents/common"

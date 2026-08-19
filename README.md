@@ -38,6 +38,8 @@ User <-> OpenClaw Manager conversation
 
 There is no LangGraph/StateGraph runtime, checkpoint store, or webchat plugin in the active control plane.
 
+When updating an older installation, `install.ps1` and `install.sh` automatically back up and remove only the retired `stategraph-webchat` plugin path and registration before synchronizing Agents. Other invalid OpenClaw configuration is not changed automatically and remains an explicit installation error. `config file` can itself fail while that retired plugin is still registered; both installers fall back to the indicated local config file solely to perform this one migration.
+
 ## States
 
 The business state model is intentionally small.
