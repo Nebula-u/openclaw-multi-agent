@@ -40,6 +40,15 @@
             <div class="control-actions"><button id="cancel-new-workflow" class="control-button" type="button">取消</button><button id="submit-new-workflow" class="control-button primary" type="button">提交</button></div>
             <p id="control-message" class="control-message" role="status"></p>
           </section>
+          <section id="chat-panel" class="control-panel chat-panel">
+            <h2>对话入口</h2>
+            <p>先生成意图草案，确认后才会提交 workflow 或人工决定。</p>
+            <textarea id="chat-input" rows="3" placeholder="例如：创建一个本地聊天室 Demo"></textarea>
+            <div class="control-actions"><button id="chat-send" class="control-button primary" type="button">生成意图草案</button></div>
+            <pre id="chat-draft" class="chat-draft" hidden></pre>
+            <div class="control-actions"><button id="chat-confirm" class="control-button primary" type="button" disabled>确认并提交</button></div>
+            <p id="chat-message" class="control-message" role="status"></p>
+          </section>
         </div>
         <aside class="context-panel" aria-label="流程上下文">
           <section class="context-card workflow-overview"><span class="context-kicker">当前流程</span><h2 id="workflow-title">未选择</h2><p id="workflow-summary">—</p><div class="badge-row"><span id="workflow-condition" class="status-badge">UNKNOWN</span><span id="workflow-phase" class="phase-badge">—</span></div></section>

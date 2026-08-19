@@ -11,6 +11,8 @@ import { createArtifactWatcher } from './artifact-watcher.mjs';
 import { createHealthClassifier } from './health-classifier.mjs';
 import { authorityPaths } from '../scripts/stategraph/authority.mjs';
 import { createWorkflowContinuation } from './workflow-continuation.mjs';
+import { createConversationStore } from './conversation-store.mjs';
+import { createChatProvider } from './chat-provider.mjs';
 
 function isLoopback(address = '') {
   return address === '127.0.0.1' || address === '::1' || address === '::ffff:127.0.0.1';
@@ -186,6 +188,9 @@ export function createMonitorServer(config, { stateRuntime: providedRuntime = nu
   const telemetry = createTelemetryRepository(config.projectRoot, telemetryDatabase);
   telemetry.prune({ maxEvents: config.telemetryMaxEvents, activityRetentionDays: config.activityRetentionDays });
   const hub = eventHub ?? new MonitorEventHub({ retention: config.sseRetention });
+  const conversations = createConversationStore({ runtimeRoot: config.runtimeRoot ?? config.projectRoot });
+  const chatProvider = createChatProvider();
+  const intentDrafts = new Map();
   if (config.interactiveControlsEnabled === true && !interactiveControlsEnabled) {
     hub.publish('monitor-health', {
       status: 'DEGRADED',
@@ -383,6 +388,40 @@ export function createMonitorServer(config, { stateRuntime: providedRuntime = nu
           : await stateRuntime.bootstrap({ workflowId, request: requestValue });
         await refresh();
         return sendJson(response, 202, { ok: true, workflow_id: workflowId, result }, cors);
+      }
+      const conversationMessages = path.match(/^\/api\/conversations\/([^/]+)\/messages$/u);
+      if (request.method === 'GET' && conversationMessages) {
+        return sendJson(response, 200, { ok: true, conversation_id: decodeURIComponent(conversationMessages[1]), messages: conversations.list(decodeURIComponent(conversationMessages[1])) }, cors);
+      }
+      if (request.method === 'POST' && conversationMessages) {
+        const conversationId = decodeURIComponent(conversationMessages[1]);
+        const body = await readJsonBody(request, config.requestBodyLimit);
+        const user = conversations.append(conversationId, { role: 'user', content: body.message, workflow_id: body.workflow_id ?? null });
+        const draft = await chatProvider.draft({ message: body.message, workflowId: body.workflow_id ?? null, context: body.context ?? null });
+        intentDrafts.set(draft.intent_id, { ...draft, conversation_id: conversationId });
+        conversations.append(conversationId, { role: 'assistant', content: draft.summary, intent_draft: draft, workflow_id: body.workflow_id ?? null });
+        return sendJson(response, 200, { ok: true, conversation_id: conversationId, user, intent_draft: draft, messages: conversations.list(conversationId) }, cors);
+      }
+      if (request.method === 'POST' && path === '/api/chat/confirm') {
+        const body = await readJsonBody(request, config.requestBodyLimit);
+        if (body.confirmed !== true || !/^human:[A-Za-z0-9._-]+$/u.test(body.actor ?? '')) return sendJson(response, 400, { ok: false, error: 'USER_CONFIRMATION_REQUIRED' }, cors);
+        const draft = intentDrafts.get(body.intent_id);
+        if (!draft) return sendJson(response, 404, { ok: false, error: 'INTENT_DRAFT_NOT_FOUND' }, cors);
+        let result;
+        if (draft.intent_type === 'CREATE') {
+          if (!draft.route_plan) return sendJson(response, 400, { ok: false, error: 'ROUTE_PLAN_REQUIRED', message: 'CREATE 草案必须包含已审核 route_plan。' }, cors);
+          const workflowId = draft.workflow_id ?? body.workflow_id ?? `WF-monitor-${Date.now().toString(36)}`;
+          result = await stateRuntime.bootstrapConfirmed({ workflowId, request: { text: draft.summary, project_path_abs: body.project_path_abs ?? config.projectRoot, source: 'MONITOR_CHAT', submitted_by: 'monitor-chat', submitted_at: new Date().toISOString(), user_confirmation: { confirmed: true, actor: body.actor, message: body.message ?? '用户确认意图草案' } }, routePlan: draft.route_plan });
+        } else if (draft.intent_type === 'DECISION') {
+          if (!draft.workflow_id || !draft.decision_id || !draft.choice) return sendJson(response, 400, { ok: false, error: 'DECISION_CONTEXT_REQUIRED' }, cors);
+          result = await stateRuntime.approve(draft.workflow_id, { decision_id: draft.decision_id, choice: draft.choice, decided_by: body.actor, notes: body.message ?? '', decided_at: new Date().toISOString() });
+        } else if (draft.intent_type === 'CHANGE') {
+          if (!draft.workflow_id || !draft.route_plan) return sendJson(response, 400, { ok: false, error: 'ROUTE_PLAN_REQUIRED' }, cors);
+          result = await stateRuntime.revise(draft.workflow_id, { request_id: `REQ-monitor-chat-${Date.now().toString(36)}`, route_plan: draft.route_plan, user_requested: true, requested_by: body.actor, submitted_by: 'monitor-chat', user_request: body.message ?? draft.summary });
+        } else return sendJson(response, 400, { ok: false, error: 'QUESTION_NOT_MUTATION' }, cors);
+        conversations.append(draft.conversation_id, { role: 'system', content: '用户已确认并提交意图。', intent_id: draft.intent_id, confirmed: true, actor: body.actor });
+        await refresh();
+        return sendJson(response, 200, { ok: true, intent_id: draft.intent_id, result }, cors);
       }
       const workflowRun = path.match(/^\/api\/workflows\/([^/]+)\/(run|advance)$/u);
       if (request.method === 'POST' && workflowRun) {

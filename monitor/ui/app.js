@@ -4,6 +4,7 @@
   const sameOrigin = window.location.protocol !== 'file:';
   const defaultApi = window.MONITOR_CONFIG?.apiUrl || (sameOrigin ? window.location.origin : 'http://127.0.0.1:4319');
   const state = { apiUrl: defaultApi.replace(/\/$/u, ''), workflows: [], selectedId: localStorage.getItem('workdesk.workflow') || null, source: null, workflowListKey: null, dialogueKey: null, interactive: false, controlHeader: 'x-stategraph-control' };
+  let latestDraft = null;
   const $ = (id) => document.getElementById(id);
   const escapeHtml = (value) => String(value ?? '').replace(/[&<'"]/gu, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[char]));
   const selected = () => state.workflows.find((workflow) => workflow.workflow_id === state.selectedId) || null;
@@ -74,6 +75,7 @@
     $('new-workflow').disabled = !state.interactive;
   }
   function showControlMessage(message, error = false) { const element = $('control-message'); if (element) { element.textContent = message; element.dataset.error = error ? 'true' : 'false'; } }
+  function showChatMessage(message, error = false) { const element = $('chat-message'); if (element) { element.textContent = message; element.dataset.error = error ? 'true' : 'false'; } }
   async function runSelected(kind) {
     const workflow = selected(); if (!workflow) return;
     try { await controlRequest(`/api/workflows/${encodeURIComponent(workflow.workflow_id)}/${kind}`, { method: 'POST', body: '{}' }); await reload(); showControlMessage('操作已提交。'); }
@@ -103,6 +105,18 @@
   $('run-workflow').addEventListener('click', () => runSelected('run'));
   $('advance-workflow').addEventListener('click', () => runSelected('advance'));
   $('audit-workflow').addEventListener('click', async () => { const workflow = selected(); if (!workflow) return; try { const result = await request(`/api/workflows/${encodeURIComponent(workflow.workflow_id)}/audit`); showControlMessage(result.ok ? '事件链审计通过。' : JSON.stringify(result)); } catch (error) { showControlMessage(error.message, true); } });
+  $('chat-send').addEventListener('click', async () => {
+    const message = $('chat-input').value.trim(); if (!message) return showChatMessage('请输入消息。', true);
+    if (!state.interactive) return showChatMessage('请先以交互模式启动 Monitor。', true);
+    try {
+      const conversationId = selected()?.workflow_id || 'monitor-chat';
+      const result = await controlRequest(`/api/conversations/${encodeURIComponent(conversationId)}/messages`, { method: 'POST', body: JSON.stringify({ message, workflow_id: selected()?.workflow_id ?? null }) });
+      latestDraft = result.intent_draft; $('chat-draft').hidden = false; $('chat-draft').textContent = JSON.stringify(latestDraft, null, 2); $('chat-confirm').disabled = false; showChatMessage('草案已生成，请确认后提交。');
+    } catch (error) { showChatMessage(error.message, true); }
+  });
+  $('chat-confirm').addEventListener('click', async () => {
+    if (!latestDraft) return; try { await controlRequest('/api/chat/confirm', { method: 'POST', body: JSON.stringify({ intent_id: latestDraft.intent_id, confirmed: true, actor: 'human:monitor-gui' }) }); $('chat-confirm').disabled = true; showChatMessage('已确认并提交。'); await reload(); } catch (error) { showChatMessage(error.message, true); }
+  });
   applyTheme(localStorage.getItem('workdesk.theme') || (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'));
   window.addEventListener('beforeunload', () => state.source?.close());
   void reload();

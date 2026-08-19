@@ -6,6 +6,7 @@ import { join, resolve } from 'node:path';
 import test from 'node:test';
 import { createStateGraphRuntime } from '../scripts/stategraph/runtime.mjs';
 import { createMonitorServer } from '../monitor/server.mjs';
+import { initializeAuthority } from '../scripts/stategraph/authority.mjs';
 
 const ROOT = resolve(import.meta.dirname, '..');
 async function setup() {
@@ -21,7 +22,7 @@ async function setup() {
     dispatcher: { start: (task) => task, reconcile: (task) => ({ kind: 'WAITING', task }) } });
   await runtime.bootstrap({ workflowId, request: { text: 'monitor HTTP test', project_path_abs: target } });
   const monitor = createMonitorServer({
-    projectRoot: ROOT, databasePath: join(temp, 'checkpoints.db'), monitorDatabasePath: ':memory:', host: '127.0.0.1', port: 0,
+    projectRoot: ROOT, runtimeRoot: temp, databasePath: join(temp, 'checkpoints.db'), monitorDatabasePath: ':memory:', host: '127.0.0.1', port: 0,
     allowedOrigins: ['null'], reconcileIntervalMs: 2000, sseRetention: 100, requestBodyLimit: 65536,
     telemetryMaxEvents: 1000, activityRetentionDays: 30, maintenanceIntervalMs: 3600000,
     heartbeatStaleSeconds: 180, possiblyStalledSeconds: 300, startingTimeoutSeconds: 120, toolRunningGraceSeconds: 900,
@@ -114,4 +115,30 @@ test('monitor rejects unknown origins and every state mutation', async () => {
       method: 'POST', headers: { 'content-type': 'application/json', origin: 'null' }, body: '{}',
     })).status, 403);
   } finally { await value.close(); }
+});
+
+test('interactive monitor keeps chat as a two-step intent flow', async () => {
+  const value = await setup();
+  initializeAuthority(ROOT);
+  await value.monitor.close();
+  const monitor = createMonitorServer({
+    projectRoot: ROOT, runtimeRoot: value.temp, databasePath: join(value.temp, 'checkpoints.db'), monitorDatabasePath: ':memory:', host: '127.0.0.1', port: 0,
+    allowedOrigins: ['null'], requestBodyLimit: 65536, telemetryMaxEvents: 1000, activityRetentionDays: 30, maintenanceIntervalMs: 3600000,
+    heartbeatStaleSeconds: 180, possiblyStalledSeconds: 300, startingTimeoutSeconds: 120, toolRunningGraceSeconds: 900,
+    workflowContinuationEnabled: false, workflowContinuationMaxTurns: 8, interactiveControlsEnabled: true, controlTokenHeader: 'x-stategraph-control', sessionRoot: join(value.temp, 'sessions'),
+  }, { stateRuntime: value.runtime });
+  const address = await monitor.start();
+  try {
+    const base = `http://127.0.0.1:${address.port}`;
+    const headers = { 'content-type': 'application/json', 'x-stategraph-control': '1' };
+    const draftResponse = await fetch(`${base}/api/conversations/test/messages`, { method: 'POST', headers, body: JSON.stringify({ message: '创建一个本地 demo' }) });
+    assert.equal(draftResponse.status, 200);
+    const draft = (await draftResponse.json()).intent_draft;
+    assert.equal(draft.requires_confirmation, true);
+    const confirm = await fetch(`${base}/api/chat/confirm`, { method: 'POST', headers, body: JSON.stringify({ intent_id: draft.intent_id, confirmed: true, actor: 'human:test' }) });
+    assert.equal(confirm.status, 400);
+    assert.equal((await confirm.json()).error, 'ROUTE_PLAN_REQUIRED');
+    const messages = await (await fetch(`${base}/api/conversations/test/messages`)).json();
+    assert.equal(messages.messages.length, 2);
+  } finally { await monitor.close(); value.runtime.close(); rmSync(value.temp, { recursive: true, force: true }); }
 });
