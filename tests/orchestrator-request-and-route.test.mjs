@@ -1,0 +1,54 @@
+import assert from 'node:assert/strict';
+import { mkdtempSync, readFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
+import test from 'node:test';
+import { createManagerRequestProcessor } from '../scripts/orchestrator/manager-request-queue.mjs';
+import { compileRoutePlan, RoutePlanError } from '../scripts/orchestrator/route-policy.mjs';
+import { atomicWriteJson } from '../scripts/runtime-core/atomic-store.mjs';
+
+const ROOT = resolve(process.cwd());
+
+function routePlan(workflowId = 'WF-Route-001') {
+  return {
+    schema_version: 1, workflow_id: workflowId, request_class: 'ANALYSIS_ONLY', summary: 'Inspect the codebase.', display_title: 'Review', risk_flags: [],
+    steps: [{ step_id: 'review', kind: 'CODE_REVIEW', title: 'Review the current implementation', rationale: 'The user requested a review.', human_approval_after: false, approval_reason: null }],
+    skipped_stages: ['REQUIREMENTS', 'ARCHITECTURE', 'DESIGN', 'DEVELOPMENT', 'TEST', 'RELEASE'].map((kind) => ({ kind, reason: 'Not required for this request.' })),
+  };
+}
+
+test('Orchestrator freezes a serial route with fixed Agent assignment', () => {
+  const plan = compileRoutePlan(ROOT, routePlan());
+  assert.equal(plan.steps[0].agent_id, 'review-agent');
+  assert.equal(plan.steps[0].execution_mode, 'SERIAL');
+  assert.match(plan.route_hash, /^[a-f0-9]{64}$/u);
+});
+
+test('Orchestrator rejects routes that omit a skipped-stage reason', () => {
+  const invalid = routePlan(); invalid.skipped_stages.pop();
+  assert.throws(() => compileRoutePlan(ROOT, invalid), (error) => error instanceof RoutePlanError && error.code === 'ROUTE_PLAN_SKIP_REASON_MISSING');
+});
+
+test('Manager request queue requires session-bound requests and records a receipt', async () => {
+  const workspace = mkdtempSync(join(tmpdir(), 'orchestrator-manager-'));
+  const calls = [];
+  const orchestrator = {
+    projectRoot: ROOT,
+    async createRun(request) { calls.push(request); return { runId: 'RUN-test', routeHash: 'a'.repeat(64) }; },
+    async reviseRun() { throw new Error('not used'); },
+    async decide() { throw new Error('not used'); },
+    async tickAll() { return []; },
+  };
+  const queue = createManagerRequestProcessor({ orchestrator, projectRoot: ROOT, managerWorkspace: workspace });
+  const request = {
+    schema_version: 1, request_id: 'REQ-001', request_type: 'CREATE', workflow_id: 'WF-Route-001', submitted_by: 'manager-agent',
+    manager_session_id: 'manager-session', manager_session_key: 'agent:manager:source', project_path_abs: ROOT, original_request: 'Review code', route_plan: routePlan(),
+    user_authorized: { confirmed: true, actor: 'human:liuxu', message: 'Please run this reviewed route.' },
+  };
+  const path = join(queue.requests, 'request.json'); atomicWriteJson(path, request);
+  const receipt = await queue.processFile('request.json');
+  assert.equal(receipt.status, 'ACCEPTED'); assert.equal(calls.length, 1);
+  assert.equal(JSON.parse(readFileSync(join(queue.receipts, 'request.json.receipt.json'), 'utf8')).status, 'ACCEPTED');
+  delete request.manager_session_id; atomicWriteJson(join(queue.requests, 'missing-session.json'), request);
+  assert.equal((await queue.processFile('missing-session.json')).status, 'REJECTED');
+});

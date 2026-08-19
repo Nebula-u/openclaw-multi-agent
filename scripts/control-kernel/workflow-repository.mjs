@@ -89,6 +89,11 @@ export function createWorkflowRepository({ pool, kernel, clock = () => new Date(
     return runOut(rows[0]);
   }
 
+  async function getRunById(runId) {
+    const { rows } = await pool.query('SELECT * FROM runs WHERE run_id=$1', [runId]);
+    return runOut(rows[0]);
+  }
+
   async function listRuns({ limit = 200 } = {}) {
     const { rows } = await pool.query('SELECT * FROM runs ORDER BY updated_at DESC LIMIT $1', [limit]);
     return rows.map(runOut);
@@ -210,7 +215,14 @@ export function createWorkflowRepository({ pool, kernel, clock = () => new Date(
        WHERE notification_id=$1 RETURNING *`,
       [notificationId, patch.status ?? null, patch.incrementAttempts ? 1 : 0, patch.lastError ? json(patch.lastError) : null],
     );
-    return notificationOut(rows[0]);
+    const notification = notificationOut(rows[0]);
+    if (!notification) return null;
+    if (patch.status) {
+      await append(notification.runId, patch.status === 'DELIVERED' ? 'MANAGER_NOTIFICATION_DELIVERED' : 'MANAGER_NOTIFICATION_FAILED', {
+        notification_id: notificationId, status: patch.status, error: patch.lastError ?? null,
+      }, { taskId: notification.taskId });
+    }
+    return notification;
   }
 
   async function queueHrJob({ runId = null, taskId = null, kind, sourceAgentId = null, sourceSessionId = null, sourceEventId = null, input }) {
@@ -258,7 +270,7 @@ export function createWorkflowRepository({ pool, kernel, clock = () => new Date(
   }
 
   return {
-    createRun, getRun, listRuns, updateRun, createTask, getTask, listTasks, updateTask,
+    createRun, getRun, getRunById, listRuns, updateRun, createTask, getTask, listTasks, updateTask,
     createApproval, resolveApproval, listApprovals, queueNotification, listNotifications,
     updateNotification, queueHrJob, listHrJobs, updateHrJob, registerArtifact,
     executionIdFor, now: () => time(clock()),
