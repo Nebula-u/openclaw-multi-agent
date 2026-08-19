@@ -25,6 +25,28 @@ test('Manager policy keeps the 200k context, 32k output and 12k prompt limits al
   assert.equal(sessionPolicy.prompt_max_chars, policy.manager.prompt_max_chars);
 });
 
+test('operational policy values are validated and exposed for Kernel/Harness wiring', () => {
+  assert.equal(policy.lease_seconds, 120);
+  assert.equal(policy.heartbeat_interval_seconds, 30);
+  assert.deepEqual(policy.parallelism, { enabled: false, max_parallel: 1 });
+});
+
+test('lease policy fails closed when heartbeats could outlive the lease', () => {
+  const temp = mkdtempSync(join(tmpdir(), 'stategraph-policy-lease-'));
+  try {
+    mkdirSync(join(temp, 'config'));
+    writeFileSync(join(temp, 'config', 'stategraph-policy.json'), JSON.stringify({
+      manager: { context_window_tokens: 200000, max_output_tokens: 32000, soft_budget_percent: 60, prompt_max_chars: 12000 },
+      lease_seconds: 60,
+      heartbeat_interval_seconds: 30,
+      parallelism: { enabled: false, max_parallel: 1 },
+    }));
+    assert.throws(() => loadStateGraphPolicy(temp), { code: 'POLICY_LEASE_TOO_SHORT' });
+  } finally {
+    rmSync(temp, { recursive: true, force: true });
+  }
+});
+
 test('stategraph policy fails closed when Manager limits overflow the model context', () => {
   const temp = mkdtempSync(join(tmpdir(), 'stategraph-policy-'));
   try {
@@ -53,6 +75,7 @@ test('code compiles Manager proposal into fixed Agent mappings and one immutable
     schema_version: 1,
     workflow_id: 'WF-small-code',
     request_class: 'SMALL_CODE',
+    display_title: '修复局部逻辑',
     summary: '修复一个局部逻辑并回归测试',
     risk_flags: [],
     steps: [
@@ -75,6 +98,7 @@ test('TEST_ONLY route does not require architecture or development', () => {
     schema_version: 1,
     workflow_id: 'WF-test-only',
     request_class: 'TEST_ONLY',
+    display_title: '运行现有测试',
     summary: '只执行现有测试',
     risk_flags: [],
     steps: [{ step_id: 'test', kind: 'TEST', title: '执行测试', rationale: '用户只要求测试', human_approval_after: false, approval_reason: null }],
@@ -89,6 +113,7 @@ test('architecture threshold and elevated-risk approval are code-enforced', () =
     schema_version: 1,
     workflow_id: 'WF-risk',
     request_class: 'FEATURE',
+    display_title: '修改安全边界',
     summary: '修改安全边界',
     risk_flags: ['security_boundary'],
     steps: [
@@ -106,4 +131,28 @@ test('architecture threshold and elevated-risk approval are code-enforced', () =
   };
   const plan = compileRoutePlan(ROOT, withArchitecture, policy);
   assert.deepEqual(plan.approval_plan.map((item) => item.node_id), ['route-plan-confirmation', 'approval-after-architecture']);
+});
+
+test('parallel route hints are limited to read-only lifecycle stages', () => {
+  const value = {
+    schema_version: 1,
+    workflow_id: 'WF-parallel-route',
+    request_class: 'TEST_ONLY',
+    display_title: '并行测试',
+    summary: '并行执行只读测试步骤',
+    risk_flags: [],
+    steps: [{
+      step_id: 'test',
+      kind: 'TEST',
+      title: '测试',
+      rationale: '拆分只读测试任务',
+      human_approval_after: false,
+      approval_reason: null,
+      split_hint: { max_parallel: 2, partition_by: 'FILE_GROUP' },
+    }],
+    skipped_stages: skipped('TEST'),
+  };
+  assert.doesNotThrow(() => compileRoutePlan(ROOT, value));
+  const development = { ...value, steps: [{ ...value.steps[0], kind: 'DEVELOPMENT' }] };
+  assert.throws(() => compileRoutePlan(ROOT, development), (error) => error.code === 'ROUTE_PLAN_PARALLEL_KIND_FORBIDDEN');
 });

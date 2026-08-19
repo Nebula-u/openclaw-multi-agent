@@ -6,7 +6,9 @@ import { atomicWriteFile, atomicWriteJson } from '../runtime-core/atomic-store.m
 import { ingestTaskOutput, rawOutputPath } from './output-ingestion.mjs';
 import { agentEnvironment } from './authority.mjs';
 import { createContextManifest, verifyContextManifest } from './context-manifest.mjs';
-import { assertSandboxAttestation, prepareTestSandboxSession } from './sandbox-runtime.mjs';
+import { assertSandboxAttestation, cleanupTestSandboxSession, prepareTestSandboxSession } from './sandbox-runtime.mjs';
+import { bindEphemeralSchema, releaseEphemeralSchema } from './ephemeral-schema.mjs';
+import { assertExecutor, createOpenClawExecutor } from './agent-executor/index.mjs';
 
 function inside(root, path) {
   if (!isAbsolute(root) || !isAbsolute(path)) return false;
@@ -36,13 +38,14 @@ function taskMessage(task, cycle, repairError = null, sandbox = null) {
     return `# JSON 重新生成 ${cycle}/2\n\n你仍是 ${task.agent_id}，继续使用同一 session。上次输出未通过本地信任边界：\n\n${JSON.stringify(repairError, null, 2)}\n\n只重新生成不合法的结构化文件。必须覆盖写入：\n${outputPath}\n\n不要解释，不要改变任务、Agent、run、attempt、context manifest 或路由。`;
   }
   const expected = task.kind === 'MANAGER_ANALYSIS'
-    ? `分析用户需求，生成本轮动态路线。只写 route-plan JSON 到 ${outputPath}。所有省略阶段必须写 skipped_stages 理由；需要的人工审批写 human_approval_after。不得填写 Agent ID，Agent 由代码强制映射。`
+    ? `分析用户需求，生成本轮动态路线。只写 route-plan JSON 到 ${outputPath}。display_title 必须是对首次用户需求的中文概括，最多 10 个字，不含标点或解释。所有省略阶段必须写 skipped_stages 理由；需要的人工审批写 human_approval_after。不得填写 Agent ID，Agent 由代码强制映射。`
     : `完成 ${task.kind} 任务，并把 result.schema.json 对象写到 ${outputPath}。self_validation.checks 必须逐项包含：${task.required_gate_checks.join(', ')}。artifact_manifest_hash 必须等于 context_manifest_sha256。所有身份、commit 和主机路径字段必须与 context manifest 完全一致。`;
   const sandboxText = sandbox ? `\n\n## 强制 Docker 沙箱\n\n本次 test-agent 只能使用 /worktree（读写）、/input（只读）、/agent-raw（读写）、/raw-logs（读写）；禁止主机执行、提权和网络。实际文件访问使用容器路径，但 result 与 CommandRecord 的身份/路径字段必须使用 /input/task.json 的 host_task_metadata 主机值，以便本地代码校验。isolation_mode 必须为 SANDBOXED_DOCKER，sandbox_attestation 必须逐字复制以下代码验证对象：\n\n${JSON.stringify(sandbox.attestation, null, 2)}` : '';
   return `# StateGraph 强制分发任务\n\n- workflow_id: ${task.workflow_id}\n- task_id: ${task.task_id}\n- run_id: ${task.run_id}\n- step_id: ${task.step_id}\n- assigned_agent: ${task.agent_id}\n- attempt: ${task.attempt}\n- input_commit: ${task.input_commit}\n- worktree_path_abs: ${worktreePath}\n- artifact_root_abs: ${sandbox ? '/agent-raw' : task.artifact_root_abs}\n- context_manifest_path_abs: ${manifestPath}\n- context_manifest_sha256: ${task.context_manifest_sha256}\n\n${expected}\n\n## 任务上下文\n\n${task.prompt}${sandboxText}\n\n禁止调用其他 Agent、禁止修改路线或审批计划、禁止写最终 output 目录、禁止把聊天文本当作完成证据。`;
 }
 
-export function launchDetachedAgent({ task, cycle, paths, timeoutSeconds, sandboxLeasePath = null }) {
+export function launchDetachedAgent({ task, cycle, paths, timeoutSeconds, leaseSeconds, heartbeatIntervalSeconds,
+  sandboxLeasePath = null, schemaBindingPath = null }) {
   const runner = resolve(import.meta.dirname, 'agent-runner.mjs');
   const args = [runner,
     '--agent-id', task.agent_id,
@@ -56,6 +59,10 @@ export function launchDetachedAgent({ task, cycle, paths, timeoutSeconds, sandbo
     '--raw-log-path', paths.raw_log_path_abs,
     '--dispatch-id', `DSP-${task.run_id.slice(4)}-${cycle}`,
     '--cycle', String(cycle),
+    ...(leaseSeconds ? ['--lease-seconds', String(leaseSeconds)] : []),
+    ...(heartbeatIntervalSeconds ? ['--heartbeat-interval-seconds', String(heartbeatIntervalSeconds)] : []),
+    ...(task.kernel_execution_id ? ['--kernel-execution-id', task.kernel_execution_id] : []),
+    ...(schemaBindingPath ? ['--schema-binding-path', schemaBindingPath] : []),
     ...(sandboxLeasePath ? ['--sandbox-lease-path', sandboxLeasePath] : []),
   ];
   const child = spawn(process.execPath, args, { detached: true, windowsHide: true, stdio: 'ignore', shell: false, env: agentEnvironment() });
@@ -64,9 +71,10 @@ export function launchDetachedAgent({ task, cycle, paths, timeoutSeconds, sandbo
 }
 
 export function createForcedDispatcher({ projectRoot: projectRootInput, policy, launch = launchDetachedAgent,
-  clock = () => new Date(), uuid = randomUUID, worktrees = null, sandboxCommandRunner = null } = {}) {
+  executor = null, clock = () => new Date(), uuid = randomUUID, worktrees = null, sandboxCommandRunner = null } = {}) {
   const projectRoot = resolve(projectRootInput);
   const artifactBoundary = join(projectRoot, 'runtime', 'artifacts');
+  const selectedExecutor = assertExecutor(executor ?? createOpenClawExecutor({ launch }));
 
   function assertTask(task) {
     if (policy.task_agents[task.kind] !== task.agent_id) throw Object.assign(new Error('Agent assignment is not the fixed policy mapping'), { code: 'DISPATCH_AGENT_POLICY_MISMATCH' });
@@ -106,6 +114,7 @@ export function createForcedDispatcher({ projectRoot: projectRootInput, policy, 
         commandRunner: sandboxCommandRunner,
       }) : null;
       atomicWriteFile(paths.message_path_abs, taskMessage(task, cycle, task.last_error, sandbox));
+      const schemaBindingPath = bindEphemeralSchema({ projectRoot, task, cycle });
       atomicWriteJson(paths.launcher_path_abs, {
         schema_version: 1,
         dispatch_id: dispatchId,
@@ -119,11 +128,28 @@ export function createForcedDispatcher({ projectRoot: projectRootInput, policy, 
         created_at: clock().toISOString(),
         context_manifest_path_abs: task.context_manifest_path_abs,
         context_manifest_sha256: task.context_manifest_sha256,
+        lease_seconds: policy.lease_seconds,
+        heartbeat_interval_seconds: policy.heartbeat_interval_seconds,
         sandbox_lease_path_abs: sandbox?.leasePath ?? null,
         sandbox_mount_plan: sandbox?.mountPlan ?? null,
+        schema_binding_path_abs: schemaBindingPath,
         ...paths,
       });
-      const launched = await launch({ task, cycle, paths, timeoutSeconds: policy.agent_timeout_seconds, sandboxLeasePath: sandbox?.leasePath ?? null });
+      let launched;
+      try {
+        launched = await selectedExecutor.start({ task, cycle, paths, timeoutSeconds: policy.agent_timeout_seconds,
+          leaseSeconds: policy.lease_seconds, heartbeatIntervalSeconds: policy.heartbeat_interval_seconds,
+          sandboxLeasePath: sandbox?.leasePath ?? null, schemaBindingPath });
+      } catch (error) {
+        releaseEphemeralSchema(schemaBindingPath);
+        if (sandbox) {
+          try { await cleanupTestSandboxSession({ lease: sandbox.lease, leasePath: sandbox.leasePath, commandRunner: sandboxCommandRunner }); }
+          catch (cleanupError) {
+            error.details = { ...(error.details ?? {}), sandbox_cleanup_error: cleanupError.message, sandbox_cleanup_code: cleanupError.code ?? null };
+          }
+        }
+        throw error;
+      }
       atomicWriteJson(paths.launcher_path_abs, {
         ...JSON.parse(readFileSync(paths.launcher_path_abs, 'utf8')),
         launcher_pid: launched?.launcher_pid ?? null,
@@ -184,6 +210,7 @@ export function createForcedDispatcher({ projectRoot: projectRootInput, policy, 
       task.result = accepted.value;
       task.output_path_abs = accepted.output_path_abs;
       task.ingestion_receipt_path_abs = accepted.receipt_path_abs;
+      task.cas_artifacts = accepted.cas_artifacts;
       task.updated_at = clock().toISOString();
       return { kind: 'SUCCEEDED', task };
     } catch (error) {

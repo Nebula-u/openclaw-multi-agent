@@ -6,6 +6,12 @@ import { canonicalJson, sha256 } from './events.mjs';
 
 const ORDER = ['REQUIREMENTS', 'ARCHITECTURE', 'DESIGN', 'DEVELOPMENT', 'CODE_REVIEW', 'TEST', 'RELEASE'];
 
+function displayTitle(value) {
+  if (typeof value !== 'string') return null;
+  const title = value.replaceAll(/[\r\n\t]/gu, ' ').replaceAll(/\s+/gu, ' ').trim();
+  return title ? Array.from(title).slice(0, 10).join('') : null;
+}
+
 export class RoutePlanError extends Error {
   constructor(code, message, details = {}) {
     super(message);
@@ -39,6 +45,33 @@ export function loadStateGraphPolicy(projectRootInput) {
       context_window_tokens: manager.context_window_tokens,
     });
   }
+
+  const positiveInteger = (field, code) => {
+    if (!Number.isSafeInteger(policy[field]) || policy[field] <= 0) {
+      fail(code, `${field} must be a positive safe integer`, { field, value: policy[field] });
+    }
+  };
+  positiveInteger('lease_seconds', 'STATEGRAPH_POLICY_LEASE_INVALID');
+  positiveInteger('heartbeat_interval_seconds', 'STATEGRAPH_POLICY_HEARTBEAT_INVALID');
+  if (policy.recursion_limit !== undefined && (!Number.isSafeInteger(policy.recursion_limit) || policy.recursion_limit < 20)) {
+    fail('STATEGRAPH_POLICY_RECURSION_LIMIT_INVALID', 'recursion_limit must be a safe integer of at least 20');
+  }
+  if (policy.lease_seconds <= policy.heartbeat_interval_seconds * 2) {
+    fail('POLICY_LEASE_TOO_SHORT', 'lease_seconds must be greater than heartbeat_interval_seconds * 2', {
+      lease_seconds: policy.lease_seconds,
+      heartbeat_interval_seconds: policy.heartbeat_interval_seconds,
+    });
+  }
+  const parallelism = policy.parallelism;
+  if (!parallelism || typeof parallelism !== 'object' || Array.isArray(parallelism)
+    || typeof parallelism.enabled !== 'boolean'
+    || !Number.isSafeInteger(parallelism.max_parallel)
+    || parallelism.max_parallel <= 0
+    || parallelism.max_parallel > 8) {
+    fail('STATEGRAPH_POLICY_PARALLELISM_INVALID', 'parallelism.enabled and parallelism.max_parallel must be valid', {
+      parallelism,
+    });
+  }
   return policy;
 }
 
@@ -63,6 +96,9 @@ function assertRouteRules(plan, policy) {
     if (currentOrder < order) fail('ROUTE_PLAN_ORDER_INVALID', `${step.kind} appears after a later lifecycle stage`);
     order = currentOrder;
     if (!policy.task_agents[step.kind]) fail('ROUTE_PLAN_AGENT_MAPPING_MISSING', `no fixed Agent mapping for ${step.kind}`);
+    if (step.split_hint?.max_parallel > 1 && !['REQUIREMENTS', 'CODE_REVIEW', 'TEST'].includes(step.kind)) {
+      fail('ROUTE_PLAN_PARALLEL_KIND_FORBIDDEN', `${step.kind} cannot be parallelized because it may mutate the candidate repository`);
+    }
   }
   const kinds = new Set(plan.steps.map((step) => step.kind));
   const skipped = new Set(plan.skipped_stages.map((item) => item.kind));
@@ -104,6 +140,7 @@ export function compileRoutePlan(projectRootInput, value, policyInput = null) {
     workflow_id: value.workflow_id,
     request_class: value.request_class,
     summary: value.summary,
+    display_title: displayTitle(value.display_title),
     risk_flags: [...value.risk_flags],
     skipped_stages: value.skipped_stages.map((item) => ({ ...item })),
     steps: value.steps.map((step, index) => ({

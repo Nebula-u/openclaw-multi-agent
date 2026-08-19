@@ -21,7 +21,10 @@ export function sha256(value) {
 }
 
 export function appendStateEvent(state, changes, type, payload, occurredAt) {
-  const revision = Number(state.revision ?? 0) + 1;
+  const parallelSlot = Number(payload?.parallel_slot);
+  const isParallelEvent = Number.isSafeInteger(parallelSlot) && parallelSlot >= 0
+    && state.tasks?.some((task) => task.task_id === payload?.task_id && task.task_group_id);
+  const revision = (state.events?.length ?? 0) + 1 + (isParallelEvent ? parallelSlot : 0);
   const previous = state.events?.at(-1)?.event_hash ?? null;
   const body = {
     schema_version: 1,
