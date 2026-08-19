@@ -4,7 +4,7 @@ import Ajv from 'ajv';
 import addFormats from 'ajv-formats';
 import { canonicalJson, sha256 } from '../runtime-core/hash-chain.mjs';
 
-export const ROUTE_ORDER = ['REQUIREMENTS', 'ARCHITECTURE', 'DESIGN', 'DEVELOPMENT', 'CODE_REVIEW', 'TEST', 'RELEASE'];
+export const ROUTE_ORDER = ['REQUIREMENTS', 'ARCHITECTURE', 'DESIGN', 'DEVELOPMENT', 'TEST', 'CODE_REVIEW', 'RELEASE'];
 export const TASK_AGENT_BY_KIND = Object.freeze({
   REQUIREMENTS: 'requirement-agent',
   ARCHITECTURE: 'architect-agent',
