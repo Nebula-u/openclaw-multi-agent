@@ -35,7 +35,7 @@ export function taskMessage(task) {
 }
 
 export function createOrchestrator({ projectRoot: projectRootInput, pool = null, kernel = null, repository = null, worktrees = null,
-  runner = runOpenClawAgent, notificationRunner = runOpenClawAgent, clock = () => new Date(), maxAttempts = 3, timeoutSeconds = 900 } = {}) {
+  runner = runOpenClawAgent, notificationRunner = runOpenClawAgent, hr = null, clock = () => new Date(), maxAttempts = 3, timeoutSeconds = 900 } = {}) {
   const projectRoot = resolve(projectRootInput ?? process.cwd());
   const ownedPool = !pool && !kernel && !repository;
   const config = resolveKernelConfig({ projectRoot });
@@ -44,11 +44,21 @@ export function createOrchestrator({ projectRoot: projectRootInput, pool = null,
   const selectedRepository = repository ?? createWorkflowRepository({ pool: selectedPool, kernel: selectedKernel, clock });
   const selectedWorktrees = worktrees ?? createGitWorktreeManager({ projectRoot });
   const registry = loadActiveAgentRegistry(projectRoot);
+  let hrService = hr;
 
   async function announce(run, type, payload, taskId = null) {
     const notification = await selectedRepository.queueNotification({ runId: run.runId, taskId, type, payload });
     await deliverNotifications({ notificationIds: [notification.notificationId] });
     return notification;
+  }
+
+  async function queueDailyReport(run, task, outcome) {
+    if (!hrService?.queueTaskDailyReport) return null;
+    try { return await hrService.queueTaskDailyReport({ run, task, outcome }); }
+    catch (error) {
+      await announce(run, 'HR_DAILY_REPORT_QUEUE_FAILED', { task_id: task.taskId, error: { code: error.code ?? 'HR_QUEUE_FAILED', message: error.message } }, task.taskId);
+      return null;
+    }
   }
 
   async function deliverNotifications({ notificationIds = null, limit = 100 } = {}) {
@@ -112,10 +122,15 @@ export function createOrchestrator({ projectRoot: projectRootInput, pool = null,
       const request = approvalRequest(task, null, step);
       await selectedRepository.createApproval({ runId: run.runId, taskId: task.taskId, stepId: step.step_id, trigger: request.trigger, request });
       await announce(run, 'HUMAN_APPROVAL_REQUIRED', { approval: request, result_summary: result.summary_for_user }, task.taskId);
+      await queueDailyReport(run, task, 'WAITING_HUMAN');
       return { state: 'WAITING_HUMAN', task };
     }
     const nextIndex = run.currentStepIndex + 1;
-    if (nextIndex >= run.routePlan.steps.length) return { state: 'TERMINAL', run: await finishRun(run, 'SUCCEEDED', 'all confirmed route steps completed') };
+    if (nextIndex >= run.routePlan.steps.length) {
+      await queueDailyReport(run, task, 'SUCCEEDED');
+      return { state: 'TERMINAL', run: await finishRun(run, 'SUCCEEDED', 'all confirmed route steps completed') };
+    }
+    await queueDailyReport(run, task, 'SUCCEEDED');
     const updated = await selectedRepository.updateRun(run.runId, { currentStepIndex: nextIndex, state: 'ACTIVE', statusReason: `step ${step.step_id} completed` }, { eventType: 'ROUTE_ADVANCED', eventPayload: { completed_step_id: step.step_id, next_step_index: nextIndex } });
     await announce(updated, 'TASK_COMPLETED', { task_id: task.taskId, step_id: step.step_id, summary: result.summary_for_user }, task.taskId);
     return { state: 'ACTIVE', run: updated };
@@ -192,6 +207,7 @@ export function createOrchestrator({ projectRoot: projectRootInput, pool = null,
       if (['NEEDS_REWORK', 'BLOCKED', 'FAILED'].includes(ingested.value.result_status)) {
         const failed = await selectedRepository.updateTask(task.taskId, { state: 'FAILED', lastError: { code: `AGENT_${ingested.value.result_status}`, summary: ingested.value.summary_for_manager } }, { eventType: 'TASK_REWORK_OR_FAILURE', eventPayload: { result_status: ingested.value.result_status } });
         await announce(run, ingested.value.result_status === 'NEEDS_REWORK' ? 'TASK_REWORK_REQUESTED' : 'TASK_FAILED', { task_id: task.taskId, result_status: ingested.value.result_status, summary: ingested.value.summary_for_user }, task.taskId);
+        await queueDailyReport(run, failed, ingested.value.result_status);
         return { state: 'FAILED', task: failed };
       }
       return advanceAfterSuccess(run, completed, ingested.value);
@@ -200,6 +216,7 @@ export function createOrchestrator({ projectRoot: projectRootInput, pool = null,
       const receipt = writeFailureReceipt(task, error, now(clock));
       const failed = await selectedRepository.updateTask(task.taskId, { state: 'FAILED', lastError: { code: error.code ?? 'TASK_EXECUTION_FAILED', message: error.message, receipt_path_abs: receipt } }, { eventType: 'TASK_FAILED', eventPayload: { code: error.code ?? 'TASK_EXECUTION_FAILED', message: error.message } });
       await announce(run, 'TASK_FAILED', { task_id: task.taskId, agent_id: task.agentId, error: failed.lastError }, task.taskId);
+      await queueDailyReport(run, failed, 'FAILED');
       return { state: 'FAILED', task: failed };
     }
   }
@@ -227,7 +244,10 @@ export function createOrchestrator({ projectRoot: projectRootInput, pool = null,
     const approval = await selectedRepository.resolveApproval({ decisionId: request.decision_id, response: { outcome: request.choice, notes: request.notes ?? '', actor: request.user_authorized.actor, decided_at: request.submitted_at ?? now(clock) } });
     const task = approval.taskId ? await selectedRepository.getTask(approval.taskId) : null;
     if (['CANCEL', 'ABORT', 'REJECTED'].includes(request.choice)) {
-      if (task) await selectedRepository.updateTask(task.taskId, { state: 'CANCELLED' }, { eventType: 'TASK_CANCELLED_BY_HUMAN', eventPayload: { decision_id: approval.decisionId } });
+      if (task) {
+        const cancelled = await selectedRepository.updateTask(task.taskId, { state: 'CANCELLED' }, { eventType: 'TASK_CANCELLED_BY_HUMAN', eventPayload: { decision_id: approval.decisionId } });
+        await queueDailyReport(run, cancelled, 'CANCELLED');
+      }
       return finishRun(run, 'CANCELLED', 'user declined an approval through Manager');
     }
     if (['REWORK', 'REVISE'].includes(request.choice) && task) {
@@ -243,5 +263,6 @@ export function createOrchestrator({ projectRoot: projectRootInput, pool = null,
   }
 
   async function close() { if (ownedPool) await selectedPool.end(); }
-  return { projectRoot, repository: selectedRepository, kernel: selectedKernel, createRun, reviseRun, decide, tick, tickAll, deliverNotifications, close };
+  function attachHrService(value) { hrService = value; return hrService; }
+  return { projectRoot, repository: selectedRepository, kernel: selectedKernel, createRun, reviseRun, decide, tick, tickAll, deliverNotifications, attachHrService, close };
 }

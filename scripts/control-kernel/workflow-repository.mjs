@@ -255,7 +255,12 @@ export function createWorkflowRepository({ pool, kernel, clock = () => new Date(
        WHERE job_id=$1 RETURNING *`,
       [jobId, patch.status ?? null, patch.hrSessionId ?? null, patch.incrementAttempts ? 1 : 0, patch.lastError ? json(patch.lastError) : null],
     );
-    return hrJobOut(rows[0]);
+    const job = hrJobOut(rows[0]);
+    if (!job) return null;
+    if (patch.status && job.runId) await append(job.runId, patch.status === 'SUCCEEDED' ? 'HR_JOB_SUCCEEDED' : patch.status === 'FAILED' ? 'HR_JOB_FAILED' : 'HR_JOB_STARTED', {
+      job_id: jobId, kind: job.kind, status: patch.status, error: patch.lastError ?? null,
+    }, { taskId: job.taskId });
+    return job;
   }
 
   async function registerArtifact({ runId, taskId, executionId = null, kind, uri, sha256: digest, sizeBytes, mediaType, commitSha = null }) {

@@ -4,6 +4,7 @@ import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { createManagerRequestProcessor } from './orchestrator/manager-request-queue.mjs';
 import { createOrchestrator } from './orchestrator/service.mjs';
+import { createHrService } from './hr/service.mjs';
 
 function parseArgs(argv) {
   const [command, ...tokens] = argv; const options = {};
@@ -19,13 +20,15 @@ export async function main(argv = process.argv.slice(2)) {
   const { command, options } = parseArgs(argv); const projectRoot = resolve(options['project-root'] ?? process.cwd());
   if (command === 'init') return emit({ ok: true, command, runtime: 'orchestrator-postgresql', project_root: projectRoot });
   const orchestrator = createOrchestrator({ projectRoot });
+  const hr = createHrService({ projectRoot, repository: orchestrator.repository, kernel: orchestrator.kernel });
+  orchestrator.attachHrService(hr);
   try {
     if (command === 'scan') {
       const processor = createManagerRequestProcessor({ orchestrator, projectRoot, managerWorkspace: options['manager-workspace'] ? resolve(options['manager-workspace']) : null });
-      return emit({ ok: true, command, requests: await processor.scan(), request_root: processor.root });
+      return emit({ ok: true, command, requests: await processor.scan(), hr_jobs: await hr.runPending(), request_root: processor.root });
     }
     if (command === 'run') return emit({ ok: true, command, result: await orchestrator.tick(options['workflow-id']) });
-    if (command === 'retry-notifications') return emit({ ok: true, command, notifications: await orchestrator.deliverNotifications() });
+    if (command === 'retry-notifications') return emit({ ok: true, command, notifications: await orchestrator.deliverNotifications(), hr_jobs: await hr.runPending() });
     if (command === 'status') {
       const workflow = options['workflow-id'];
       const runs = workflow ? [await orchestrator.repository.getRun(workflow)] : await orchestrator.repository.listRuns({ limit: Number(options.limit ?? 200) });
