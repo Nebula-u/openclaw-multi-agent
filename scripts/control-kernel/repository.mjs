@@ -26,7 +26,7 @@ const jsonbIn = (value) => (value === undefined || value === null ? undefined : 
 // runs
 // ═══════════════════════════════════════════════════════════════
 
-const RUN_COLS = `run_id, langgraph_thread_id, state, outcome, status_reason,
+const RUN_COLS = `run_id, langgraph_thread_id, workflow_id, state, outcome, status_reason,
   request, request_sha256, target_project_root_abs, base_commit,
   candidate_commit, route_hash, created_at, updated_at, completed_at`;
 
@@ -34,7 +34,7 @@ function mapRunOut(row) {
   if (!row) return undefined;
   return {
     runId: row.run_id,
-    workflowId: row.langgraph_thread_id,
+    workflowId: row.workflow_id ?? row.langgraph_thread_id,
     status: row.state,               // 直接透传 states，供上层归一化
     state: row.state,
     outcome: row.outcome,
@@ -56,9 +56,10 @@ async function upsertRun(pool, fields) {
   const runId = fields.runId ? runIdFor(fields.runId) : newRunId();
   const { rows } = await pool.query(
     `INSERT INTO runs (${RUN_COLS})
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,now(),now(),$12)
+     VALUES ($1,$2,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,now(),now(),$12)
      ON CONFLICT (run_id) DO UPDATE SET
        langgraph_thread_id = EXCLUDED.langgraph_thread_id,
+       workflow_id = EXCLUDED.workflow_id,
        state = EXCLUDED.state,
        outcome = EXCLUDED.outcome,
        status_reason = EXCLUDED.status_reason,
@@ -97,7 +98,7 @@ async function getRun(pool, runId) {
  */
 async function getRunByThreadId(pool, threadId) {
   const { rows } = await pool.query(
-    `SELECT ${RUN_COLS} FROM runs WHERE langgraph_thread_id=$1`, [threadId],
+    `SELECT ${RUN_COLS} FROM runs WHERE workflow_id=$1 OR langgraph_thread_id=$1`, [threadId],
   );
   return mapRunOut(rows[0]);
 }

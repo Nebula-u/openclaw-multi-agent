@@ -10,7 +10,7 @@
  * 与 scripts/stategraph/events.mjs 保持算法一致，保证两条链可交叉校验。
  */
 
-import { canonicalJson, sha256 } from '../stategraph/events.mjs';
+import { canonicalJson, sha256 } from '../runtime-core/hash-chain.mjs';
 import { createRepository } from './repository.mjs';
 import { createLease } from './lease.mjs';
 import {

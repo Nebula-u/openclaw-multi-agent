@@ -41,7 +41,7 @@ describe('control-kernel schema', { skip: skipReason() }, () => {
     assert.ok(names.includes('executions'), `executions 不存在: ${names}`);
     assert.ok(names.includes('artifacts'), `artifacts 不存在: ${names}`);
     assert.ok(names.includes('events'), `events 不存在: ${names}`);
-    assert.deepEqual(names.sort(), ['artifacts', 'events', 'executions', 'runs', 'tasks']);
+    assert.deepEqual(names.sort(), ['approvals', 'artifacts', 'events', 'executions', 'hr_jobs', 'notifications', 'runs', 'tasks']);
   });
 
   it('重复 apply 幂等（不报错）', async () => {
