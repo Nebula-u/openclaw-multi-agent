@@ -2,9 +2,13 @@
   "schema_version": 1,
   "framework": "langgraph-stategraph-checkpointer",
   "max_graph_turns_per_scan": 8,
+  "recursion_limit": 64,
   "agent_attempts": 3,
   "json_regeneration_retries": 2,
   "agent_timeout_seconds": 900,
+  "lease_seconds": 120,
+  "heartbeat_interval_seconds": 30,
+  "parallelism": { "enabled": false, "max_parallel": 1 },
   "manager": {
     "context_window_tokens": 200000,
     "max_output_tokens": 32000,

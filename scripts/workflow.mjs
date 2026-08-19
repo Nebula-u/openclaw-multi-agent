@@ -53,10 +53,20 @@ async function main() {
       return emit({ ok: true, command, snapshot: value });
     }
     if (command === 'audit') return emit(await runtime.audit(options['workflow-id'] ?? null));
+    if (command === 'kernel-status') {
+      if (!runtime.kernel) throw Object.assign(new Error('kernel-status requires PostgreSQL runtime'), { code: 'KERNEL_UNAVAILABLE' });
+      return emit({
+        ok: true,
+        command,
+        runs: await runtime.kernel.listRuns({ limit: Number(options.limit ?? 200) }),
+        tasks: await runtime.kernel.listTasks({ limit: Number(options.limit ?? 1000) }),
+        executions: await runtime.kernel.listExecutions({ limit: Number(options.limit ?? 1000) }),
+      });
+    }
     if (command === 'manager-context') return emit({ ok: true, command, context: await runtime.managerContext(required(options, 'workflow-id')) });
-    throw new Error('usage: workflow.mjs <init|bootstrap|run|approve|snapshot|audit|manager-context> [options]');
+    throw new Error('usage: workflow.mjs <init|bootstrap|run|approve|snapshot|audit|kernel-status|manager-context> [options]');
   } finally {
-    runtime.close();
+    await runtime.close();
   }
 }
 

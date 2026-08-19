@@ -1,0 +1,78 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://openclaw.local/contracts/kernel-run.schema.json",
+  "title": "Control Kernel Run",
+  "description": "Control Kernel 事实根记录——一次用户请求的完整生命周期。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "run_id", "langgraph_thread_id", "state", "request",
+    "request_sha256", "target_project_root_abs", "base_commit",
+    "created_at", "updated_at"
+  ],
+  "properties": {
+    "run_id": {
+      "type": "string",
+      "pattern": "^RUN-[A-Za-z0-9][A-Za-z0-9-]*$",
+      "description": "不可变主键；值等于 StateGraph threadId。"
+    },
+    "langgraph_thread_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "LangGraph 线程标识，与 run_id 1:1。"
+    },
+    "state": {
+      "type": "string",
+      "enum": ["ACTIVE", "WAITING_HUMAN", "HOLD", "TERMINAL"],
+      "description": "Run 状态机当前状态。"
+    },
+    "outcome": {
+      "type": ["string", "null"],
+      "description": "终态结果（SUCCESS / FAILURE / …），非终态时为 null。"
+    },
+    "status_reason": {
+      "type": ["string", "null"],
+      "description": "状态变更原因的人类可读描述。"
+    },
+    "request": {
+      "type": "object",
+      "description": "用户原始请求的结构化快照。"
+    },
+    "request_sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$",
+      "description": "request 内容的 SHA-256 摘要。"
+    },
+    "target_project_root_abs": {
+      "type": "string",
+      "minLength": 1,
+      "description": "目标项目根目录的绝对路径。"
+    },
+    "base_commit": {
+      "type": "string",
+      "minLength": 1,
+      "description": "工作起始 commit SHA。"
+    },
+    "candidate_commit": {
+      "type": ["string", "null"],
+      "description": "Agent 产出的候选 commit SHA。"
+    },
+    "route_hash": {
+      "type": ["string", "null"],
+      "description": "路由计划的哈希指纹。"
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "updated_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "completed_at": {
+      "type": ["string", "null"],
+      "format": "date-time",
+      "description": "进入终态的时间。"
+    }
+  }
+}
