@@ -1,5 +1,165 @@
 # openclaw-multi-agent
 
+## 当前交互模式（重要）
+
+本项目现在有三个入口，职责不同：
+
+| 入口 | 是否依赖 OpenClaw | 用途 |
+| --- | --- | --- |
+| OpenClaw Gateway / Manager CLI | 是 | 解析用户需求、生成并确认 route plan、执行 Agent workflow。当前 Agent 默认仍由 OpenClaw CLI 启动。 |
+| 本地 Node Monitor | 否（但运行 workflow 时仍需要可用的 StateGraph runtime） | 查看 checkpoint、任务、事件审计和历史；显式开启交互后，也可新建、推进和审批 workflow。 |
+| `scripts/workflow.mjs` | 否 | CLI 后备入口，用于初始化 capability、bootstrap、run、approve、snapshot 和 audit。 |
+
+因此，当前不是“完全脱离 OpenClaw”。P2 原生 Agent Executor 只完成了可替换边界，默认执行路径仍是 OpenClaw；不要删除或停用 OpenClaw Gateway，除非你已明确切换并验证 native executor。
+
+Monitor 的对话框目前使用本地规则型 `ChatProvider` 生成 `intent_draft`，它不会绕过人工确认，也不会直接执行 runtime 写操作。需要 Manager 真正分析需求并生成完整 route plan 时，使用 OpenClaw Manager CLI 或 `scripts/workflow.mjs` 的结构化流程。
+
+## 启动与使用
+
+### 1. 初始化 capability
+
+首次使用或 capability 文件丢失时执行一次：
+
+```powershell
+node scripts/workflow.mjs init --project-root .
+```
+
+该命令生成：
+
+```text
+runtime/stategraph/runtime.capability
+runtime/stategraph/human-approval.capability
+```
+
+不要把这两个文件内容复制到浏览器或提交到 Git。
+
+### 2. 使用 OpenClaw Manager CLI（完整交互路径）
+
+先确保 OpenClaw Gateway 可用，并安装项目的兼容插件：
+
+```powershell
+openclaw plugins install --link extensions/stategraph-webchat
+openclaw config set plugins.entries.stategraph-webchat.enabled true --strict-json
+openclaw config set plugins.entries.stategraph-webchat.hooks.allowConversationAccess true --strict-json
+openclaw config set plugins.entries.stategraph-webchat.config.projectRoot '"D:/MicroConnect/project/openclaw-multi-agent"' --strict-json
+openclaw gateway restart
+openclaw gateway status
+```
+
+在 Manager 对话中，先确认完整步骤；只有用户明确确认后，Manager 才会提交 `CREATE`、`CHANGE` 或 `DECISION` 请求。StateGraph 随后负责 route 冻结、Agent 派发、产物校验、重试和审批等待。
+
+### 3. 启动本地 Monitor
+
+Monitor 默认只读，这是设计上的安全默认值。启动只读面板：
+
+```powershell
+npm run monitor:start
+```
+
+然后打开：
+
+```text
+http://127.0.0.1:4319/
+```
+
+要启用截图中“生成意图草案”、推进、连续推进、审计等交互控件，必须在启动 Monitor 前显式开启：
+
+```powershell
+$env:MONITOR_INTERACTIVE = "true"
+$env:MONITOR_CONTINUATION = "false"
+npm run monitor:start
+```
+
+Linux/macOS：
+
+```bash
+MONITOR_INTERACTIVE=true MONITOR_CONTINUATION=false npm run monitor:start
+```
+
+也可以在 `config/monitoring.example.json` 对应配置中设置：
+
+```json
+{
+  "interactive_controls_enabled": true,
+  "workflow_continuation_enabled": false,
+  "control_token_header": "x-stategraph-control"
+}
+```
+
+交互模式仍要求 Monitor 进程能读取 capability 文件，并且只接受 loopback 请求和合法 Origin。若 capability 缺失，服务会自动降级为只读，不会崩溃。
+
+### 4. 使用 CLI 后备入口
+
+```powershell
+node scripts/workflow.mjs bootstrap --project-root . --workflow-id WF-example --request-file request.json
+node scripts/workflow.mjs run --project-root . --workflow-id WF-example
+node scripts/workflow.mjs snapshot --project-root . --workflow-id WF-example
+node scripts/workflow.mjs audit --project-root . --workflow-id WF-example
+```
+
+遇到 `WAITING_HUMAN` 时，根据返回的 `decision_id` 执行：
+
+```powershell
+node scripts/workflow.mjs approve --project-root . --workflow-id WF-example `
+  --decision-id DEC-example --choice APPROVE --decided-by human:operator
+```
+
+## 常见现象排查
+
+### 页面显示“只读监测已连接”
+
+这表示 `interactive_controls_enabled` 没有开启，或 capability 文件不可读。它不是 workflow 生成失败。检查：
+
+```powershell
+Test-Path runtime/stategraph/runtime.capability
+Test-Path runtime/stategraph/human-approval.capability
+```
+
+然后重新启动 Monitor，并确认 `MONITOR_INTERACTIVE=true` 是在启动前设置的。
+
+### 4319 端口无法访问
+
+说明 Monitor 进程没有运行，或端口被其他进程占用。项目不会自动启动 Monitor：
+
+```powershell
+npm run monitor:start
+```
+
+如果端口已被占用，可临时改用：
+
+```powershell
+$env:MONITOR_PORT = "4320"
+npm run monitor:start
+```
+
+### Monitor 有 workflow，但推进按钮不可用
+
+只读模式下按钮必然禁用。启用交互模式后仍不可用时，检查 capability、Origin 和 Monitor 日志；不要把 capability 令牌放进前端代码。
+
+### Monitor 对话能生成草案，但不能创建 workflow
+
+这是当前实现的预期行为：`CREATE` 必须包含经过人工确认的完整 `route_plan`。本地规则型 ChatProvider 只负责意图草案，不负责替代 Manager 的路线分析。请在 OpenClaw Manager CLI 中完成 route plan 确认，或使用 `bootstrapConfirmed`/结构化 CLI 流程。
+
+### 没有 PostgreSQL 时 workflow 无法作为正式运行
+
+正式运行使用 PostgreSQL：`kernel` 保存 Control Kernel 事实，`langgraph` 保存 LangGraph checkpoint。带 `--db` 的内存 checkpointer 主要用于离线测试，不应作为长期运行数据库。先配置 `.env` 中的 `OPENCLAW_PG_URL`，再执行：
+
+```powershell
+npm run kernel:schema
+npm run kernel:status
+```
+
+### Agent 没有执行
+
+当前默认 executor 仍是 OpenClaw。检查：
+
+```powershell
+openclaw --version
+openclaw gateway status
+```
+
+Native executor 目前只是可替换边界，尚未替换所有 Agent kind；不要因为 Monitor 页面可打开就认为 Agent 已脱离 OpenClaw。
+
 本项目使用 LangGraph `StateGraph + checkpointer` 驱动本机多 Agent 软件交付流程。最新 checkpoint 是 workflow、路线、任务、审批、候选 commit 和事件链的唯一事实源；Manager、worker、launcher、日志和 monitor 都不能直接推进状态。
 
 ## 核心边界
@@ -290,14 +450,15 @@ npm run test:kernel
 
 ## Node Monitor
 
+> Note: this section supersedes the older read-only wording above. Monitor is read-only by default, but supports local write controls when `MONITOR_INTERACTIVE=true` and capability files are available. It never replaces OpenClaw's Agent executor.
+
 ```powershell
 npm run monitor:start
 # 或
-pwsh -NoProfile -File scripts/start-monitor.ps1 -Port 4319
 ```
 
 ```bash
-MONITOR_PORT=4319 bash scripts/start-monitor.sh
+MONITOR_PORT=4319 npm run monitor:start
 ```
 
 启动后打开 `http://127.0.0.1:4319/`；面板、API 和 SSE 使用同一个 Node 服务，无需手工打开 `index.html`。界面保留深浅主题和现有工作台风格，但不包含任何确认、重做、停止、重试或路线修改控件；所有交互都在 Manager CLI 中完成。前端只维持一个全局 SSE，并仅在 checkpoint read model 变化时更新，不再每三秒重载页面或重建连接。部署说明见 [docs/monitoring.md](docs/monitoring.md)。项目不包含 Java、Servlet 或 Tomcat monitor 代理。
