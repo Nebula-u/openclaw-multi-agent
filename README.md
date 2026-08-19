@@ -136,6 +136,30 @@ npm run monitor:start
 
 只读模式下按钮必然禁用。启用交互模式后仍不可用时，检查 capability、Origin 和 Monitor 日志；不要把 capability 令牌放进前端代码。
 
+### `WAITING_HUMAN` 显示“请在 Manager CLI 中作出决定”
+
+这是流程在等待绑定的人工审批，并非卡死。当前 Monitor 服务端已经提供审批 API，但前端尚未把 pending approval 渲染为完整的可点击审批控件；因此这类节点目前应通过 Manager CLI 或 CLI 后备入口处理：
+
+```powershell
+node scripts/workflow.mjs snapshot --project-root . --workflow-id WF-example
+node scripts/workflow.mjs approve --project-root . --workflow-id WF-example `
+  --decision-id DEC-example --choice APPROVE --decided-by human:operator
+```
+
+其中 `decision_id` 与允许的 `choice` 必须以 snapshot/Manager 显示的当前 pending approval 为准。不要猜测或复用旧的 decision ID。
+
+### “连续推进”没有实际连续运行
+
+连续推进依赖 `workflow_continuation_enabled`。启动前设为 `true` 才会让 Monitor 在单次操作中循环调用 `runtime.run()`，最多执行 `workflow_continuation_max_turns`（默认 8）步：
+
+```powershell
+$env:MONITOR_INTERACTIVE = "true"
+$env:MONITOR_CONTINUATION = "true"
+npm run monitor:start
+```
+
+建议先保持 `MONITOR_CONTINUATION=false`，确认单步推进、Agent launcher、PostgreSQL 和审批链稳定后再开启。
+
 ### Monitor 对话能生成草案，但不能创建 workflow
 
 这是当前实现的预期行为：`CREATE` 必须包含经过人工确认的完整 `route_plan`。本地规则型 ChatProvider 只负责意图草案，不负责替代 Manager 的路线分析。请在 OpenClaw Manager CLI 中完成 route plan 确认，或使用 `bootstrapConfirmed`/结构化 CLI 流程。
