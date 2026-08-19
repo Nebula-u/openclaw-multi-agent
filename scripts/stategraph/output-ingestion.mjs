@@ -1,4 +1,4 @@
-import { appendFileSync, existsSync, lstatSync, mkdirSync, readFileSync } from 'node:fs';
+import { appendFileSync, copyFileSync, existsSync, lstatSync, mkdirSync, readFileSync } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import Ajv from 'ajv';
 import addFormats from 'ajv-formats';
@@ -47,6 +47,14 @@ export function publishedOutputPath(task) {
   return join(task.artifact_root_abs, 'output', expectedOutput(task).file);
 }
 
+export function storeCasArtifact(projectRoot, sourcePath) {
+  const digest = sha256(readFileSync(sourcePath));
+  const target = join(projectRoot, 'runtime', 'artifacts', 'cas', digest.slice(0, 2), digest);
+  mkdirSync(dirname(target), { recursive: true });
+  if (!existsSync(target)) copyFileSync(sourcePath, target);
+  return { sha256: digest, path_abs: target };
+}
+
 function appendAgentOutput(task, raw, ingestion, occurredAt, cycle) {
   const path = join(task.artifact_root_abs, 'logs', 'agent-output.jsonl');
   mkdirSync(dirname(path), { recursive: true });
@@ -82,6 +90,14 @@ function assertRegularReference(task, path, field) {
   const stat = lstatSync(path);
   if (!stat.isFile() || stat.isSymbolicLink()) throw new OutputBoundaryError('AGENT_OUTPUT_REFERENCE_UNSAFE', `${field} must reference a regular non-symlink file`, { field, path });
   return sha256(readFileSync(path));
+}
+
+function isEvidenceId(value) {
+  return typeof value === 'string' && /^EVD-[A-Za-z0-9._-]+$/u.test(value);
+}
+
+function absolutePaths(paths) {
+  return (paths ?? []).filter((path) => isAbsolute(path));
 }
 
 function jsonLines(path, field) {
@@ -145,10 +161,14 @@ function assertResultIdentity(task, value) {
   if (task.kind === 'TEST' && canonicalJson(value.sandbox_attestation ?? null) !== canonicalJson(task.sandbox_attestation ?? null)) {
     throw new OutputBoundaryError('AGENT_OUTPUT_SANDBOX_ATTESTATION_MISMATCH', 'Agent result sandbox_attestation does not equal the code-verified process attestation');
   }
-  for (const field of ['report_files', 'command_record_refs', 'evidence_refs']) {
+  for (const field of ['report_files', 'command_record_refs']) {
     for (const path of value[field] ?? []) {
       assertRegularReference(task, path, field);
     }
+  }
+  for (const reference of value.evidence_refs ?? []) {
+    if (isEvidenceId(reference)) continue;
+    assertRegularReference(task, reference, 'evidence_refs');
   }
 }
 
@@ -176,7 +196,7 @@ export function ingestTaskOutput({ projectRoot, task, occurredAt = new Date().to
   } else {
     assertResultIdentity(task, ingestion.value);
     validateCommandRecords(projectRoot, task, ingestion.value.command_record_refs ?? []);
-    validateEvidence(projectRoot, task, ingestion.value.evidence_refs ?? []);
+    validateEvidence(projectRoot, task, absolutePaths(ingestion.value.evidence_refs));
   }
   const publishedPath = publishedOutputPath(task);
   mkdirSync(dirname(publishedPath), { recursive: true });
@@ -194,10 +214,11 @@ export function ingestTaskOutput({ projectRoot, task, occurredAt = new Date().to
     cleaned_sha256: ingestion.cleaned_sha256,
     transformations: ingestion.transformations,
     references: task.kind === 'MANAGER_ANALYSIS' ? [] : ['report_files', 'command_record_refs', 'evidence_refs'].flatMap((field) =>
-      (ingestion.value[field] ?? []).map((path) => ({ field, path_abs: path, sha256: sha256(readFileSync(path)) }))),
+      absolutePaths(ingestion.value[field]).map((path) => ({ field, path_abs: path, sha256: sha256(readFileSync(path)) }))),
     accepted_at: occurredAt,
   });
-  return { value: ingestion.value, output_path_abs: publishedPath, receipt_path_abs: receiptPath, ingestion };
+  const casArtifacts = [storeCasArtifact(projectRoot, publishedPath), storeCasArtifact(projectRoot, receiptPath)];
+  return { value: ingestion.value, output_path_abs: publishedPath, receipt_path_abs: receiptPath, cas_artifacts: casArtifacts, ingestion };
 }
 
 export function buildLocalGate(task, result, requiredChecks, occurredAt = new Date().toISOString(), { worktrees = null } = {}) {

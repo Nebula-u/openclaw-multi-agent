@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import test from 'node:test';
@@ -61,6 +61,9 @@ test('ingestion records hashes for every accepted report, command record and evi
     const receipt = JSON.parse(readFileSync(accepted.receipt_path_abs, 'utf8'));
     assert.equal(receipt.references.length, 3);
     assert.ok(receipt.references.every((reference) => /^[a-f0-9]{64}$/u.test(reference.sha256)));
+    assert.equal(accepted.cas_artifacts.length, 2);
+    assert.ok(accepted.cas_artifacts.every((artifact) => existsSync(artifact.path_abs)));
+    assert.ok(accepted.cas_artifacts.every((artifact) => artifact.path_abs.endsWith(artifact.sha256)));
   } finally { rmSync(value.root, { recursive: true, force: true }); }
 });
 
@@ -107,5 +110,15 @@ test('ingestion rejects evidence whose declared SHA does not match locator_abs',
     writeFileSync(value.evidence, `${JSON.stringify({ ...record, sha256: '0'.repeat(64) })}\n`);
     value.writeResult();
     assert.throws(() => ingestTaskOutput({ projectRoot: ROOT, task: value.task }), (error) => error.code === 'EVIDENCE_HASH_MISMATCH');
+  } finally { rmSync(value.root, { recursive: true, force: true }); }
+});
+
+test('ingestion accepts an evidence ID without treating it as a filesystem capability', () => {
+  const value = fixture();
+  try {
+    value.writeResult({ ...value.result, evidence_refs: ['EVD-MANIFEST-READ'] });
+    const accepted = ingestTaskOutput({ projectRoot: ROOT, task: value.task });
+    const receipt = JSON.parse(readFileSync(accepted.receipt_path_abs, 'utf8'));
+    assert.equal(receipt.references.length, 2);
   } finally { rmSync(value.root, { recursive: true, force: true }); }
 });

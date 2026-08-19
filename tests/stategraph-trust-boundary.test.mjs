@@ -84,6 +84,11 @@ test('immutable context manifest detects input tampering before reconcile', () =
     task.context_manifest_sha256 = created.sha256;
     assert.equal(verifyContextManifest({ projectRoot: ROOT, task }).sha256, created.sha256);
     const manifest = JSON.parse(readFileSync(created.path, 'utf8'));
+    assert.equal(created.path, join(task.artifact_root_abs, 'input', 'context-manifest.json'));
+    assert.deepEqual(new Set(manifest.input_files.map((item) => item.role)), new Set(['task', 'rule', 'context', 'task_rules']));
+    for (const name of ['task.json', 'context.md', 'rules.md']) {
+      assert.equal(existsSync(join(task.artifact_root_abs, 'input', name)), true);
+    }
     const rule = manifest.input_files.find((item) => item.role === 'rule').path_abs;
     chmodSync(rule, 0o666);
     writeFileSync(rule, 'tampered\n');

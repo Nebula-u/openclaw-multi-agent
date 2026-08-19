@@ -178,12 +178,14 @@ test('prepares, verifies, and restores a sandbox session through the command bou
       }
       throw new Error(`unexpected command: ${executable} ${args.join(' ')}`);
     };
-    const prepared = await prepareTestSandboxSession({ projectRootInput: ROOT, task: value.task, sessionId: 'session-test',
+    const prepared = await prepareTestSandboxSession({ projectRootInput: value.framework, task: value.task, sessionId: 'session-test',
       sessionKey: 'agent:test-agent:orchestrator:WF-test:TASK-test:RUN-test', runtimeRootAbs: value.runtime, commandRunner: runner });
     assert.equal(prepared.attestation.backend, 'docker');
     assert.equal(prepared.attestation.host_execution, false);
+    assert.equal(prepared.lease.global_lock.path, join(value.framework, 'runtime', 'stategraph', 'test-sandbox-global.lock'));
     await cleanupTestSandboxSession({ lease: prepared.lease, leasePath: prepared.leasePath, commandRunner: runner });
     assert.deepEqual(state.binds, []);
+    assert.equal(existsSync(join(value.framework, 'runtime', 'stategraph', 'test-sandbox-global.lock')), false);
     assert.ok(state.calls.some((call) => call.executable === 'docker'));
   } finally { rmSync(value.root, { recursive: true, force: true }); }
 });

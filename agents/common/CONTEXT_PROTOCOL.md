@@ -12,9 +12,6 @@ StateGraph 在每次派发前，于 `<artifact_root_abs>/input/` 创建不可变
 ├── task.json                 # 任务定义（见 contracts/task.schema.json）
 ├── context.md                # 人类可读上下文（见下）
 ├── rules.md                  # 角色规则 + 任务规则（见下）
-├── acceptance-criteria.json  # 相关验收标准
-├── approved-decisions.json   # 已批准的人工决策
-├── source-manifest.json      # 相关源文件清单（路径+哈希，只读引用）
 └── context-manifest.json     # 机器可读清单（见 contracts/context-manifest.schema.json）
 ```
 
@@ -22,14 +19,9 @@ StateGraph 在每次派发前，于 `<artifact_root_abs>/input/` 创建不可变
 
 - workflow 摘要 / 当前阶段 / 当前任务目标
 - 明确范围与非范围
-- 已批准的需求摘要
-- 与本任务相关的架构摘要
-- 当前候选 commit
-- 前序 Agent 结论摘要
-- 已知风险与未解决问题
-- 要求产生的输出
+- 当前候选 commit、已知风险与未解决问题（可用时）
 - 允许修改的绝对路径 / 禁止修改的路径
-- 需要执行的验证
+- 需要执行的验证与当前阶段 Gate
 
 所有上下文摘要必须区分 `OBSERVED` / `INFERRED` / `PROPOSED` / `UNKNOWN`。
 
@@ -49,7 +41,7 @@ StateGraph 在每次派发前，于 `<artifact_root_abs>/input/` 创建不可变
 
 1. **不**向工作 Agent 复制完整用户聊天历史。
 2. **不**要求工作 Agent 读取 manager 的私有会话历史。
-3. 派发消息只提供：任务摘要、`dispatch_id`、input manifest SHA-256、绝对 `context-manifest.json` 路径、绝对 `task.json` 路径、绝对输出目录 + 绝对 worktree 路径。
+3. 派发消息只提供：任务摘要、`dispatch_id`、input manifest SHA-256、绝对 `context-manifest.json` 路径、绝对输出目录 + 绝对 worktree 路径。
 4. 工作 Agent **先读取并校验**上下文包，再开始工作。
 5. 上下文不足 → 只返回缺失项，不自行扩大范围。
 6. 规则更新后，**不篡改**已派发任务的 input；StateGraph 必须创建新 attempt + 新 run_id + 新规则快照。
@@ -69,6 +61,6 @@ StateGraph 在每次派发前，于 `<artifact_root_abs>/input/` 创建不可变
 
 1. 用派发消息给的绝对路径读取 `context-manifest.json`。
 2. 逐一校验（见 COMMON_RULES 第 2 节）。
-3. 读取 `context.md` / `rules.md` / `task.json` / `acceptance-criteria.json` / `approved-decisions.json` / `source-manifest.json`。
+3. 读取 manifest 声明的 `context.md` / `rules.md` / `task.json` 与规则快照；不得要求未在 manifest 中声明的模板文件。
 4. 若发现哈希不一致、路径非法或 `assigned_agent` 不匹配 → `BLOCKED`。
 5. 开始工作，只在允许范围内读写。

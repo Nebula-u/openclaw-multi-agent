@@ -1,4 +1,4 @@
-import { chmodSync, copyFileSync, existsSync, lstatSync, mkdirSync, readFileSync } from 'node:fs';
+import { chmodSync, copyFileSync, existsSync, lstatSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 import Ajv from 'ajv';
 import addFormats from 'ajv-formats';
@@ -58,9 +58,48 @@ function taskInput(task) {
     target_project_root_abs: task.target_project_root_abs,
     worktree_path_abs: task.worktree_path_abs,
     artifact_root_abs: task.artifact_root_abs,
+    allowed_write_paths_abs: [task.worktree_path_abs, join(task.artifact_root_abs, '.agent-raw')],
+    forbidden_paths_abs: [join(task.artifact_root_abs, 'input'), join(task.artifact_root_abs, 'output')],
     required_gate_checks: task.required_gate_checks,
     prompt: task.prompt,
   };
+}
+
+function contextText(task) {
+  return [
+    '# StateGraph task context',
+    '',
+    `- Workflow: ${task.workflow_id}`,
+    `- Task: ${task.task_id}`,
+    `- Stage: ${task.kind}`,
+    `- Assigned agent: ${task.agent_id}`,
+    `- Input commit: ${task.input_commit ?? 'none'}`,
+    '',
+    '## Task objective',
+    task.prompt ?? task.title ?? '',
+    '',
+    '## Boundaries',
+    `- Read from the assigned worktree only: ${task.worktree_path_abs}`,
+    `- Write production changes only when the stage authorizes them.`,
+    `- Write agent output only under: ${join(task.artifact_root_abs, '.agent-raw')}`,
+    '- Do not read other agent sessions, historical runs, or runtime control state.',
+  ].join('\n');
+}
+
+function rulesText(task, ruleDigests) {
+  return [
+    '# StateGraph task rules',
+    '',
+    'The manifest and the listed rule snapshots are the complete input contract for this run.',
+    'Do not require undeclared context files. Report missing information in result.json instead of blocking on files outside this manifest.',
+    'Only result.json is mandatory for every stage. Supporting reports, evidence, and command records are optional unless the task actually produced them.',
+    'TEST must retain command records for every executed verification command. DEVELOPMENT and TEST must bind output_commit to the assigned worktree HEAD.',
+    '',
+    '## Snapshotted rules',
+    ...ruleDigests.map((rule) => `- ${rule.name}: ${rule.sha256}`),
+    '',
+    `## Required Gate checks\n${(task.required_gate_checks ?? []).map((name) => `- ${name}`).join('\n') || '- none'}`,
+  ].join('\n');
 }
 
 function validator(projectRoot) {
@@ -77,7 +116,7 @@ export function createContextManifest({ projectRoot: projectRootInput, task, occ
   const rulesRoot = join(inputRoot, 'rules');
   mkdirSync(rulesRoot, { recursive: true });
   mkdirSync(controlRoot, { recursive: true });
-  const taskPath = join(controlRoot, 'task.json');
+  const taskPath = join(inputRoot, 'task.json');
   atomicWriteJson(taskPath, taskInput(task));
   makeReadOnly(taskPath);
 
@@ -92,12 +131,21 @@ export function createContextManifest({ projectRoot: projectRootInput, task, occ
     inputs.push({ path_abs: target, sha256: digest, role: 'rule' });
     ruleDigests.push({ name: basename(source), sha256: digest });
   }
+  const contextPath = join(inputRoot, 'context.md');
+  writeFileSync(contextPath, `${contextText(task)}\n`, 'utf8');
+  makeReadOnly(contextPath);
+  inputs.push({ path_abs: contextPath, sha256: digestFile(contextPath), role: 'context' });
+  const rulesPath = join(inputRoot, 'rules.md');
+  writeFileSync(rulesPath, `${rulesText(task, ruleDigests)}\n`, 'utf8');
+  makeReadOnly(rulesPath);
+  inputs.push({ path_abs: rulesPath, sha256: digestFile(rulesPath), role: 'task_rules' });
   const manifest = {
     schema_version: 1,
     workflow_id: task.workflow_id,
     task_id: task.task_id,
     run_id: task.run_id,
     assigned_agent: task.agent_id,
+    attempt: task.attempt,
     created_at: occurredAt,
     manager_session_reference: task.kind === 'MANAGER_ANALYSIS' ? task.session_id ?? null : null,
     target_project_root_abs: task.target_project_root_abs,
@@ -111,7 +159,7 @@ export function createContextManifest({ projectRoot: projectRootInput, task, occ
   };
   const validate = validator(projectRoot);
   if (!validate(manifest)) fail('CONTEXT_MANIFEST_SCHEMA_INVALID', 'generated context manifest failed schema validation', { errors: validate.errors });
-  const path = join(controlRoot, 'context-manifest.json');
+  const path = join(inputRoot, 'context-manifest.json');
   atomicWriteJson(path, manifest);
   const manifestSha256 = digestFile(path);
   atomicWriteJson(join(controlRoot, 'context-manifest.receipt.json'), {

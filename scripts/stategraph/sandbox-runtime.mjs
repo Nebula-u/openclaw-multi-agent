@@ -265,7 +265,12 @@ function stageSandboxInputs(task, artifact) {
         path_abs: inputFile.path_abs, expected: inputFile.sha256, actual: inputDigest,
       });
     }
-    const target = join(filesRoot, `${String(index + 1).padStart(2, '0')}-${basename(inputFile.path_abs)}`);
+    const role = inputFile.role ?? 'file';
+    const target = role === 'context' ? join(inputRoot, 'context.md')
+      : role === 'task_rules' ? join(inputRoot, 'rules.md')
+        : role === 'rule' ? join(inputRoot, 'rules', `${String(index + 1).padStart(2, '0')}-${basename(inputFile.path_abs)}`)
+          : join(filesRoot, `${String(index + 1).padStart(2, '0')}-${basename(inputFile.path_abs)}`);
+    mkdirSync(join(target, '..'), { recursive: true });
     copyFileSync(inputFile.path_abs, target);
     stagedInputs.push({ ...inputFile, path_abs: `/input/files/${basename(target)}` });
   }
