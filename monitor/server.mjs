@@ -189,7 +189,7 @@ export function createMonitorServer(config, { stateRuntime: providedRuntime = nu
   telemetry.prune({ maxEvents: config.telemetryMaxEvents, activityRetentionDays: config.activityRetentionDays });
   const hub = eventHub ?? new MonitorEventHub({ retention: config.sseRetention });
   const conversations = createConversationStore({ runtimeRoot: config.runtimeRoot ?? config.projectRoot });
-  const chatProvider = createChatProvider();
+  const chatProvider = createChatProvider({ projectRoot: config.projectRoot });
   const intentDrafts = new Map();
   if (config.interactiveControlsEnabled === true && !interactiveControlsEnabled) {
     hub.publish('monitor-health', {
@@ -475,6 +475,16 @@ export function createMonitorServer(config, { stateRuntime: providedRuntime = nu
         const workflowId = decodeURIComponent(workflowSnapshot[1]);
         const workflow = snapshot.workflows.find((item) => item.workflow_id === workflowId);
         return sendJson(response, workflow ? 200 : 404, workflow ? { ok: true, snapshot: { ...snapshot, workflows: [workflow] } } : { ok: false, error: 'WORKFLOW_NOT_FOUND' }, cors);
+      }
+      const workflowHistory = path.match(/^\/api\/workflows\/([^/]+)\/history$/u);
+      if (request.method === 'GET' && workflowHistory) {
+        const workflowId = decodeURIComponent(workflowHistory[1]);
+        return sendJson(response, 200, { ok: true, workflow_id: workflowId, history: await stateRuntime.history(workflowId, { limit: Math.min(integerQuery(url, 'limit', 50), 200) }) }, cors);
+      }
+      const workflowCheckpoint = path.match(/^\/api\/workflows\/([^/]+)\/history\/([^/]+)$/u);
+      if (request.method === 'GET' && workflowCheckpoint) {
+        const stateAt = await stateRuntime.stateAt(decodeURIComponent(workflowCheckpoint[1]), decodeURIComponent(workflowCheckpoint[2]));
+        return sendJson(response, stateAt ? 200 : 404, stateAt ? { ok: true, workflow_id: decodeURIComponent(workflowCheckpoint[1]), state: stateAt } : { ok: false, error: 'CHECKPOINT_NOT_FOUND' }, cors);
       }
       if (request.method === 'GET' && path === '/api/workflows/stream') {
         const after = integerQuery(url, 'after', Number.parseInt(request.headers['last-event-id'] ?? '0', 10) || 0);

@@ -72,6 +72,7 @@
   function renderControls() {
     const enabled = state.interactive && Boolean(selected());
     ['run-workflow', 'advance-workflow', 'audit-workflow'].forEach((id) => { const element = $(id); if (element) element.disabled = !enabled; });
+    $('history-workflow').disabled = !selected();
     $('new-workflow').disabled = !state.interactive;
   }
   function showControlMessage(message, error = false) { const element = $('control-message'); if (element) { element.textContent = message; element.dataset.error = error ? 'true' : 'false'; } }
@@ -105,6 +106,7 @@
   $('run-workflow').addEventListener('click', () => runSelected('run'));
   $('advance-workflow').addEventListener('click', () => runSelected('advance'));
   $('audit-workflow').addEventListener('click', async () => { const workflow = selected(); if (!workflow) return; try { const result = await request(`/api/workflows/${encodeURIComponent(workflow.workflow_id)}/audit`); showControlMessage(result.ok ? '事件链审计通过。' : JSON.stringify(result)); } catch (error) { showControlMessage(error.message, true); } });
+  $('history-workflow').addEventListener('click', async () => { const workflow = selected(); if (!workflow) return; try { const result = await request(`/api/workflows/${encodeURIComponent(workflow.workflow_id)}/history?limit=20`); showControlMessage((result.history || []).map((item) => `${item.revision ?? '?'} ${item.phase ?? 'UNKNOWN'} ${item.checkpoint_id ?? ''}`).join('\n') || '没有可用的 checkpoint 历史。'); } catch (error) { showControlMessage(error.message, true); } });
   $('chat-send').addEventListener('click', async () => {
     const message = $('chat-input').value.trim(); if (!message) return showChatMessage('请输入消息。', true);
     if (!state.interactive) return showChatMessage('请先以交互模式启动 Monitor。', true);
