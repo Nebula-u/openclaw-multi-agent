@@ -3,15 +3,15 @@
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { loadMonitorConfig } from './config.mjs';
-import { createMonitorServer } from './server.mjs';
+import { createKernelMonitorServer } from './kernel-server.mjs';
 
 export async function runMonitor(overrides = {}) {
   const config = loadMonitorConfig(overrides);
-  const monitor = createMonitorServer(config);
+  const monitor = createKernelMonitorServer(config);
   const address = await monitor.start();
   process.stdout.write(`${JSON.stringify({
     ok: true,
-    service: 'stategraph-monitor',
+    service: 'orchestrator-monitor',
     backend: 'node',
     host: address.address,
     port: address.port,
