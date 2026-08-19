@@ -45,10 +45,18 @@ function sendError(response, status, code, message, headers = {}) {
   return sendJson(response, status, { ok: false, error: code, message }, headers);
 }
 
-function originHeaders(request, config) {
+function monitorOrigins(server, config) {
+  const address = server.address();
+  const port = typeof address === 'object' && address ? address.port : config.port;
+  return new Set([
+    `http://127.0.0.1:${port}`,
+    `http://localhost:${port}`,
+  ]);
+}
+
+function originHeaders(request, config, server) {
   const origin = request.headers.origin;
-  const monitorOrigin = `http://${config.host}:${config.port}`;
-  if (!origin || (!config.allowedOrigins.includes(origin) && origin !== monitorOrigin)) return {};
+  if (!origin || !isAllowedOrigin(origin, config, server)) return {};
   return {
     'access-control-allow-origin': origin,
     vary: 'Origin',
@@ -82,8 +90,8 @@ function capabilityValue(path) {
   return readFileSync(path, 'utf8').trim();
 }
 
-function isAllowedOrigin(origin, config) {
-  return !origin || config.allowedOrigins.includes(origin) || origin === `http://${config.host}:${config.port}`;
+function isAllowedOrigin(origin, config, server) {
+  return !origin || config.allowedOrigins.includes(origin) || monitorOrigins(server, config).has(origin);
 }
 
 function integerQuery(url, name, fallback) {
@@ -321,20 +329,21 @@ export function createMonitorServer(config, { stateRuntime: providedRuntime = nu
   maintenanceTimer.unref?.();
 
   const server = createServer(async (request, response) => {
-    const cors = originHeaders(request, config);
+    const cors = originHeaders(request, config, server);
     try {
       if (!isLoopback(request.socket.remoteAddress)) return sendJson(response, 403, { ok: false, error: 'LOOPBACK_ONLY' }, cors);
       const origin = request.headers.origin;
-      if (!isAllowedOrigin(origin, config)) return sendJson(response, 403, { ok: false, error: 'ORIGIN_NOT_ALLOWED' });
+      if (!isAllowedOrigin(origin, config, server)) return sendJson(response, 403, { ok: false, error: 'ORIGIN_NOT_ALLOWED' });
       if (request.method === 'OPTIONS') { response.writeHead(204, cors); return response.end(); }
       const url = new URL(request.url, `http://${config.host}:${config.port}`);
       const path = url.pathname;
       const writeRequest = request.method === 'POST';
       if (writeRequest) {
         if (!interactiveControlsEnabled) return sendJson(response, 403, { ok: false, error: 'INTERACTIVE_CONTROLS_DISABLED' }, cors);
-        const monitorOrigin = `http://${config.host}:${config.port}`;
         const requestOrigin = request.headers.origin;
-        if (requestOrigin && requestOrigin !== monitorOrigin) return sendJson(response, 403, { ok: false, error: 'WRITE_ORIGIN_NOT_ALLOWED' }, cors);
+        if (requestOrigin && !monitorOrigins(server, config).has(requestOrigin)) {
+          return sendJson(response, 403, { ok: false, error: 'WRITE_ORIGIN_NOT_ALLOWED' }, cors);
+        }
         if (!request.headers[(config.controlTokenHeader ?? 'x-stategraph-control').toLowerCase()]) {
           return sendJson(response, 403, { ok: false, error: 'CONTROL_HEADER_REQUIRED' }, cors);
         }

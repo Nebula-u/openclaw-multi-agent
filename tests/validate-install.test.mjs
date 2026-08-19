@@ -29,6 +29,7 @@ test('installers materialize an explicit empty worker delegation allowlist', () 
   assert.match(powershell, /agents\.list\[\$idx\]\.subagents/u);
   assert.match(powershell, /function Get-OpenClawAgentsWithFallback/u);
   assert.match(powershell, /function Resolve-OpenClawConfigFilePath/u);
+  assert.match(powershell, /\$candidate = \$Result\.Output\.Trim\(\)[\s\S]*?\$candidate\.StartsWith\('~'\)[\s\S]*?Join-Path \$HOME/u);
   assert.match(powershell, /function Remove-RetiredStateGraphWebChatReferences/u);
   assert.match(powershell, /remove retired stategraph-webchat plugin references/u);
   assert.match(powershell, /agents\.list 后备配置输出/u);

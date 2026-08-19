@@ -17,7 +17,7 @@
     "test:monitor": "node --test --test-concurrency=1 tests/monitor-kernel-http.test.mjs tests/monitor-session-catalog.test.mjs tests/monitor-session-tailer.test.mjs tests/monitor-static-dashboard.test.mjs",
     "test:kernel": "node --test --test-concurrency=1 tests/control-kernel-*.test.mjs",
     "kernel:schema": "node scripts/control-kernel/apply-schema.mjs",
-    "kernel:status": "node scripts/workflow.mjs kernel-status",
+    "kernel:status": "node scripts/orchestrator-cli.mjs kernel-status --project-root .",
     "monitor:start": "node monitor/main.mjs"
   },
   "dependencies": {

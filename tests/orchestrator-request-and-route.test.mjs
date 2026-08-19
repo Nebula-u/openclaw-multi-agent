@@ -29,6 +29,17 @@ test('Orchestrator rejects routes that omit a skipped-stage reason', () => {
   assert.throws(() => compileRoutePlan(ROOT, invalid), (error) => error instanceof RoutePlanError && error.code === 'ROUTE_PLAN_SKIP_REASON_MISSING');
 });
 
+test('Orchestrator accepts TEST before CODE_REVIEW in a lifecycle route', () => {
+  const plan = routePlan('WF-Lifecycle-001');
+  plan.steps = [
+    { step_id: 'development', kind: 'DEVELOPMENT', title: 'Implement', rationale: 'Build the requested feature.', human_approval_after: false, approval_reason: null },
+    { step_id: 'test', kind: 'TEST', title: 'Test', rationale: 'Verify the feature.', human_approval_after: false, approval_reason: null },
+    { step_id: 'review', kind: 'CODE_REVIEW', title: 'Review', rationale: 'Review the implementation.', human_approval_after: false, approval_reason: null },
+  ];
+  plan.skipped_stages = ['REQUIREMENTS', 'ARCHITECTURE', 'DESIGN', 'RELEASE'].map((kind) => ({ kind, reason: 'Not required for this request.' }));
+  assert.doesNotThrow(() => compileRoutePlan(ROOT, plan));
+});
+
 test('Manager request queue requires session-bound requests and records a receipt', async () => {
   const workspace = mkdtempSync(join(tmpdir(), 'orchestrator-manager-'));
   const calls = [];

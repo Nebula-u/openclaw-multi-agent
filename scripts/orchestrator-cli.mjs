@@ -5,6 +5,7 @@ import { pathToFileURL } from 'node:url';
 import { createManagerRequestProcessor } from './orchestrator/manager-request-queue.mjs';
 import { createOrchestrator } from './orchestrator/service.mjs';
 import { createHrService } from './hr/service.mjs';
+import { createKernelPool, resolveKernelConfig } from './control-kernel/pool.mjs';
 
 function parseArgs(argv) {
   const [command, ...tokens] = argv; const options = {};
@@ -19,6 +20,29 @@ function emit(value, status = 0) { process.stdout.write(`${JSON.stringify(value,
 export async function main(argv = process.argv.slice(2)) {
   const { command, options } = parseArgs(argv); const projectRoot = resolve(options['project-root'] ?? process.cwd());
   if (command === 'init') return emit({ ok: true, command, runtime: 'orchestrator-postgresql', project_root: projectRoot });
+  if (command === 'kernel-status') {
+    const config = resolveKernelConfig({ projectRoot });
+    const pool = createKernelPool(config);
+    try {
+      const { rows } = await pool.query(
+        `SELECT current_database() AS database, current_schema() AS schema,
+          current_setting('search_path') AS search_path,
+          to_regclass('runs') AS runs, to_regclass('tasks') AS tasks,
+          to_regclass('executions') AS executions, to_regclass('artifacts') AS artifacts,
+          to_regclass('events') AS events, to_regclass('approvals') AS approvals,
+          to_regclass('notifications') AS notifications, to_regclass('hr_jobs') AS hr_jobs`,
+      );
+      const status = rows[0];
+      const missing = ['runs', 'tasks', 'executions', 'artifacts', 'events', 'approvals', 'notifications', 'hr_jobs']
+        .filter((name) => status[name] === null);
+      if (missing.length) {
+        throw Object.assign(new Error(`Control Kernel schema is incomplete: ${missing.join(', ')}`), {
+          code: 'KERNEL_SCHEMA_INCOMPLETE', details: { missing, schema: config.kernelSchema },
+        });
+      }
+      return emit({ ok: true, command, kernel_schema: config.kernelSchema, ...status });
+    } finally { await pool.end(); }
+  }
   const orchestrator = createOrchestrator({ projectRoot });
   const hr = createHrService({ projectRoot, repository: orchestrator.repository, kernel: orchestrator.kernel });
   orchestrator.attachHrService(hr);
@@ -34,7 +58,7 @@ export async function main(argv = process.argv.slice(2)) {
       const runs = workflow ? [await orchestrator.repository.getRun(workflow)] : await orchestrator.repository.listRuns({ limit: Number(options.limit ?? 200) });
       return emit({ ok: true, command, runs, tasks: workflow && runs[0] ? await orchestrator.repository.listTasks({ runId: runs[0].runId }) : undefined });
     }
-    throw new Error('usage: orchestrator-cli.mjs <init|scan|run|retry-notifications|status> [options]');
+    throw new Error('usage: orchestrator-cli.mjs <init|kernel-status|scan|run|retry-notifications|status> [options]');
   } finally { await orchestrator.close(); }
 }
 

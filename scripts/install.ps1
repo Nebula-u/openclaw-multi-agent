@@ -199,7 +199,11 @@ function Restore-ConfigOnFailure {
 function Resolve-OpenClawConfigFilePath {
   param([Parameter(Mandatory)]$Result)
   if ($Result.ExitCode -eq 0 -and -not [string]::IsNullOrWhiteSpace($Result.Output)) {
-    return Get-NormalizedPath $Result.Output.Trim()
+    $candidate = $Result.Output.Trim()
+    if ($candidate.StartsWith('~')) {
+      $candidate = Join-Path $HOME ($candidate.Substring(1).TrimStart([char[]]@('\', '/')))
+    }
+    return Get-NormalizedPath $candidate
   }
 
   # OpenClaw refuses `config file` when a removed plugin is still referenced.
