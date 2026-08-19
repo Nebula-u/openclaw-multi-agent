@@ -386,7 +386,7 @@ try {
     }
     $subagents = if ($p.role -eq 'manager') {
       # OpenClaw accepts only suggest/prefer.  An empty allowlist preserves the
-      # StateGraph-only dispatch boundary while keeping the native schema valid.
+      # Orchestrator-only dispatch boundary while keeping the native schema valid.
       [ordered]@{ delegationMode = 'prefer'; requireAgentId = $true; allowAgents = @() }
     } else {
       [ordered]@{ allowAgents = @($p.allow_agents) }

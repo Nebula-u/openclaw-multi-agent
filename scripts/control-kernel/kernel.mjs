@@ -1,13 +1,13 @@
 /**
  * Control Kernel — 门面
  *
- * 将 repository + lease + 事件哈希链（events 表，算法与 StateGraph events.mjs 一致）
+ * 将 repository + lease + 事件哈希链（events 表）
  * 组装成 createKernel({ pool, clock, workerId }) 返回的统一 API。
  *
  * 事件链是 Control Kernel 的事实账本：
  *   event_hash = sha256(canonicalJson(body))
  *   body = { event_id, run_id, task_id, execution_id, type, payload, prev_hash, occurred_at }
- * 与 scripts/stategraph/events.mjs 保持算法一致，保证两条链可交叉校验。
+ * 采用 runtime-core/hash-chain 的稳定 canonical JSON 算法。
  */
 
 import { canonicalJson, sha256 } from '../runtime-core/hash-chain.mjs';

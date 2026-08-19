@@ -6,7 +6,7 @@
  *
  * 事件链是 Kernel 的事实账本，这里锁死四件事：
  *  1. 首事件 prev_hash 为 null，后续每条 prev_hash 严格等于前一条 event_hash；
- *  2. event_hash = sha256(canonicalJson(body))，与 stategraph/events.mjs 同算法；
+ *  2. event_hash = sha256(canonicalJson(body))，与 runtime-core/hash-chain.mjs 同算法；
  *  3. auditEvents 能重放并检出被篡改的行（hash_mismatch / chain_break）；
  *  4. 未知 run 追加事件被拒（RUN_NOT_FOUND），且事务回滚不留残行。
  */
@@ -19,7 +19,7 @@ import {
 } from './helpers/kernel-fixture.mjs';
 import { createKernel } from '../scripts/control-kernel/kernel.mjs';
 import { createKernelPool } from '../scripts/control-kernel/pool.mjs';
-import { canonicalJson, sha256 } from '../scripts/stategraph/events.mjs';
+import { canonicalJson, sha256 } from '../scripts/runtime-core/hash-chain.mjs';
 
 describe('control-kernel events', { skip: skipReason() }, () => {
   let pool;
