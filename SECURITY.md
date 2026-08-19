@@ -42,7 +42,19 @@
 
 配置与日志中不得出现 token/password/cookie/private key。命令日志需应用脱敏（`redactions_applied`）。若在目标仓库中发现明文凭证，作为安全发现上报，不复制其明文到 artifact。
 
+### 5.1 PostgreSQL 凭据
+
+Control Kernel 与 LangGraph Checkpointer 共用一个 PostgreSQL 实例，连接串含数据库口令，按以下要求处置：
+
+- 连接串只写入本机 `.env`，该文件已在 `.gitignore` 中，**不得提交进仓库**。仓库内只保留 `.env.example`，其中的口令必须是占位值。
+- 不得把 `OPENCLAW_PG_URL` 写进文档、脚本默认值、测试 fixture、commit message 或 issue 正文。文档中一律用 `postgresql://user:password@host:5432/db` 形式的占位串。
+- 日志与错误对象不得回显完整连接串。连接失败时只记录错误 code（如 `ECONNREFUSED`、`KERNEL_PG_URL_MISSING`）与目标 schema 名。
+- 数据库账号应按最小权限授予：仅需要 `kernel` 与 `langgraph` 两个 schema 的 DDL/DML 权限，不需要超级用户。生产环境不要复用 `postgres` 超级用户账号。
+- `npm run kernel:schema` 会执行 DDL，运行前确认目标库正确；该命令幂等（全部 `IF NOT EXISTS`），但仍应避免指向生产库做试验。
+- 更换口令后需同时更新 `.env` 并重启 Monitor 与 workflow 进程；连接池不会热重载凭据。
+
 > 注：本机 `openclaw doctor --lint` 预先存在与本项目无关的警告（`gateway.auth.token` 明文、缺失 `policy.jsonc`）。这些属于用户既有 OpenClaw 环境，本项目不修改它们，仅在兼容性报告中记录。
+
 
 ## 6. 报告问题
 

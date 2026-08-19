@@ -1,4 +1,5 @@
 export function createCompactManagerContext(state, policy) {
+  const pending = state.pendingApproval;
   const manager = policy.manager;
   const value = {
     schema_version: 1,
@@ -12,7 +13,16 @@ export function createCompactManagerContext(state, policy) {
       steps: state.routePlan.steps.map(({ step_id, kind, title, status }) => ({ step_id, kind, title, status })),
     } : null,
     active_task: state.tasks?.find((task) => task.task_id === state.activeTaskId) ?? null,
-    pending_approval: state.pendingApproval,
+    pending_approval: pending,
+    manager_notification: pending ? {
+      type: 'HUMAN_APPROVAL_REQUIRED',
+      action: 'EXPLAIN_TO_USER_AND_WAIT_FOR_CHOICE',
+      message: `StateGraph 已暂停，等待人工审批：${pending.title ?? pending.kind}`,
+      decision_id: pending.decision_id,
+      kind: pending.kind,
+      question: pending.summary ?? pending.question,
+      options: pending.options,
+    } : null,
     recent_events: (state.events ?? []).slice(-manager.recent_events).map(({ event_hash, previous_event_hash, ...event }) => event),
     recent_error_reports: (state.managerReports ?? []).slice(-manager.recent_error_reports),
   };

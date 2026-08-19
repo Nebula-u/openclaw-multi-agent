@@ -1,5 +1,33 @@
 # Changelog
 
+## 2026-08-18 - Control Kernel + PostgreSQL 分层重构
+
+### 更新内容
+
+- 新增 `scripts/control-kernel/`（`schema.sql` / `pool.mjs` / `ids.mjs` / `repository.mjs` / `lease.mjs` / `kernel.mjs` / `apply-schema.mjs`），作为 run/task/execution/artifact/event 五类事实的唯一可信数据源。
+- 存储切换为单 PostgreSQL 实例双 schema：`kernel` 存事实，`langgraph` 存决策投影。删除手写 `sqlite-checkpointer.mjs` 与 `database.mjs`，checkpointer 改用官方 `@langchain/langgraph-checkpoint-postgres` 的 `PostgresSaver`，子类 `KernelPostgresSaver` 只补 `threadIds()`。Monitor telemetry 继续用 SQLite，是可丢弃的观测数据而非权威。
+- 并发闸门用 PostgreSQL 部分唯一索引 `executions(task_id) WHERE state IN ('LEASED','RUNNING')` 实现 lease 仲裁；`acquireLease` 为单条 `INSERT ... ON CONFLICT DO NOTHING`，冲突抛 `LEASE_HELD`。索引建在 `task_id` 而非 `run_id`，串行是并行的退化情形。
+- `graph.mjs` 13 个节点全部保留、路由结构不变，节点内追加 Kernel 写入；`dispatch` 增 lease 争抢失败分支，`reconcile` 增第五种 kind `LEASE_EXPIRED`。Agent 进程静默死掉不再让 workflow 永久卡在 RUNNING。
+- `agent-runner` 周期调用 `kernel.lease.heartbeat()`，返回 `null` 即自杀；Monitor 的 `reconcileCycle()` 接入 `reapExpiredLeases()` 回收过期租约，PG 不可达时只标记降级不中断刷新。
+- `config/stategraph-policy.json` 的 `lease_seconds` / `heartbeat_interval_seconds` / `parallelism` 由 `loadStateGraphPolicy()` 校验并真正流到 kernel 与 agent-runner（此前是死配置，实际只有环境变量 `OPENCLAW_KERNEL_LEASE_SECONDS` 生效）；新增跨字段断言 `lease_seconds > heartbeat_interval_seconds * 2`，违反抛 `POLICY_LEASE_TOO_SHORT`。
+- Agent 产物按 sha256 内容寻址落 CAS（`runtime/artifacts/cas/<前2位>/<sha256>`），索引写入 `kernel.artifacts`；同一产物被多 run 引用天然去重。
+- Monitor 改为双源合并：主源 `kernel.projectRuns()` 提供 execution/artifact 事实，副源 `stateRuntime.list()` 提供决策语义，合并键 `langgraph_thread_id === workflowId`。19 个端点与 3 个 read model 原字段全部冻结，仅追加 `run_id`、`langgraph_thread_id`、`execution`、`artifacts`、`task_group_id`、`parallel_slot`、`kernel_reachable`。Kernel 不可达时降级为 checkpoint 只读，UI 仍可用。
+- 并行接口占位：`split_tasks` / `merge_tasks` 两个直通节点加入图结构（`parallelism.enabled === false` 时纯直通，开启抛 `PARALLEL_NOT_IMPLEMENTED`），`kernel.tasks` 的 `task_group_id` / `parallel_slot` / `depends_on` 字段已在 DDL 中。现在就加是因为 LangGraph 的 `addConditionalEdges` 映射表是静态的，日后改图结构会让已有 checkpoint 失效。
+- `agents/manager-agent/workspace/AGENTS.md` 明确推荐阶段顺序 `REQUIREMENTS → ARCHITECTURE → DESIGN → DEVELOPMENT → TEST → CODE_REVIEW → RELEASE`，即 Reviewer 排在 Tester 之后，让评审能看到测试结果与失败证据。`policy.ORDER` 常量不改，仅用于合法性校验。
+- `package.json` 新增 `kernel:schema` 与 `kernel:status` 脚本；`.env.example` 登记全部 `OPENCLAW_PG_*` / `OPENCLAW_KERNEL_*` / `OPENCLAW_WORKER_ID`。
+- 清理：删除空目录 `scripts/control-core/`、`scripts/monitor-core/`、`scripts/orchestrator/`，移除 `webchat-bridge.mjs`；旧 SQLite（`runtime/control/control.db*`、`runtime/stategraph/checkpoints.db*`）归档到 `runtime/archive/`。
+- 文档：`docs/architecture.md` 重写为 Control Kernel + PostgreSQL 分层架构；新增 `docs/adr/` 四条 ADR（语言选型、双 schema、lease 仲裁、Monitor 降级）；`docs/monitoring.md` 补 `kernel_reachable`、降级行为与新字段。
+
+### 修改原因
+
+重构前状态分散在三处 SQLite，其中 `control.db` 与 `checkpoints.db` 都自称权威，崩溃恢复时无法判断以谁为准；Agent 进程存活性只能靠可回滚的 checkpoint 推断，进程静默死亡会让 workflow 永久卡死。本次把「客观发生过什么」（Kernel 事实）与「LangGraph 认为的世界」（checkpoint 决策）彻底分层，并固定写入顺序为「Kernel 先落库 → Checkpoint 后投影」——前者留下的孤儿可恢复，后者留下的脏状态不可恢复。
+
+### 已知限制
+
+- `test:kernel` 需要可用的 PostgreSQL；未配置 `OPENCLAW_PG_URL` 时整套 SKIP。CI 与接手者必须确认输出是真 PASS 而非 SKIP。
+- `validate-install` 的 1 例失败为中文 GBK mojibake 的历史问题，与本次重构无关。
+- 并行执行只完成接口与数据层预留，`parallelism.enabled` 打开会抛 `PARALLEL_NOT_IMPLEMENTED`。
+
 ## 2026-08-14 - StateGraph/checkpointer 单框架重建
 
 ### 更新内容

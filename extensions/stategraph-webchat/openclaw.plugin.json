@@ -1,7 +1,7 @@
 {
   "id": "stategraph-webchat",
-  "name": "StateGraph WebChat Bridge",
-  "description": "Routes manager WebChat requests into the trusted StateGraph runtime before normal agent dispatch.",
+  "name": "StateGraph Manager CLI Bridge",
+  "description": "Leaves Manager CLI conversation untouched and processes only user-confirmed workflow request files.",
   "version": "1.0.0",
   "configSchema": {
     "type": "object",
@@ -10,6 +10,7 @@
       "projectRoot": { "type": "string" },
       "targetProjectRoot": { "type": "string" },
       "managerAgentId": { "type": "string" },
+      "managerWorkspace": { "type": "string" },
       "sessionPrefixes": { "type": "array", "items": { "type": "string", "minLength": 1 } },
       "scanIntervalMs": { "type": "integer", "minimum": 500 }
     }

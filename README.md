@@ -5,10 +5,9 @@
 ## 核心边界
 
 ```text
-用户请求
-  -> Manager 仅提出 route-plan
-  -> 本地代码校验并生成路线确认审批
-  -> 人工确认后冻结 route_hash / steps / approval_plan
+用户在 CLI 向 Manager 提出请求
+  -> Manager 展示完整 route-plan 并等待用户确认
+  -> 用户确认后 Manager 写持久化请求，StateGraph 校验并冻结 route_hash / steps / approval_plan
   -> StateGraph dispatch 按 task kind 固定选择 Agent
   -> Agent 在独立 worktree 执行并只写 .agent-raw / raw logs
   -> 本地 ingestion + Gate 校验结果、证据、commit 和 sandbox
@@ -22,7 +21,7 @@
 - 同一 session 的非法 JSON 最多重新生成 2 次，只允许重写结构化输出。
 - DEVELOPMENT 和 TEST 必须提交真实 Git commit；TEST 可修改测试代码并推进 candidate。
 - TEST 强制使用 `SANDBOXED_DOCKER`，禁止主机执行、网络、提权和额外 mount。
-- monitor 是 Node.js 只读后端，只查询最新 checkpoints 和本地 telemetry。
+- monitor 是 GET-only 的 Node.js 本机工作台：只观测 checkpoint 与 telemetry，不持有审批或续跑能力。
 
 详细设计见 [docs/architecture.md](docs/architecture.md)。
 
@@ -139,9 +138,9 @@ pwsh -NoProfile -File scripts/reinstall-agents.ps1 -Apply -Yes -GatewayStopped \
 
 ## 运行 Workflow
 
-### OpenClaw WebChat 自动接入
+### Manager CLI 与 StateGraph Bridge
 
-本项目通过 `stategraph-webchat` Gateway 插件在普通 manager-agent 对话开始前接管 WebChat 入站消息。插件创建 workflow、推进 StateGraph，并把“确认”等人工回复绑定到当前 checkpoint 的 `decision_id`；manager-agent 本身仍不持有 runtime 或 human capability。
+本项目通过 `stategraph-webchat` Gateway 插件提供后台 StateGraph bridge。插件不接管 Manager 的入站消息或回复；Manager 在 CLI 中直接与用户对话，并且仍不持有 runtime 或 human capability。插件只处理用户确认后写入持久队列的请求、推进 StateGraph，以及为结构化输出调用临时注入 JSON Schema。
 
 **Windows（PowerShell）**
 
@@ -165,7 +164,7 @@ openclaw gateway restart
 openclaw gateway status
 ```
 
-插件默认接管 owner 发给 manager-agent 的 `tui-*`、`dashboard:*` 和 `main` 交互会话：渠道消息在入站阶段接管，经 Gateway 认证的 WebChat、Dashboard、TUI 和 CLI 直接 Agent 调用由合成回复钩子接管，不调用 manager 模型，也不会显示为安全阻断错误。该会话钩子需要显式启用 `allowConversationAccess`；其他渠道仍必须由 OpenClaw 标记为 owner。StateGraph 自己通过 CLI 启动的 `explicit:*` manager-agent 任务不会被再次接管，因此不会递归创建 workflow。发送 `/workflow status` 可读取并推进当前会话关联的 workflow；路线待确认时发送“确认”、“这条路线可以，就这么走”或 `/workflow approve` 会写入正式人工审批；Agent 三次失败后的错误升级节点也可用“确认重试”开启同一 Agent 的新重试批次。
+插件不再接管 Manager 的对话或合成回复。Manager 在 CLI 中直接与用户澄清并展示完整步骤；只有用户明确确认后，Manager 才向 workspace 的 `.stategraph/requests/` 写入 `CREATE`、`CHANGE` 或 `DECISION` 请求。插件后台校验请求并交给 StateGraph，处理回执和已清洗状态分别持久化到 `.stategraph/receipts/` 与 `.stategraph/status/`。冻结路线只能由用户提出、Manager 代为提交的 `CHANGE` 请求修改，已完成阶段由 StateGraph 强制保留。
 
 初始化本地 runtime/human capability：
 
@@ -241,6 +240,54 @@ node scripts/workflow.mjs approve --project-root . --workflow-id WF-example \
 | `test-agent` | 在 Docker sandbox 中执行/补充测试并提交测试 commit |
 | `release-agent` | 校验 candidate、回滚信息和发布准备；不执行部署 |
 
+## PostgreSQL 前置准备
+
+StateGraph、Control Kernel 与 LangGraph Checkpointer 共用一个 PostgreSQL 实例、两个 schema：`kernel` 存 run/task/execution/artifact/event 事实，`langgraph` 存 checkpoint 决策投影。Monitor telemetry 仍用独立 SQLite，不迁 PG。
+
+启动 workflow 或 Monitor 前先准备数据库：
+
+```bash
+# 1. 起一个本地 PG（示例）
+docker run -d --name openclaw-pg \
+  -e POSTGRES_USER=openclaw -e POSTGRES_PASSWORD=password \
+  -e POSTGRES_DB=openclaw -p 5432:5432 postgres:16
+```
+
+```text
+# 2. 复制 .env.example 为 .env，至少配置连接串（.env 不进仓库）
+OPENCLAW_PG_URL=postgresql://user:password@localhost:5432/openclaw
+OPENCLAW_KERNEL_SCHEMA=kernel
+```
+
+```powershell
+# 3. 幂等应用 kernel schema DDL（langgraph 表由 checkpointer setup() 自建）
+npm run kernel:schema
+
+# 4. 查看 run/task/execution 计数与过期租约
+npm run kernel:status
+
+# 5. kernel 测试必须是真 PASS，不能是 SKIP
+npm run test:kernel
+```
+
+未配置 `OPENCLAW_PG_URL` 时 `test:kernel` 整套 SKIP，PG 侧代码不会被执行——务必确认输出中是正数 `# pass` 而不是 SKIP。
+
+### 环境变量
+
+| 变量 | 默认值 | 说明 |
+| --- | --- | --- |
+| `OPENCLAW_PG_URL` | 无（必填） | PostgreSQL 连接串，含口令，只写入本机 `.env` |
+| `OPENCLAW_PG_POOL_MAX` | `8` | 连接池上限 |
+| `OPENCLAW_PG_STATEMENT_TIMEOUT_MS` | `15000` | 单条语句超时 |
+| `OPENCLAW_PG_CONNECT_TIMEOUT_MS` | `5000` | 建连超时 |
+| `OPENCLAW_KERNEL_SCHEMA` | `kernel` | Kernel schema 名，连接建立时写入 `search_path` |
+| `OPENCLAW_KERNEL_LEASE_SECONDS` | `120` | 租约兜底默认值；`config/stategraph-policy.json` 的 `lease_seconds` 优先 |
+| `OPENCLAW_WORKER_ID` | `worker-<pid>` | 本进程 worker 标识，写入 `kernel.executions.worker_id` |
+
+租约与心跳的实际生效值来自 `config/stategraph-policy.json` 的 `lease_seconds` / `heartbeat_interval_seconds`，并强制满足 `lease_seconds > heartbeat_interval_seconds * 2`，否则加载即抛 `POLICY_LEASE_TOO_SHORT`。
+
+数据库凭据处置要求见 [SECURITY.md](SECURITY.md) §5.1。
+
 ## Node Monitor
 
 ```powershell
@@ -253,14 +300,16 @@ pwsh -NoProfile -File scripts/start-monitor.ps1 -Port 4319
 MONITOR_PORT=4319 bash scripts/start-monitor.sh
 ```
 
-启动后打开 `http://127.0.0.1:4319/`；面板与 GET-only API、SSE 使用同一个 Node 服务。后端还提供 checkpoint audit、自动续跑、会话目录、artifact 观察与健康分类。部署说明见 [docs/monitoring.md](docs/monitoring.md)。项目不包含 Java、Servlet 或 Tomcat monitor 代理。
+启动后打开 `http://127.0.0.1:4319/`；面板、API 和 SSE 使用同一个 Node 服务，无需手工打开 `index.html`。界面保留深浅主题和现有工作台风格，但不包含任何确认、重做、停止、重试或路线修改控件；所有交互都在 Manager CLI 中完成。前端只维持一个全局 SSE，并仅在 checkpoint read model 变化时更新，不再每三秒重载页面或重建连接。部署说明见 [docs/monitoring.md](docs/monitoring.md)。项目不包含 Java、Servlet 或 Tomcat monitor 代理。
 
 ## 运行目录
 
 ```text
 runtime/
-  stategraph/checkpoints.db
+  stategraph/runtime.capability
+  stategraph/human-approval.capability
   stategraph/test-sandbox-global.lock
+  artifacts/cas/<sha-prefix>/<sha256>
   artifacts/<workflow>/<task>/runs/<run>/
     .agent-raw/
     .stategraph-ingest/

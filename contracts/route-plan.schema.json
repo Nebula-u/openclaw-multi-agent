@@ -9,6 +9,7 @@
     "workflow_id",
     "request_class",
     "summary",
+    "display_title",
     "risk_flags",
     "steps",
     "skipped_stages"
@@ -21,6 +22,7 @@
       "enum": ["SMALL_CODE", "FEATURE", "TEST_ONLY", "ANALYSIS_ONLY", "RELEASE_ONLY"]
     },
     "summary": { "type": "string", "minLength": 1, "maxLength": 4000 },
+    "display_title": { "type": "string", "minLength": 1, "maxLength": 10 },
     "risk_flags": {
       "type": "array",
       "uniqueItems": true,
@@ -58,6 +60,14 @@
           "rationale": { "type": "string", "minLength": 1, "maxLength": 1000 },
           "human_approval_after": { "type": "boolean" },
           "approval_reason": { "type": ["string", "null"], "maxLength": 1000 }
+          ,"split_hint": {
+            "type": "object",
+            "properties": {
+              "max_parallel": { "type": "integer", "minimum": 1, "maximum": 8 },
+              "partition_by": { "enum": ["COMPONENT", "FILE_GROUP", "NONE"] }
+            },
+            "additionalProperties": false
+          }
         },
         "allOf": [
           {

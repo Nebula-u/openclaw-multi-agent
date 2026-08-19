@@ -2,6 +2,8 @@
 
 人工审批由代码生成，并通过独立 human capability 写入最新 checkpoint。Manager 和 worker 都不能创建“已批准”事实。
 
+每当 checkpoint 生成 `pendingApproval` 时，Manager status 和 manager context 同时提供 `manager_notification`。它是给 Manager 的强制通知，包含审批类型、原因、`decision_id`、问题和选项；Manager 必须先把这些内容说明给用户，等待用户明确选择后，才能写入 `DECISION` 请求。Monitor 仍然只读，不负责审批。
+
 ## 审批类型
 
 ### ROUTE_PLAN_CONFIRMATION

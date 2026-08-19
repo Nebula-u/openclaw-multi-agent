@@ -7,6 +7,9 @@ import { pathToFileURL } from 'node:url';
 import { atomicWriteJson } from '../runtime-core/atomic-store.mjs';
 import { openClawSpawnSpec, terminateProcessTree } from './process-utils.mjs';
 import { cleanupTestSandboxSession, verifySandboxRuntime } from './sandbox-runtime.mjs';
+import { releaseEphemeralSchema } from './ephemeral-schema.mjs';
+import { createKernelPool, resolveKernelConfig } from '../control-kernel/pool.mjs';
+import { createLease } from '../control-kernel/lease.mjs';
 
 function parseArgs(argv) {
   const options = {};
@@ -29,7 +32,8 @@ function appendRawLog(path, record) {
 }
 
 export function runAgentProcess({ agentId, sessionId, messagePath, timeoutSeconds, stdoutPath, stderrPath,
-  statusPath, resultPath, rawLogPath, dispatchId, cycle, sandboxLeasePath = null } = {}) {
+  statusPath, resultPath, rawLogPath, dispatchId, cycle, sandboxLeasePath = null, schemaBindingPath = null,
+  kernelExecutionId = null, leaseSeconds = null, heartbeatIntervalSeconds = null } = {}) {
   const timeout = Number(timeoutSeconds);
   if (!Number.isInteger(timeout) || timeout <= 0 || timeout > 900) throw new Error('timeoutSeconds must be between 1 and 900');
   const args = ['agent', '--agent', agentId, '--session-id', sessionId, '--message-file', messagePath,
@@ -42,10 +46,24 @@ export function runAgentProcess({ agentId, sessionId, messagePath, timeoutSecond
   let child;
   let finished = false;
   let timedOut = false;
+  let leaseLost = false;
+  const kernelConfig = kernelExecutionId ? resolveKernelConfig() : null;
+  const effectiveLeaseSeconds = leaseSeconds ?? kernelConfig?.leaseSeconds;
+  const effectiveHeartbeatIntervalSeconds = heartbeatIntervalSeconds ?? Math.floor(effectiveLeaseSeconds / 3);
+  const kernelPool = kernelExecutionId && kernelConfig?.url ? createKernelPool({
+    url: kernelConfig.url,
+    max: 1,
+    statementTimeoutMs: kernelConfig.statementTimeoutMs,
+    connectTimeoutMs: kernelConfig.connectTimeoutMs,
+    kernelSchema: kernelConfig.kernelSchema,
+  }) : null;
+  const kernelLease = kernelPool ? createLease({ pool: kernelPool, scheduleSeconds: effectiveLeaseSeconds }) : null;
+  let heartbeatTimer = null;
 
   const finish = async (value) => {
     if (finished) return;
     finished = true;
+    if (heartbeatTimer) clearInterval(heartbeatTimer);
     stdout.end();
     stderr.end();
     let sandboxAttestation = null;
@@ -57,10 +75,24 @@ export function runAgentProcess({ agentId, sessionId, messagePath, timeoutSecond
         await cleanupTestSandboxSession({ lease, leasePath: sandboxLeasePath });
       } catch (error) { sandboxError = error; }
     }
-    const finalValue = sandboxError ? {
+    const finalValue = leaseLost ? {
+      ...value, state: 'FAILED', error_code: 'EXECUTION_LEASE_LOST', error_message: 'execution lease was reclaimed while Agent was running',
+    } : sandboxError ? {
       ...value, state: 'FAILED', error_code: sandboxError.code ?? 'SANDBOX_FINALIZATION_FAILED', error_message: sandboxError.message,
     } : value;
+    if (kernelLease && !leaseLost) {
+      try {
+        await kernelLease.releaseLease({
+          executionId: kernelExecutionId,
+          state: finalValue.state === 'SUCCEEDED' ? 'SUCCEEDED' : 'FAILED',
+          exitCode: finalValue.exit_code ?? null,
+          error: finalValue.error_message ? { message: finalValue.error_message } : null,
+        });
+      } catch { /* reaping may already have won */ }
+    }
+    if (kernelPool) await kernelPool.end();
     const finishedAt = new Date().toISOString();
+    releaseEphemeralSchema(schemaBindingPath);
     const result = {
       schema_version: 1,
       dispatch_id: dispatchId,
@@ -91,6 +123,17 @@ export function runAgentProcess({ agentId, sessionId, messagePath, timeoutSecond
   } catch (error) {
     void finish({ state: 'FAILED', error_code: error.code ?? 'OPENCLAW_SPAWN_FAILED', error_message: error.message });
     return;
+  }
+  if (kernelLease) {
+    const intervalMs = Math.max(1000, effectiveHeartbeatIntervalSeconds * 1000);
+    heartbeatTimer = setInterval(() => {
+      void kernelLease.heartbeat({ executionId: kernelExecutionId, phase: 'RUNNING' }).then((value) => {
+        if (value || finished) return;
+        leaseLost = true;
+        if (child?.pid) terminateProcessTree(child.pid);
+      }).catch(() => { /* next heartbeat retries; process timeout remains fail-safe */ });
+    }, intervalMs);
+    heartbeatTimer.unref?.();
   }
   const timer = setTimeout(() => {
     timedOut = true;
@@ -136,6 +179,10 @@ async function main() {
     dispatchId: options['dispatch-id'],
     cycle: Number(options.cycle),
     sandboxLeasePath: options['sandbox-lease-path'] ? required(options, 'sandbox-lease-path') : null,
+    schemaBindingPath: options['schema-binding-path'] ? required(options, 'schema-binding-path') : null,
+    kernelExecutionId: options['kernel-execution-id'] ?? null,
+    leaseSeconds: options['lease-seconds'] ? Number(options['lease-seconds']) : null,
+    heartbeatIntervalSeconds: options['heartbeat-interval-seconds'] ? Number(options['heartbeat-interval-seconds']) : null,
   });
 }
 
