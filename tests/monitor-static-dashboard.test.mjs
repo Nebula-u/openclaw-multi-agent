@@ -15,17 +15,17 @@ test('local dashboard opens without a build step and contains no external runtim
   assert.doesNotMatch(html, /https?:\/\/(?!127\.0\.0\.1)/u);
   assert.doesNotMatch(`${html}${script}`, /React|Vite|node_modules/u);
   assert.match(script, /EventSource/u);
-  assert.match(script, /renderKey === state\.workflowListKey/u);
-  assert.match(script, /renderKey === state\.dialogueKey/u);
+  assert.match(script, /session-window/u);
+  assert.match(script, /hr-alert/u);
   assert.match(script, /api\/workflows\/stream/u);
-  assert.match(script, /api\/client-config/u);
-  assert.match(script, /method:\s*'POST'/u);
-  assert.match(html, /id="run-workflow"/u);
-  assert.match(html, /id="theme-toggle"/u);
+  assert.match(html, /id="connection-state"/u);
+  assert.doesNotMatch(script, /method:\s*'POST'/u);
+  assert.match(html, /id="session-window"/u);
+  assert.match(html, /id="alert-list"/u);
   assert.doesNotMatch(`${html}${script}`, /api-token|human-approval\.capability|runtime\.capability/u);
   assert.match(css, /prefers-reduced-motion/u);
-  assert.match(css, /\[data-theme="dark"\]/u);
-  assert.match(html, /只读监测/u);
+  assert.match(css, /prefers-reduced-motion/u);
+  assert.match(html, /HR KEYWORD ALERTS/u);
 });
 
 test('dashboard connects directly to the loopback Node monitor backend', () => {

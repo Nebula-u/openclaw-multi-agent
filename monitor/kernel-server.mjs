@@ -32,12 +32,12 @@ function publicTask(task, execution, telemetry) {
     updated_at: task.updatedAt, last_error: task.lastError ?? null, execution: execution ?? null, health: telemetry.health(task.taskId),
     artifact_root_abs: task.payload?.artifact_root_abs ?? null, published_output_path_abs: task.payload?.published_output_path_abs ?? null };
 }
-function publicRun(run, tasks, telemetry) {
+function publicRun(run, tasks, telemetry, pendingApproval = null) {
   return { protocol_version: 'orchestrator-postgresql-v1', workflow_id: run.workflowId, run_id: run.runId, state: run.state, outcome: run.outcome,
     status_reason: run.statusReason, title: run.routePlan?.display_title ?? run.routePlan?.summary ?? run.workflowId, route_hash: run.routeHash,
     route_plan: run.routePlan, current_step_index: run.currentStepIndex, manager_session_id: run.managerSessionId,
     manager_delivery: run.managerDelivery, created_at: run.createdAt, updated_at: run.updatedAt, completed_at: run.completedAt,
-    tasks: tasks.map((task) => publicTask(task, task.execution, telemetry)), pending_approval: null };
+    tasks: tasks.map((task) => publicTask(task, task.execution, telemetry)), pending_approval: pendingApproval };
 }
 
 export function createKernelMonitorServer(config, { pool: providedPool = null, kernel: providedKernel = null, repository: providedRepository = null, telemetryDatabase: providedTelemetryDatabase = null, eventHub: providedHub = null } = {}) {
@@ -62,21 +62,58 @@ export function createKernelMonitorServer(config, { pool: providedPool = null, k
   const assets = new Map([['/', { contentType: 'text/html; charset=utf-8', body: readFileSync(join(uiRoot, 'index.html')) }], ['/index.html', { contentType: 'text/html; charset=utf-8', body: readFileSync(join(uiRoot, 'index.html')) }], ['/styles.css', { contentType: 'text/css; charset=utf-8', body: readFileSync(join(uiRoot, 'styles.css')) }], ['/app.js', { contentType: 'text/javascript; charset=utf-8', body: readFileSync(join(uiRoot, 'app.js')) }], ['/config.js', { contentType: 'text/javascript; charset=utf-8', body: readFileSync(join(uiRoot, 'config.js')) }]]);
   const health = createHealthClassifier({ telemetry, publish: (type, payload, meta) => hub.publish(type, payload, meta), thresholds: { heartbeatStaleSeconds: config.heartbeatStaleSeconds, possiblyStalledSeconds: config.possiblyStalledSeconds, startingTimeoutSeconds: config.startingTimeoutSeconds, toolRunningGraceSeconds: config.toolRunningGraceSeconds } });
   const hr = createHrService({ projectRoot: config.projectRoot, repository, kernel });
-  let runsCache = [];
-  function tasksForRun(run, executions) { return runsCache.tasks.filter((task) => task.runId === run.runId).map((task) => ({ ...task, execution: executions.find((item) => item.taskId === task.taskId) ?? null })); }
+  let runsCache = { runs: [], tasks: [], hrJobs: [] };
+  let localHrAlerts = [];
+  let hrRunnerBusy = false;
   async function readKernelEvents(limit = 500) { if (!pool) return []; const result = await pool.query('SELECT event_id, event_seq, run_id, task_id, execution_id, type, payload, occurred_at FROM events ORDER BY event_seq DESC LIMIT $1', [limit]); return result.rows.reverse().map((row) => ({ event_id: row.event_id, sequence: Number(row.event_seq), run_id: row.run_id, task_id: row.task_id, execution_id: row.execution_id, type: row.type, payload: row.payload, occurred_at: row.occurred_at })); }
   async function readHrJobs(limit = 200) { return repository.listHrJobs({ limit }); }
   async function readNotifications(limit = 200) { return repository.listNotifications({ statuses: ['PENDING', 'FAILED', 'SENT', 'DELIVERED'], limit }); }
-  const taskSource = () => runsCache.tasks.map((task) => ({ task_id: task.taskId, run_id: task.runId, workflow_id: task.workflowId, agent_id: task.agentId, session_id: task.execution?.sessionId ?? null, status: task.state, updated_at: task.updatedAt, dispatches: task.execution ? [{ dispatch_id: task.execution.executionId, status: task.execution.state, session_id: task.execution.sessionId, created_at: task.execution.startedAt, updated_at: task.execution.heartbeatAt }] : [], output_path_abs: task.payload?.published_output_path_abs ?? null }));
-  const sessionTailer = createSessionTailer({ taskSource, telemetry, sessionRoot: config.sessionRoot ?? config.projectRoot, publish: async (type, event, meta) => { hub.publish(type, event, meta); if (event.event_type === 'session.assistant_output') { const result = await hr.recordAssistantOutput({ runId: event.run_id, taskId: event.task_id, agentId: event.payload.agent_id, sessionId: event.session_id, sourceEventId: event.event_id, text: event.payload.summary, timestamp: event.timestamp }); if (result.alert) hub.publish('hr-alert', result.alert, { source: 'HR_KEYWORD_RULE' }); } } });
+  function discoveredSessions() {
+    const values = [];
+    for (const agent of catalog.agents()) {
+      for (const session of catalog.sessions(agent.agent_id) ?? []) {
+        const task = runsCache.tasks.find((item) => item.execution?.sessionId === session.session_id && item.agentId === agent.agent_id) ?? null;
+        const managerRun = runsCache.runs.find((item) => item.managerSessionId === session.session_id && agent.agent_id === 'manager-agent') ?? null;
+        const hrJob = runsCache.hrJobs.find((item) => item.hrSessionId === session.session_id && agent.agent_id === 'hr-agent') ?? null;
+        const runId = task?.runId ?? managerRun?.runId ?? hrJob?.runId ?? null;
+        const run = runId ? runsCache.runs.find((item) => item.runId === runId) : null;
+        values.push({ agent_id: agent.agent_id, session_id: session.session_id, session_key: session.session_key ?? null,
+          workflow_id: run?.workflowId ?? 'UNBOUND', task_id: task?.taskId ?? hrJob?.taskId ?? null, run_id: runId,
+          dispatch_id: task?.execution?.executionId ?? null, updated_at: session.updated_at ?? null, binding: run ? 'KERNEL_WORKFLOW' : 'UNBOUND_SESSION' });
+      }
+    }
+    return values;
+  }
+  function scheduleHr() {
+    if (hrRunnerBusy) return;
+    hrRunnerBusy = true;
+    void hr.runPending().catch((error) => hub.publish('monitor-health', { code: error.code ?? 'HR_RUNNER_FAILED', message: error.message }, { source: 'HR_RUNNER' }))
+      .finally(() => { hrRunnerBusy = false; });
+  }
+  const sessionTailer = createSessionTailer({ sessionSource: discoveredSessions, telemetry, sessionRoot: config.sessionRoot ?? config.projectRoot, publish: (type, event, meta) => {
+    hub.publish(type, event, meta);
+    if (event.event_type !== 'session.assistant_output') return;
+    void hr.recordAssistantOutput({ runId: event.run_id, taskId: event.task_id, agentId: event.payload.agent_id, sessionId: event.session_id, sourceEventId: event.event_id, text: event.payload.summary, timestamp: event.timestamp })
+      .then((result) => {
+        if (result.alertPayload) {
+          localHrAlerts = [...localHrAlerts.filter((item) => item.source_event_id !== result.alertPayload.source_event_id), result.alertPayload].slice(-200);
+          hub.publish('hr-alert', result.alertPayload, { source: 'HR_KEYWORD_RULE' });
+        }
+        scheduleHr();
+      }).catch((error) => hub.publish('monitor-health', { code: error.code ?? 'HR_JOB_QUEUE_FAILED', message: error.message }, { source: 'HR_QUEUE' }));
+  } });
   async function refresh() {
     if (refreshRunning) return snapshot; refreshRunning = true;
     try {
       const [runs, tasks, executions, events, hrJobs, notifications] = await Promise.all([kernel.listRuns({ limit: 200 }), kernel.listTasks({ limit: 2000 }), kernel.listExecutions({ limit: 2000 }), readKernelEvents(), readHrJobs(), readNotifications()]);
-      runsCache = { tasks }; const workflowValues = runs.map((run) => publicRun(run, tasks.filter((task) => task.runId === run.runId).map((task) => ({ ...task, execution: executions.find((item) => item.taskId === task.taskId) ?? null })), telemetry));
-      const healthInput = { workflows: workflowValues }; health.scan(healthInput); const emitted = sessionTailer.scan();
-      const alerts = events.filter((event) => event.type === 'HR_KEYWORD_ALERT').map((event) => redactValue(event.payload?.detail ?? event.payload));
-      const next = { schema_version: 1, source: 'POSTGRESQL_CONTROL_KERNEL', kernel_reachable: true, generated_at: new Date().toISOString(), workflows: workflowValues, events, hr_alerts: alerts, hr_jobs: hrJobs, notifications };
+      const enrichedTasks = tasks.map((task) => ({ ...task, workflowId: runs.find((run) => run.runId === task.runId)?.workflowId ?? null, execution: executions.find((item) => item.taskId === task.taskId) ?? null }));
+      runsCache = { runs, tasks: enrichedTasks, hrJobs };
+      const approvals = repository.listApprovals ? await Promise.all(runs.map((run) => repository.listApprovals({ runId: run.runId, status: 'PENDING' }))) : runs.map(() => []);
+      const workflowValues = runs.map((run, index) => publicRun(run, enrichedTasks.filter((task) => task.runId === run.runId), telemetry, approvals[index][0] ?? null));
+      const healthInput = { workflows: workflowValues }; health.scan(healthInput); sessionTailer.scan();
+      const kernelAlerts = events.filter((event) => event.type === 'HR_KEYWORD_ALERT').map((event) => ({ ...redactValue(event.payload?.detail ?? event.payload), workflow_id: runs.find((run) => run.runId === event.run_id)?.workflowId ?? null }));
+      const alerts = [...kernelAlerts, ...localHrAlerts.filter((item) => !kernelAlerts.some((alert) => alert.source_event_id === item.source_event_id))];
+      const next = { schema_version: 1, source: 'POSTGRESQL_CONTROL_KERNEL', kernel_reachable: true, generated_at: new Date().toISOString(), workflows: workflowValues, events, hr_alerts: alerts, hr_jobs: hrJobs, notifications, global_sessions: discoveredSessions().filter((item) => item.binding === 'UNBOUND_SESSION') };
       const value = JSON.stringify(next); snapshot = next; if (value !== fingerprint) { fingerprint = value; hub.publish('snapshot', snapshot, { source: 'POSTGRESQL_CONTROL_KERNEL' }); } return snapshot;
     } catch (error) { snapshot = { ...snapshot, kernel_reachable: false, degraded: true, degradation: { code: error.code ?? 'KERNEL_UNAVAILABLE', message: error.message }, generated_at: new Date().toISOString() }; hub.publish('monitor-health', snapshot.degradation, { source: 'KERNEL' }); return snapshot; }
     finally { refreshRunning = false; }

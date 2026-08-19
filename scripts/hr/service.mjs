@@ -30,7 +30,7 @@ export function createHrService({ projectRoot: projectRootInput, repository, ker
     }
     const job = await repository.queueHrJob({ runId, taskId, kind: 'OUTPUT_REVIEW', sourceAgentId: agentId, sourceSessionId: sessionId,
       sourceEventId, input: { text: safeText, matches, timestamp } });
-    return { matches, alert, job };
+    return { matches, alert, job, alertPayload: matches.length ? { agent_id: agentId, session_id: sessionId, source_event_id: sourceEventId, matches, text: safeText, timestamp, run_id: runId, task_id: taskId } : null };
   }
 
   async function queueTaskDailyReport({ run, task, outcome, events = [] }) {

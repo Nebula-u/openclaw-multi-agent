@@ -1,10 +1,16 @@
-import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { basename, join, resolve } from 'node:path';
 import { redactValue } from './redactor.mjs';
 
 function safeId(value) { return typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9._-]*$/u.test(value); }
 function json(path, fallback) { try { return JSON.parse(readFileSync(path, 'utf8')); } catch { return fallback; } }
 function directories(path) { try { return readdirSync(path, { withFileTypes: true }).filter((item) => item.isDirectory()).map((item) => item.name); } catch { return []; } }
+function sessionFiles(path) {
+  try {
+    return readdirSync(path, { withFileTypes: true }).filter((item) => item.isFile() && item.name.endsWith('.jsonl') && safeId(basename(item.name, '.jsonl')))
+      .map((item) => ({ session_id: basename(item.name, '.jsonl'), session_file: join(path, item.name), updated_at: new Date(statSync(join(path, item.name)).mtimeMs).toISOString() }));
+  } catch { return []; }
+}
 
 function textContent(content) {
   if (typeof content === 'string') return content;
@@ -25,7 +31,7 @@ export function createSessionCatalog({ sessionRoot, projectRoot }) {
     if (!safeId(agentId) || !agentIds().includes(agentId)) return null;
     const directory = join(root, agentId, 'sessions');
     const index = json(join(directory, 'sessions.json'), {});
-    return Object.entries(index).map(([sessionKey, value]) => ({
+    const indexed = Object.entries(index).map(([sessionKey, value]) => ({
       session_id: value.sessionId ?? (basename(value.sessionFile ?? '', '.jsonl') || null),
       session_key: sessionKey,
       status: value.status ?? 'unknown',
@@ -34,7 +40,10 @@ export function createSessionCatalog({ sessionRoot, projectRoot }) {
       started_at: value.sessionStartedAt ? new Date(value.sessionStartedAt).toISOString() : null,
       updated_at: value.updatedAt ? new Date(value.updatedAt).toISOString() : null,
       ended_at: value.endedAt ? new Date(value.endedAt).toISOString() : null,
-    })).filter((item) => safeId(item.session_id)).sort((left, right) => Date.parse(right.updated_at ?? 0) - Date.parse(left.updated_at ?? 0));
+    })).filter((item) => safeId(item.session_id));
+    const known = new Set(indexed.map((item) => item.session_id));
+    for (const file of sessionFiles(directory)) if (!known.has(file.session_id)) indexed.push({ ...file, session_key: null, status: 'unindexed', model: null, total_tokens: null, started_at: null, ended_at: null });
+    return indexed.sort((left, right) => Date.parse(right.updated_at ?? 0) - Date.parse(left.updated_at ?? 0));
   }
   function messages(agentId, sessionId) {
     const list = sessions(agentId);
