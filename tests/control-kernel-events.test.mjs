@@ -205,7 +205,7 @@ describe('control-kernel events', { skip: skipReason() }, () => {
       stepId: 'step-1',
       title: 'Events test task',
       agentId: 'developer-agent',
-      state: 'DISPATCHED',
+      state: 'READY',
       taskGroupId: `TSK-${crypto.randomUUID().slice(0, 8)}`,
     });
     const executionId = kernel.ids.executionIdFor(run.runId, { attempt: 1, cycle: 0 });

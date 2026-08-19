@@ -3,7 +3,7 @@
 
   const sameOrigin = window.location.protocol !== 'file:';
   const defaultApi = window.MONITOR_CONFIG?.apiUrl || (sameOrigin ? window.location.origin : 'http://127.0.0.1:4319');
-  const state = { apiUrl: defaultApi.replace(/\/$/u, ''), workflows: [], snapshot: null, selectedWorkflowId: localStorage.getItem('openclaw.monitor.workflow') || null, selectedAgentId: localStorage.getItem('openclaw.monitor.agent') || null, source: null, sessionKey: null };
+  const state = { apiUrl: defaultApi.replace(/\/$/u, ''), workflows: [], snapshot: null, selectedWorkflowId: localStorage.getItem('openclaw.monitor.workflow') || null, selectedSessionKey: localStorage.getItem('openclaw.monitor.session') || null, source: null, renderedSessionKey: null };
   const $ = (id) => document.getElementById(id);
   const escapeHtml = (value) => String(value ?? '').replace(/[&<'"]/gu, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[char]));
   const selected = () => state.workflows.find((item) => item.workflow_id === state.selectedWorkflowId) || null;
@@ -28,17 +28,18 @@
     if (workflow?.manager_session_id) list.push({ agent_id: 'manager-agent', session_id: workflow.manager_session_id, label: 'Manager' });
     for (const task of tasks) if (task.session_id) list.push({ agent_id: task.assigned_agent, session_id: task.session_id, label: task.assigned_agent });
     for (const job of (state.snapshot?.hr_jobs || []).filter((item) => item.runId === workflow?.run_id && item.hrSessionId)) list.push({ agent_id: 'hr-agent', session_id: job.hrSessionId, label: 'HR' });
+    if (!workflow) for (const session of state.snapshot?.global_sessions || []) list.push({ agent_id: session.agent_id, session_id: session.session_id, label: `${session.agent_id} · UNBOUND` });
     return [...new Map(list.map((item) => [`${item.agent_id}:${item.session_id}`, item])).values()];
   }
   async function renderSession(workflow) {
     const sessions = activeSessions(workflow); const tabs = $('agent-tabs');
-    if (!sessions.length) { tabs.innerHTML = ''; $('session-meta').textContent = '当前 workflow 尚未记录 Agent session。'; $('session-window').innerHTML = '<p class="empty-note">没有可显示的会话文本</p>'; return; }
-    if (!sessions.some((item) => item.agent_id === state.selectedAgentId)) state.selectedAgentId = sessions[0].agent_id;
-    tabs.innerHTML = sessions.map((item) => `<button type="button" role="tab" aria-selected="${item.agent_id === state.selectedAgentId}" class="agent-tab ${item.agent_id === state.selectedAgentId ? 'active' : ''}" data-agent="${escapeHtml(item.agent_id)}" data-session="${escapeHtml(item.session_id)}">${escapeHtml(item.label)}</button>`).join('');
-    tabs.querySelectorAll('[data-agent]').forEach((button) => button.addEventListener('click', () => { state.selectedAgentId = button.dataset.agent; localStorage.setItem('openclaw.monitor.agent', state.selectedAgentId); state.sessionKey = null; void renderSession(workflow); }));
-    const current = sessions.find((item) => item.agent_id === state.selectedAgentId) || sessions[0]; const key = `${current.agent_id}:${current.session_id}`;
+    if (!sessions.length) { tabs.innerHTML = ''; $('session-meta').textContent = workflow ? '当前 workflow 尚未记录 Agent session。' : '暂无未绑定到 workflow 的 Agent session。'; $('session-window').innerHTML = '<p class="empty-note">没有可显示的会话文本</p>'; return; }
+    if (!sessions.some((item) => `${item.agent_id}:${item.session_id}` === state.selectedSessionKey)) state.selectedSessionKey = `${sessions[0].agent_id}:${sessions[0].session_id}`;
+    tabs.innerHTML = sessions.map((item) => { const key = `${item.agent_id}:${item.session_id}`; return `<button type="button" role="tab" aria-selected="${key === state.selectedSessionKey}" class="agent-tab ${key === state.selectedSessionKey ? 'active' : ''}" data-session-key="${escapeHtml(key)}">${escapeHtml(item.label)}</button>`; }).join('');
+    tabs.querySelectorAll('[data-session-key]').forEach((button) => button.addEventListener('click', () => { state.selectedSessionKey = button.dataset.sessionKey; localStorage.setItem('openclaw.monitor.session', state.selectedSessionKey); state.renderedSessionKey = null; void renderSession(workflow); }));
+    const current = sessions.find((item) => `${item.agent_id}:${item.session_id}` === state.selectedSessionKey) || sessions[0]; const key = `${current.agent_id}:${current.session_id}`;
     $('session-meta').textContent = `${current.agent_id} · ${current.session_id}`;
-    if (state.sessionKey === key) return; state.sessionKey = key; $('session-window').innerHTML = '<p class="empty-note">正在读取会话...</p>';
+    if (state.renderedSessionKey === key) return; state.renderedSessionKey = key; $('session-window').innerHTML = '<p class="empty-note">正在读取会话...</p>';
     try {
       const response = await request(`/api/agents/${encodeURIComponent(current.agent_id)}/sessions/${encodeURIComponent(current.session_id)}/messages?limit=300`);
       const messages = response.messages || [];
@@ -54,19 +55,20 @@
   function renderHr(workflow) {
     const alerts = (state.snapshot?.hr_alerts || []).filter((item) => !workflow || item.workflow_id === workflow.workflow_id || item.workflowId === workflow.workflow_id); $('alert-count').textContent = alerts.length;
     $('alert-list').innerHTML = alerts.length ? alerts.slice(-6).reverse().map((alert) => `<article class="alert"><b>${escapeHtml(alert.agent_id || 'Agent')}</b><span>${escapeHtml((alert.matches || []).map((item) => item.keyword).join(' · '))}</span><p>${escapeHtml((alert.matches || [])[0]?.context || alert.text || '')}</p></article>`).join('') : '<p class="empty-note">暂无即时预警</p>';
-    const jobs = (state.snapshot?.hr_jobs || []).filter((job) => job.runId === workflow?.run_id); const reviews = jobs.filter((job) => job.kind === 'OUTPUT_REVIEW'); const reports = jobs.filter((job) => job.kind === 'TASK_DAILY_REPORT');
-    const row = (job) => `<article class="review"><b>${escapeHtml(job.status)}</b><span>${escapeHtml(job.sourceAgentId || 'HR')}</span><small>${escapeHtml(job.hrSessionId || job.jobId)}</small></article>`;
+    const jobs = (state.snapshot?.hr_jobs || []).filter((job) => job.runId === workflow?.run_id); const reviews = jobs.filter((job) => job.kind === 'OUTPUT_REVIEW'); const reports = jobs.filter((job) => job.kind === 'TASK_DAILY_REPORT'); const outputByJob = new Map((state.snapshot?.hr_outputs || []).map((output) => [output.job_id, output]));
+    const row = (job) => { const output = outputByJob.get(job.jobId); const latest = output?.messages?.at(-1); const session = job.hrSessionId || output?.session_id || null; return `<article class="review"><b>${escapeHtml(job.status)}</b><span>${escapeHtml(job.sourceAgentId || 'HR')}</span><small>${escapeHtml(session || job.jobId)}</small>${latest ? `<p class="review-text">${escapeHtml(latest.text)}</p>` : ''}${session ? `<button class="session-link" type="button" data-hr-session="${escapeHtml(session)}">查看 HR 原始会话</button>` : ''}</article>`; };
     $('hr-review-list').innerHTML = reviews.length ? reviews.map(row).join('') : '<p class="empty-note">暂无 HR 复核</p>';
     $('daily-report-list').innerHTML = reports.length ? reports.map(row).join('') : '<p class="empty-note">任务结束后将显示日报</p>';
+    document.querySelectorAll('[data-hr-session]').forEach((button) => button.addEventListener('click', () => { state.selectedSessionKey = `hr-agent:${button.dataset.hrSession}`; localStorage.setItem('openclaw.monitor.session', state.selectedSessionKey); state.renderedSessionKey = null; void renderSession(workflow); }));
   }
   function render() {
     const workflow = selected(); renderWorkflows(); $('workflow-title').textContent = workflow?.title || '等待工作流'; $('workflow-summary').textContent = workflow?.status_reason || workflow?.route_plan?.summary || '选择工作流以查看任务、会话和审查记录。'; $('workflow-state').textContent = workflow?.state || 'UNKNOWN'; $('workflow-state').className = `state-pill ${String(workflow?.state || 'unknown').toLowerCase()}`; $('workflow-step').textContent = workflow ? `STEP ${(workflow.current_step_index ?? 0) + 1}/${workflow.route_plan?.steps?.length ?? 0}` : 'STEP --'; renderTaskList(workflow); renderNotices(workflow); renderHr(workflow); void renderSession(workflow);
   }
-  function applySnapshot(snapshot) { state.snapshot = snapshot; state.workflows = snapshot.workflows || []; if (!state.workflows.some((item) => item.workflow_id === state.selectedWorkflowId)) state.selectedWorkflowId = state.workflows[0]?.workflow_id || null; state.sessionKey = null; render(); $('sync-state').textContent = time(snapshot.generated_at); setConnection(true, snapshot.kernel_reachable ? 'KERNEL CONNECTED' : 'KERNEL DEGRADED'); }
+  function applySnapshot(snapshot) { state.snapshot = snapshot; state.workflows = snapshot.workflows || []; if (!state.workflows.some((item) => item.workflow_id === state.selectedWorkflowId)) state.selectedWorkflowId = state.workflows[0]?.workflow_id || null; state.renderedSessionKey = null; render(); $('sync-state').textContent = time(snapshot.generated_at); setConnection(true, snapshot.kernel_reachable ? 'KERNEL CONNECTED' : 'KERNEL DEGRADED'); }
   function stream() {
     if (state.source) state.source.close(); const source = new EventSource(`${state.apiUrl}/api/workflows/stream`); state.source = source;
     source.addEventListener('snapshot', (event) => { const value = JSON.parse(event.data).payload; if (value) applySnapshot(value); });
-    source.addEventListener('activity', () => { state.sessionKey = null; void renderSession(selected()); }); source.addEventListener('hr-alert', () => { void reload(); }); source.onerror = () => setConnection(false, 'RECONNECTING');
+    source.addEventListener('activity', () => { state.renderedSessionKey = null; void renderSession(selected()); }); source.addEventListener('hr-alert', () => { void reload(); }); source.onerror = () => setConnection(false, 'RECONNECTING');
   }
   async function reload() { try { const result = await request('/api/workflows'); applySnapshot(result); stream(); } catch (error) { setConnection(false, `OFFLINE: ${error.message}`); } }
   window.addEventListener('beforeunload', () => state.source?.close()); void reload();

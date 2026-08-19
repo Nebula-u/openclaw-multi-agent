@@ -16,6 +16,9 @@ test('local dashboard opens without a build step and contains no external runtim
   assert.doesNotMatch(`${html}${script}`, /React|Vite|node_modules/u);
   assert.match(script, /EventSource/u);
   assert.match(script, /session-window/u);
+  assert.match(script, /global_sessions/u);
+  assert.match(script, /hr_outputs/u);
+  assert.match(script, /selectedSessionKey/u);
   assert.match(script, /hr-alert/u);
   assert.match(script, /api\/workflows\/stream/u);
   assert.match(html, /id="connection-state"/u);

@@ -13,7 +13,8 @@ test('Kernel Monitor exposes read-only workflow, HR and session endpoints', asyn
   const run = { runId: 'RUN-monitor', workflowId, state: 'ACTIVE', outcome: null, statusReason: null, routeHash: 'a'.repeat(64), routePlan: { display_title: 'Review', summary: 'Review', steps: [], skipped_stages: [] }, currentStepIndex: 0, managerSessionId: 'manager-session', managerDelivery: null, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
   const kernel = { listRuns: async () => [run], listTasks: async () => [], listExecutions: async () => [] };
   const repository = { listHrJobs: async () => [], listNotifications: async () => [] };
-  const monitor = createKernelMonitorServer({ projectRoot: ROOT, sessionRoot: join(temp, 'sessions'), monitorDatabasePath: ':memory:', host: '127.0.0.1', port: 0, allowedOrigins: ['null'], reconcileIntervalMs: 1000, sseRetention: 10 }, { kernel, repository });
+  let retried = null;
+  const monitor = createKernelMonitorServer({ projectRoot: ROOT, sessionRoot: join(temp, 'sessions'), monitorDatabasePath: ':memory:', host: '127.0.0.1', port: 0, allowedOrigins: ['null'], reconcileIntervalMs: 1000, sseRetention: 10, internalRetryToken: 'monitor-test-token' }, { kernel, repository, retryNotifications: async ({ notificationIds }) => { retried = notificationIds; return [{ notificationId: 'NTF-1', status: 'DELIVERED' }]; } });
   const address = await monitor.start();
   try {
     const base = `http://127.0.0.1:${address.port}`;
@@ -23,5 +24,10 @@ test('Kernel Monitor exposes read-only workflow, HR and session endpoints', asyn
     assert.equal(alerts.status, 200); assert.deepEqual((await alerts.json()).alerts, []);
     const write = await fetch(`${base}/api/workflows`, { method: 'POST', headers: { origin: 'null', 'content-type': 'application/json' }, body: '{}' });
     assert.equal(write.status, 403); assert.equal((await write.json()).error, 'MONITOR_READ_ONLY');
+    const unauthorizedRetry = await fetch(`${base}/internal/notifications/retry`, { method: 'POST', headers: { origin: 'null', 'content-type': 'application/json' }, body: '{}' });
+    assert.equal(unauthorizedRetry.status, 403); assert.equal((await unauthorizedRetry.json()).error, 'MONITOR_INTERNAL_TOKEN_REQUIRED');
+    const retry = await fetch(`${base}/internal/notifications/retry`, { method: 'POST', headers: { origin: 'null', 'content-type': 'application/json', 'x-monitor-internal-token': 'monitor-test-token' }, body: JSON.stringify({ notification_ids: ['NTF-1'] }) });
+    assert.equal(retry.status, 200); assert.deepEqual((await retry.json()).retried, [{ notification_id: 'NTF-1', status: 'DELIVERED' }]);
+    assert.deepEqual(retried, ['NTF-1']);
   } finally { await monitor.close(); rmSync(temp, { recursive: true, force: true }); }
 });

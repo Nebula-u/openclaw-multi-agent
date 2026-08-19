@@ -59,8 +59,7 @@ CREATE TABLE IF NOT EXISTS __KERNEL_SCHEMA__.tasks (
   created_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
   CONSTRAINT tasks_state_check CHECK (state IN (
-    'READY','REPAIR_READY','DISPATCHED','STARTING','RUNNING',
-    'SUCCEEDED','FAILED','WAITING_HUMAN','CANCELLED'))
+    'READY','RUNNING','SUCCEEDED','FAILED','WAITING_HUMAN','CANCELLED'))
 );
 
 CREATE INDEX IF NOT EXISTS tasks_run       ON __KERNEL_SCHEMA__.tasks(run_id, created_at);
@@ -172,6 +171,31 @@ UPDATE __KERNEL_SCHEMA__.runs SET workflow_id = langgraph_thread_id WHERE workfl
 CREATE UNIQUE INDEX IF NOT EXISTS runs_workflow_id_unique ON __KERNEL_SCHEMA__.runs(workflow_id);
 ALTER TABLE __KERNEL_SCHEMA__.tasks ADD COLUMN IF NOT EXISTS task_payload JSONB NOT NULL DEFAULT '{}'::jsonb;
 ALTER TABLE __KERNEL_SCHEMA__.tasks ADD COLUMN IF NOT EXISTS context_manifest JSONB;
+
+-- 旧运行时曾把派发细节暴露成 task state。它们没有可安全恢复的
+-- Orchestrator 语义，因此先冻结对应 run，再把 task 标为失败并保留原因；
+-- 这使最小对外状态约束可以在已有数据库上安全收紧。
+UPDATE __KERNEL_SCHEMA__.runs AS run
+SET state = 'HOLD', status_reason = 'LEGACY_TASK_STATE_REQUIRES_REVIEW', updated_at = now()
+WHERE run.state <> 'TERMINAL'
+  AND EXISTS (
+    SELECT 1 FROM __KERNEL_SCHEMA__.tasks AS task
+    WHERE task.run_id = run.run_id
+      AND task.state IN ('REPAIR_READY', 'DISPATCHED', 'STARTING')
+  );
+
+UPDATE __KERNEL_SCHEMA__.tasks
+SET state = 'FAILED',
+    last_error = COALESCE(last_error, '{}'::jsonb) || jsonb_build_object(
+      'code', 'LEGACY_TASK_STATE_REQUIRES_REVIEW',
+      'legacy_state', state
+    ),
+    updated_at = now()
+WHERE state IN ('REPAIR_READY', 'DISPATCHED', 'STARTING');
+
+ALTER TABLE __KERNEL_SCHEMA__.tasks DROP CONSTRAINT IF EXISTS tasks_state_check;
+ALTER TABLE __KERNEL_SCHEMA__.tasks ADD CONSTRAINT tasks_state_check
+  CHECK (state IN ('READY','RUNNING','SUCCEEDED','FAILED','WAITING_HUMAN','CANCELLED'));
 
 CREATE TABLE IF NOT EXISTS __KERNEL_SCHEMA__.approvals (
   decision_id     TEXT PRIMARY KEY,

@@ -5,6 +5,7 @@ import { URL } from 'node:url';
 import { createKernel } from '../scripts/control-kernel/kernel.mjs';
 import { createKernelPool, resolveKernelConfig } from '../scripts/control-kernel/pool.mjs';
 import { createWorkflowRepository } from '../scripts/control-kernel/workflow-repository.mjs';
+import { createOrchestrator } from '../scripts/orchestrator/service.mjs';
 import { createHrService } from '../scripts/hr/service.mjs';
 import { MonitorEventHub, encodeSse } from './event-hub.mjs';
 import { openTelemetryDatabase, createTelemetryRepository } from './telemetry-repository.mjs';
@@ -21,8 +22,14 @@ function sendJson(response, status, value, headers = {}) {
 function sendAsset(response, asset, headers = {}) { response.writeHead(200, { 'content-type': asset.contentType, 'content-length': asset.body.length, 'cache-control': 'no-cache', 'x-content-type-options': 'nosniff', ...headers }); response.end(asset.body); }
 function origins(server, config) { const address = server.address(); const port = typeof address === 'object' && address ? address.port : config.port; return new Set([`http://127.0.0.1:${port}`, `http://localhost:${port}`]); }
 function allowedOrigin(origin, config, server) { return !origin || config.allowedOrigins.includes(origin) || origins(server, config).has(origin); }
-function cors(request, config, server) { const origin = request.headers.origin; return origin && allowedOrigin(origin, config, server) ? { 'access-control-allow-origin': origin, vary: 'Origin', 'access-control-allow-methods': 'GET,POST,OPTIONS', 'access-control-allow-headers': `content-type, ${config.controlTokenHeader ?? 'x-stategraph-control'}` } : {}; }
+function cors(request, config, server) { const origin = request.headers.origin; return origin && allowedOrigin(origin, config, server) ? { 'access-control-allow-origin': origin, vary: 'Origin', 'access-control-allow-methods': 'GET,POST,OPTIONS', 'access-control-allow-headers': `content-type, ${config.internalRetryTokenHeader}` } : {}; }
 function integerQuery(url, name, fallback) { const value = url.searchParams.get(name); if (value === null) return fallback; const parsed = Number.parseInt(value, 10); return Number.isInteger(parsed) && parsed >= 0 ? parsed : fallback; }
+function tokenMatches(value, expected) {
+  if (typeof value !== 'string' || typeof expected !== 'string' || value.length !== expected.length) return false;
+  let difference = 0;
+  for (let index = 0; index < value.length; index += 1) difference |= value.charCodeAt(index) ^ expected.charCodeAt(index);
+  return difference === 0;
+}
 function readBody(request, limit) {
   return new Promise((resolveBody, rejectBody) => { let size = 0; const chunks = []; request.on('data', (chunk) => { size += chunk.length; if (size > limit) { rejectBody(Object.assign(new Error('request body exceeds configured limit'), { code: 'REQUEST_BODY_TOO_LARGE', statusCode: 413 })); request.destroy(); return; } chunks.push(chunk); }); request.on('end', () => { try { resolveBody(chunks.length ? JSON.parse(Buffer.concat(chunks).toString('utf8')) : {}); } catch (error) { rejectBody(Object.assign(new Error('request body must be valid JSON'), { code: 'REQUEST_BODY_INVALID', statusCode: 400, cause: error })); } }); request.on('error', rejectBody); });
 }
@@ -40,12 +47,13 @@ function publicRun(run, tasks, telemetry, pendingApproval = null) {
     tasks: tasks.map((task) => publicTask(task, task.execution, telemetry)), pending_approval: pendingApproval };
 }
 
-export function createKernelMonitorServer(config, { pool: providedPool = null, kernel: providedKernel = null, repository: providedRepository = null, telemetryDatabase: providedTelemetryDatabase = null, eventHub: providedHub = null } = {}) {
+export function createKernelMonitorServer(config, { pool: providedPool = null, kernel: providedKernel = null, repository: providedRepository = null, telemetryDatabase: providedTelemetryDatabase = null, eventHub: providedHub = null, retryNotifications: providedRetryNotifications = null } = {}) {
   config = {
     projectRoot: process.cwd(), runtimeRoot: process.cwd(), sessionRoot: process.cwd(), host: '127.0.0.1', port: 0,
     allowedOrigins: ['null'], reconcileIntervalMs: 2000, sseRetention: 2000, requestBodyLimit: 1024 * 1024,
     telemetryMaxEvents: 100000, activityRetentionDays: 30, heartbeatStaleSeconds: 180, possiblyStalledSeconds: 300,
-    startingTimeoutSeconds: 120, toolRunningGraceSeconds: 900, ...config,
+    startingTimeoutSeconds: 120, toolRunningGraceSeconds: 900, internalRetryToken: null,
+    internalRetryTokenHeader: 'x-monitor-internal-token', ...config,
   };
   const kernelConfig = resolveKernelConfig({ projectRoot: config.projectRoot });
   const ownedPool = !providedPool && !providedKernel;
@@ -62,6 +70,11 @@ export function createKernelMonitorServer(config, { pool: providedPool = null, k
   const assets = new Map([['/', { contentType: 'text/html; charset=utf-8', body: readFileSync(join(uiRoot, 'index.html')) }], ['/index.html', { contentType: 'text/html; charset=utf-8', body: readFileSync(join(uiRoot, 'index.html')) }], ['/styles.css', { contentType: 'text/css; charset=utf-8', body: readFileSync(join(uiRoot, 'styles.css')) }], ['/app.js', { contentType: 'text/javascript; charset=utf-8', body: readFileSync(join(uiRoot, 'app.js')) }], ['/config.js', { contentType: 'text/javascript; charset=utf-8', body: readFileSync(join(uiRoot, 'config.js')) }]]);
   const health = createHealthClassifier({ telemetry, publish: (type, payload, meta) => hub.publish(type, payload, meta), thresholds: { heartbeatStaleSeconds: config.heartbeatStaleSeconds, possiblyStalledSeconds: config.possiblyStalledSeconds, startingTimeoutSeconds: config.startingTimeoutSeconds, toolRunningGraceSeconds: config.toolRunningGraceSeconds } });
   const hr = createHrService({ projectRoot: config.projectRoot, repository, kernel });
+  const retryNotifications = providedRetryNotifications ?? (async ({ notificationIds = null } = {}) => {
+    const orchestrator = createOrchestrator({ projectRoot: config.projectRoot, pool, kernel, repository });
+    try { return await orchestrator.deliverNotifications({ notificationIds }); }
+    finally { await orchestrator.close(); }
+  });
   let runsCache = { runs: [], tasks: [], hrJobs: [] };
   let localHrAlerts = [];
   let hrRunnerBusy = false;
@@ -83,6 +96,17 @@ export function createKernelMonitorServer(config, { pool: providedPool = null, k
       }
     }
     return values;
+  }
+  function hrOutputs(jobs) {
+    return jobs.filter((job) => job.hrSessionId).map((job) => ({
+      job_id: job.jobId,
+      task_id: job.taskId,
+      kind: job.kind,
+      session_id: job.hrSessionId,
+      messages: (catalog.messages('hr-agent', job.hrSessionId)?.messages ?? [])
+        .filter((message) => message.role === 'assistant')
+        .map((message) => ({ text: message.text, timestamp: message.timestamp })),
+    }));
   }
   function scheduleHr() {
     if (hrRunnerBusy) return;
@@ -113,7 +137,7 @@ export function createKernelMonitorServer(config, { pool: providedPool = null, k
       const healthInput = { workflows: workflowValues }; health.scan(healthInput); sessionTailer.scan();
       const kernelAlerts = events.filter((event) => event.type === 'HR_KEYWORD_ALERT').map((event) => ({ ...redactValue(event.payload?.detail ?? event.payload), workflow_id: runs.find((run) => run.runId === event.run_id)?.workflowId ?? null }));
       const alerts = [...kernelAlerts, ...localHrAlerts.filter((item) => !kernelAlerts.some((alert) => alert.source_event_id === item.source_event_id))];
-      const next = { schema_version: 1, source: 'POSTGRESQL_CONTROL_KERNEL', kernel_reachable: true, generated_at: new Date().toISOString(), workflows: workflowValues, events, hr_alerts: alerts, hr_jobs: hrJobs, notifications, global_sessions: discoveredSessions().filter((item) => item.binding === 'UNBOUND_SESSION') };
+      const next = { schema_version: 1, source: 'POSTGRESQL_CONTROL_KERNEL', kernel_reachable: true, generated_at: new Date().toISOString(), workflows: workflowValues, events, hr_alerts: alerts, hr_jobs: hrJobs, hr_outputs: hrOutputs(hrJobs), notifications, global_sessions: discoveredSessions().filter((item) => item.binding === 'UNBOUND_SESSION') };
       const value = JSON.stringify(next); snapshot = next; if (value !== fingerprint) { fingerprint = value; hub.publish('snapshot', snapshot, { source: 'POSTGRESQL_CONTROL_KERNEL' }); } return snapshot;
     } catch (error) { snapshot = { ...snapshot, kernel_reachable: false, degraded: true, degradation: { code: error.code ?? 'KERNEL_UNAVAILABLE', message: error.message }, generated_at: new Date().toISOString() }; hub.publish('monitor-health', snapshot.degradation, { source: 'KERNEL' }); return snapshot; }
     finally { refreshRunning = false; }
@@ -136,10 +160,24 @@ export function createKernelMonitorServer(config, { pool: providedPool = null, k
       const sessionMessages = path.match(/^\/api\/agents\/([^/]+)\/sessions\/([^/]+)\/messages$/u); if (request.method === 'GET' && sessionMessages) { const agentId = decodeURIComponent(sessionMessages[1]); const sessionId = decodeURIComponent(sessionMessages[2]); const value = catalog.messages(agentId, sessionId); const messages = value?.messages ?? []; const limit = Math.min(integerQuery(url, 'limit', 500), 500); return sendJson(response, value ? 200 : 404, value ? { ok: true, ...value, messages: messages.slice(-limit), truncated: messages.length > limit } : { ok: false, error: 'SESSION_NOT_FOUND' }, headers); }
       if (request.method === 'GET' && path === '/api/hr/alerts') return sendJson(response, 200, { ok: true, alerts: snapshot.hr_alerts }, headers);
       if (request.method === 'GET' && path === '/api/hr/jobs') return sendJson(response, 200, { ok: true, jobs: snapshot.hr_jobs }, headers);
+      if (request.method === 'GET' && path === '/api/hr/outputs') return sendJson(response, 200, { ok: true, outputs: snapshot.hr_outputs ?? [] }, headers);
       if (request.method === 'GET' && path === '/api/notifications') return sendJson(response, 200, { ok: true, notifications: snapshot.notifications }, headers);
       const workflowSnapshot = path.match(/^\/api\/workflows\/([^/]+)\/snapshot$/u); if (request.method === 'GET' && workflowSnapshot) { await refresh(); const workflow = snapshot.workflows.find((item) => item.workflow_id === decodeURIComponent(workflowSnapshot[1])); return sendJson(response, workflow ? 200 : 404, workflow ? { ok: true, snapshot: { ...snapshot, workflows: [workflow] } } : { ok: false, error: 'WORKFLOW_NOT_FOUND' }, headers); }
       const taskActivity = path.match(/^\/api\/tasks\/([^/]+)\/activity$/u); if (request.method === 'GET' && taskActivity) { const dialogue = telemetry.events({ limit: 500 }).filter((event) => event.task_id === decodeURIComponent(taskActivity[1]) && event.event_type === 'session.assistant_output').map((event) => ({ agent_id: event.payload.agent_id, summary: event.payload.summary, timestamp: event.timestamp })); return sendJson(response, 200, { ok: true, dialogue }, headers); }
       if (request.method === 'GET' && path === '/api/workflows/stream') { const after = integerQuery(url, 'after', Number.parseInt(request.headers['last-event-id'] ?? '0', 10) || 0); response.writeHead(200, { 'content-type': 'text/event-stream; charset=utf-8', 'cache-control': 'no-cache, no-transform', connection: 'keep-alive', 'x-accel-buffering': 'no', ...headers }); await refresh(); response.write(encodeSse({ sequence: hub.sequence, type: 'snapshot', timestamp: new Date().toISOString(), payload: snapshot, meta: { initial: true, source: snapshot.source } })); for (const event of hub.after(after)) response.write(encodeSse(event)); const unsubscribe = hub.subscribe((event) => response.write(encodeSse(event))); const keepalive = setInterval(() => response.write(': keepalive\n\n'), 15000); keepalive.unref?.(); request.on('close', () => { clearInterval(keepalive); unsubscribe(); }); return; }
+      if (request.method === 'POST' && path === '/internal/notifications/retry') {
+        if (!config.internalRetryToken || !tokenMatches(request.headers[config.internalRetryTokenHeader], config.internalRetryToken)) {
+          return sendJson(response, 403, { ok: false, error: 'MONITOR_INTERNAL_TOKEN_REQUIRED' }, headers);
+        }
+        const body = await readBody(request, config.requestBodyLimit);
+        const notificationIds = body.notification_ids ?? null;
+        if (notificationIds !== null && (!Array.isArray(notificationIds) || notificationIds.length > 100 || notificationIds.some((value) => typeof value !== 'string' || !value))) {
+          return sendJson(response, 400, { ok: false, error: 'NOTIFICATION_IDS_INVALID' }, headers);
+        }
+        const notifications = await retryNotifications({ notificationIds });
+        await refresh();
+        return sendJson(response, 200, { ok: true, retried: notifications.map((item) => ({ notification_id: item.notificationId, status: item.status })) }, headers);
+      }
       if (request.method === 'POST') { return sendJson(response, 403, { ok: false, error: 'MONITOR_READ_ONLY' }, headers); }
       return sendJson(response, 404, { ok: false, error: 'NOT_FOUND' }, headers);
     } catch (error) { return sendJson(response, error.statusCode ?? 400, { ok: false, error: error.code ?? 'MONITOR_REQUEST_FAILED', message: error.message }, headers); }
