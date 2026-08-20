@@ -231,6 +231,17 @@ Windows: pwsh -NoProfile -File scripts/install.ps1 -Apply -Yes -RuntimeRoot runt
 Linux:   bash scripts/install.sh --apply --yes --runtime-root runtime
 ```
 
+### 从 `.env` 注入模型与统一思考强度
+
+在项目根 `.env` 中设置 `OPENCLAW_AGENT_<AGENT_ID>_MODEL`（连字符改为下划线并转大写），例如 `OPENCLAW_AGENT_DEVELOPER_AGENT_MODEL=provider/model-id`。所有 Agent 的思考强度由 `OPENCLAW_THINKING_LEVEL` 统一设置，支持 `off`、`minimal`、`low`、`medium`、`high`、`xhigh`。然后运行：
+
+```text
+node scripts/inject-openclaw-models.mjs
+node scripts/inject-openclaw-models.mjs --apply --yes
+```
+
+脚本默认只预演；Apply 会先执行 `config patch --dry-run`，随后一次性写入 `agents.list[*].model` 和 `agents.defaults.thinkingDefault`，最后执行 `openclaw config validate --json`。
+
 普通更新不需要停止 Gateway。只有 Agent 注册或受管理 runtime 损坏时，才先手动停止 OpenClaw Gateway，再执行安全重装：
 
 ```text
