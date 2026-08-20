@@ -1,0 +1,70 @@
+# ---- Runtime & artifacts (generated at install / run time) ----
+/runtime/
+/artifacts/
+.stategraph/
+*.local.yaml
+*.local.json
+
+# ---- OpenClaw config snapshots (may contain environment specifics) ----
+control/config-snapshots/
+
+# All validation, preflight, contract-test, harness, and workflow outputs are
+# reproducible and must stay local. Keep schemas/templates in tracked folders.
+
+# ---- OS / editor noise ----
+.worktrees/
+.DS_Store
+Thumbs.db
+desktop.ini
+*.swp
+*~
+.idea/
+.vscode/
+
+# ---- Node (only if a demo/business project is nested; not this system's runtime) ----
+node_modules/
+
+# ---- Never commit secrets ----
+*.pem
+*.key
+*.p12
+.env
+.env.*
+!.env.example
+secrets.json
+
+# ---- Logs ----
+*.log
+
+# ---- Local databases and process state ----
+*.db
+*.db-*
+*.sqlite
+*.sqlite-*
+*.wal
+*.shm
+*.pid
+
+# ---- Test/build tool output ----
+coverage/
+.nyc_output/
+*.tsbuildinfo
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+*.tmp
+*.temp
+
+# ---- cmdline history ----
+*.cmd
+
+# workbuddy
+CONOUT$
+.workbuddy/
+
+# ---- Agent runtime outputs (generated during task execution) ----
+/.agent-raw/
+/workspace/
+
+.tmp-mirage-inspect/

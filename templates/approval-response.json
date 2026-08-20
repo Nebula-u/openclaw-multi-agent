@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "decision_id": "DEC-00000000-0000-0000-0000-000000000000",
+  "workflow_id": "WF-00000000-0000-0000-0000-000000000000",
+  "task_id": null,
+  "run_id": null,
+  "outcome": "REJECTED",
+  "chosen_option_id": null,
+  "raw_user_reply_summary": "<PLACEHOLDER: 用户原始回复的忠实摘要>",
+  "decided_by": "<PLACEHOLDER: 人工决策者标识>",
+  "decided_at": "2026-01-01T00:00:00Z",
+  "notes": "<PLACEHOLDER: 补充说明>"
+}

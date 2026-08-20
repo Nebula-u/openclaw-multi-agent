@@ -1,0 +1,59 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://openclaw-sdlc-multi-agent/contracts/gate-result.schema.json",
+  "title": "GateResult",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "gate_id", "gate_name", "workflow_id", "task_id",
+    "checklist_version", "evaluated_at", "items", "evidence_refs", "approved_decision_ids",
+    "overall", "overall_reason", "failure_target"
+  ],
+  "properties": {
+    "schema_version": { "type": "integer", "const": 1 },
+    "gate_id": { "type": "string", "pattern": "^GATE-[A-Za-z0-9][A-Za-z0-9-]*$" },
+    "gate_name": {
+      "type": "string",
+      "enum": ["RequirementGate", "ArchitectureGate", "DevelopmentGate", "ReviewGate", "TestGate", "SecurityGate", "ReleaseReadinessGate"]
+    },
+    "workflow_id": { "type": "string", "pattern": "^WF-[A-Za-z0-9][A-Za-z0-9-]*$" },
+    "task_id": { "type": ["string", "null"], "pattern": "^TASK-[A-Za-z0-9][A-Za-z0-9-]*$" },
+    "checklist_version": { "type": "string", "minLength": 1 },
+    "evaluated_at": { "type": "string", "format": "date-time" },
+    "items": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["item_id", "description", "status", "blocking", "evidence_refs", "notes"],
+        "properties": {
+          "item_id": { "type": "string", "minLength": 1 },
+          "description": { "type": "string", "minLength": 1 },
+          "status": { "type": "string", "enum": ["PASS", "FAIL", "HOLD", "UNKNOWN", "NOT_APPLICABLE"] },
+          "blocking": { "type": "boolean" },
+          "evidence_refs": { "type": "array", "items": { "type": "string" } },
+          "notes": { "type": "string" }
+        }
+      }
+    },
+    "evidence_refs": { "type": "array", "minItems": 1, "items": { "type": "string" } },
+    "approved_decision_ids": { "type": "array", "items": { "type": "string", "pattern": "^DEC-[A-Za-z0-9][A-Za-z0-9-]*$" } },
+    "overall": { "type": "string", "enum": ["PASS", "FAIL", "HOLD"] },
+    "overall_reason": { "type": "string", "minLength": 1 },
+    "failure_target": {
+      "type": ["string", "null"],
+      "pattern": "^[A-Z][A-Z_]*$",
+      "description": "Required when overall is FAIL. The router validates it against the current Control Kernel legal edges."
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "overall": { "const": "FAIL" } }, "required": ["overall"] },
+      "then": {
+        "properties": { "failure_target": { "type": "string", "pattern": "^[A-Z][A-Z_]*$" } }
+      },
+      "else": { "properties": { "failure_target": { "type": "null" } } }
+    }
+  ]
+}

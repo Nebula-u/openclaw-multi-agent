@@ -1,0 +1,56 @@
+{
+  "schema_version": 1,
+  "policy_id": "test-agent-docker-sandbox",
+  "enabled": false,
+  "required": false,
+  "fail_closed": false,
+  "isolation_mode": "HOST",
+  "agent_id": "test-agent",
+  "mode": "all",
+  "backend": "docker",
+  "scope": "session",
+  "workspace_access": "none",
+  "exec_host": "sandbox",
+  "elevated_enabled": false,
+  "docker": {
+    "image": "openclaw-test-node:22-slim",
+    "workdir": "/workspace",
+    "network": "none",
+    "read_only_root": true,
+    "cap_drop": ["ALL"],
+    "pids_limit": 256,
+    "memory": "2g",
+    "cpus": 2,
+    "dangerously_allow_external_bind_sources": true,
+    "dangerously_allow_reserved_container_targets": false
+  },
+  "mounts": {
+    "worktrees": {
+      "host_path": "D:\\MicroConnect\\project\\openclaw-multi-agent\\runtime\\worktrees",
+      "container_path": "/sandbox/runtime/worktrees",
+      "mode": "rw"
+    },
+    "artifacts": {
+      "host_path": "D:\\MicroConnect\\project\\openclaw-multi-agent\\runtime\\artifacts",
+      "container_path": "/sandbox/runtime/artifacts",
+      "mode": "rw",
+      "note": "covers task input/, .agent-raw/ and raw-logs/"
+    },
+    "tmp": {
+      "host_path": "D:\\MicroConnect\\project\\openclaw-multi-agent\\runtime\\sandbox\\tmp",
+      "container_path": "/tmp",
+      "mode": "rw",
+      "note": "writable tmp required under read-only rootfs"
+    },
+    "npm_cache": {
+      "host_path": "D:\\MicroConnect\\project\\openclaw-multi-agent\\runtime\\sandbox\\npm-cache",
+      "container_path": "/sandbox/npm-cache",
+      "mode": "rw"
+    }
+  },
+  "path_mapping": {
+    "host_prefix": "D:\\MicroConnect\\project\\openclaw-multi-agent\\runtime",
+    "container_prefix": "/sandbox/runtime",
+    "rule": "replace host prefix with container prefix, convert backslashes to forward slashes"
+  }
+}

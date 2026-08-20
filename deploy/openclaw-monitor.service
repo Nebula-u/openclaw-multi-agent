@@ -1,0 +1,21 @@
+[Unit]
+Description=OpenClaw SDLC Monitor
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=__RUN_USER__
+Group=__RUN_GROUP__
+WorkingDirectory=__PROJECT_ROOT__
+Environment=OPENCLAW_PROJECT_ROOT=__PROJECT_ROOT__
+Environment=OPENCLAW_RUNTIME_ROOT=__PROJECT_ROOT__/runtime
+Environment=MONITOR_HOST=127.0.0.1
+Environment=MONITOR_PORT=4319
+Environment=PATH=__NODE_BIN__:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin
+ExecStart=/usr/bin/env bash __PROJECT_ROOT__/scripts/start-monitor.sh
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

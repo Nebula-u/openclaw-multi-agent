@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://openclaw.local/contracts/agent-activity.schema.json",
+  "title": "Agent Activity",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "activity_id", "workflow_id", "agent_id", "kind", "status", "current_action", "summary", "visibility", "timestamp"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "activity_id": { "type": "string", "pattern": "^ACT-[A-Za-z0-9-]+$" },
+    "workflow_id": { "type": "string", "pattern": "^WF-[A-Za-z0-9-]+$" },
+    "task_id": { "type": ["string", "null"] },
+    "run_id": { "type": ["string", "null"] },
+    "dispatch_id": { "type": ["string", "null"] },
+    "agent_id": { "type": "string", "minLength": 1 },
+    "session_id": { "type": ["string", "null"] },
+    "kind": { "enum": ["STARTED", "HEARTBEAT", "PROGRESS", "CHECKPOINT_UPDATED", "TOOL_STARTED", "TOOL_FINISHED", "WAITING_CHILD", "WAITING_HUMAN", "BLOCKED", "OUTPUT_SUMMARY", "COMPLETED", "FAILED"] },
+    "status": { "enum": ["STARTING", "RUNNING", "WAITING_CHILD", "WAITING_HUMAN", "BLOCKED", "COMPLETED", "FAILED"] },
+    "current_action": { "type": "string", "minLength": 1, "maxLength": 2000 },
+    "summary": { "type": "string", "minLength": 1, "maxLength": 4000 },
+    "checkpoint": {
+      "anyOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["id", "title", "status"],
+          "properties": {
+            "id": { "type": "string", "minLength": 1, "maxLength": 200 },
+            "title": { "type": "string", "minLength": 1, "maxLength": 500 },
+            "status": { "enum": ["PENDING", "IN_PROGRESS", "COMPLETED", "BLOCKED", "SKIPPED"] }
+          }
+        }
+      ]
+    },
+    "progress": {
+      "anyOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "completed": { "type": "integer", "minimum": 0 },
+            "total": { "type": "integer", "minimum": 0 },
+            "percent": { "type": "number", "minimum": 0, "maximum": 100 }
+          }
+        }
+      ]
+    },
+    "tool": {
+      "anyOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["name"],
+          "properties": {
+            "name": { "type": "string", "minLength": 1, "maxLength": 300 },
+            "status": { "type": "string", "maxLength": 100 },
+            "summary": { "type": "string", "maxLength": 2000 }
+          }
+        }
+      ]
+    },
+    "visibility": { "enum": ["USER_SAFE", "INTERNAL_SUMMARY"] },
+    "timestamp": { "type": "string", "format": "date-time" }
+  }
+}

@@ -1,0 +1,121 @@
+# state-and-recovery.md — 文件化状态模型与恢复
+
+> **v2 提示（2026-08-05）：** 本文主体描述遗留 v1 文件协议。新 workflow 的唯一当前状态源是 SQLite Control Kernel；恢复流程以 [control-kernel-v2.md](control-kernel-v2.md) 和 [architecture.md](architecture.md) 为准。v2 JSON/JSONL 投影只读，不得按本文旧步骤写回。
+
+> 权威来源：`agents/manager-agent/workspace/AGENTS.md`（第 2、9 节）、`agents/common/EVIDENCE_RULES.md`（第 6 节）、`contracts/workflow.schema.json`、重构 Prompt 第十一节。
+> 文档日期：2026-07-29
+
+## 1. 本文用途
+
+本文说明新架构的**文件化状态模型**（取代旧架构的 Python `state_store` / recovery 服务）与**恢复规则**：状态完全落在文件上，`manager-agent` 是控制层文件的唯一逻辑写入者；关键快照由 manager 显式调用 Runtime Guard 事务提交。`manager-agent` 或 Gateway 会话中断后，新的 `manager-agent` 会话必须能**仅凭文件恢复**。聊天记录**不是**唯一状态源。
+
+## 2. 唯一事实来源
+
+- 用户原始需求：`<workflow>\user-request.md`
+- 结构化工作流文件：`workflow.json`、`events.jsonl`、`context-summary.md`、`rules-snapshot.md`、`tasks/`、`decisions/`、`gates/`
+- 任务上下文包：`<artifact_run>\input\`
+- Agent 结构化结果与原始报告：`<artifact_run>\output\`
+- 本地 Git commit / diff / worktree
+- 原始命令日志与哈希（`raw-logs/`、`checksums.sha256`）
+
+## 3. 文件化状态模型
+
+绝对路径示例基于 `runtime_root_abs = D:\MicroConnect\project\openclaw-multi-agent\runtime`：
+
+```text
+<runtime_root_abs>\control\
+├── active-workflows.json         # 恢复索引：登记所有活动 workflow
+├── install-manifest.json         # runtime_root_abs、7 Agent 绝对路径、配置变更、校验结果
+├── config-snapshots\             # 安装时的 OpenClaw 配置备份
+└── workflows\<workflow-id>\
+    ├── workflow.json             # 工作流当前快照
+    ├── user-request.md
+    ├── context-summary.md        # 逐阶段裁剪后的上下文摘要
+    ├── rules-snapshot.md         # 固化规则版本与哈希
+    ├── events.jsonl              # append-only 事件哈希链（SHA-256）
+    ├── tasks\<task-id>.json      # 当前 run 指针
+    ├── task-runs\<task-id>\<run-id>.json  # 不可变历史 run 快照
+    ├── transactions\TXN-*\transaction.json # 状态提交事务日志
+    ├── dispatch\DSP-*\{intent.json,receipts.jsonl,completion-receipt.json,dead-letter.json}
+    ├── decisions\<dec-id>.request.json / <dec-id>.response.json
+    ├── gates\<phase>-<n>.json
+    └── final-report.md
+```
+
+### 3.1 `active-workflows.json`
+
+恢复入口。只登记非终态 workflow 的 `workflow_id`、状态摘要与其 `workflow.json` 绝对路径。新会话启动时**先读它**；workflow 进入终态后必须先写非空 `final-report.md`，再从活动索引移除，Guard 要求终态恰好有 0 条活动记录。
+
+### 3.2 `workflow.json`（字段以 contract 为准）
+
+来源 `contracts/workflow.schema.json`，`required` 包括：`schema_version`、`workflow_id`（`^WF-`）、`status`、`status_reason`、`target_project_root_abs`、`runtime_root_abs`、`integration_branch`、`base_commit`、`current_candidate_commit`、`current_phase`、`state_revision`、`task_ids[]`、`pending_decision_ids[]`、`context_version`、`rules_version`、`rules_snapshot_sha256`、`context_summary_sha256`、`created_at`、`updated_at`。`status` 全枚举和合法迁移见 `workflow.md` 与状态机。
+
+### 3.3 `events.jsonl`（append-only 哈希链，SHA-256）
+
+`events.jsonl` 是逻辑 append-only 的 JSONL 哈希链。manager 每次状态变化创建事件草稿；常规流程由 `commit-transition` 写入 `schema_version=1`、连续的 `seq` 和 `state_revision`、前一行的 `previous_event_hash`（首行是 64 个 `0`），并与其余快照一起原子提交。兼容命令 `append-event` 仅保留给受控历史迁移测试，任何新流程和恢复流程都禁止调用。既有事件内容永不改写。每条事件还含 `event_id`、`timestamp`、`workflow_id`、`task_id`、`run_id`、`actor`、`event_type`、状态/阶段前后值、候选 commit、`payload` 与 `event_hash`。
+
+哈希规则：移除 `event_hash` 后，递归按 Unicode 码点排序 JSON 对象键（数组顺序不变），直接序列化排序后的键值对，将 canonical JSON 用 UTF-8 编码并计算 SHA-256。数字形态的键仍按字符串排序，例如 `"10"` 必须位于 `"2"` 之前，且嵌套对象遵守同一规则；不得先构造普通 JavaScript 对象再依赖 `JSON.stringify` 的整数键重排。`previous_event_hash → event_hash` 形成连续链；第 *n* 条的 `seq` 和 `state_revision` 均为 *n*。最新事件的 `to_status`、`to_phase`、`candidate_commit` 与 `state_revision` 必须分别等于 `workflow.json` 的 `status`、`current_phase`、`current_candidate_commit` 与 `state_revision`；非终态的 `active-workflows.json` 同名快照字段再与 workflow 一致。
+
+### 3.4 `context-summary.md` / `rules-snapshot.md` / `decisions` / `gates`
+
+- `context-summary.md`：每阶段结束更新，只保留后续阶段需要的事实/决策/限制/证据引用（最小充分）。
+- `rules-snapshot.md`：固化当前规则版本与哈希；改规则须新建快照，不改已派发 input（见 `context-and-rule-passing.md`）。
+- `decisions/`：`approval-request.schema.json` / `approval-response.schema.json` 文件。
+- `gates/`：`gate-result.schema.json` 文件。
+
+### 3.5 原子状态事务与 run 历史
+
+关键状态变化使用 `commit-transition`，不能再先追加事件、再分别覆盖 workflow/active/task。命令先取得带 `nonce`、PID、主机名与时间戳的 workflow 锁，对当前 `state_revision` 执行 CAS，再将完整事件链、下一版 workflow、下一版 active index 与可选任务指针写入 staging 文件并 fsync。`transactions/TXN-*/transaction.json` 记录 `PREPARED → APPLYING → COMMITTED`；每个目标通过同目录原子 rename 应用，进程在任一步崩溃后都可由 `recover-transactions` 按 SHA-256 幂等滚动完成。锁属于已死亡的本机 PID 或超过租期时会先保留 stale 副本再回收，活跃锁冲突则 fail-closed。
+
+`tasks/<task-id>.json` 只代表该任务当前 run。切换 `run_id` 前，旧指针按 `contracts/task-run.schema.json` 固化到 `task-runs/<task-id>/<run-id>.json`；终态 run 也固化一次。历史 archive 与 artifact 共同接受 Guard 校验，已有 archive 不允许以不同内容覆盖。
+
+### 3.6 Dispatch ledger 与 lease
+
+每次 `sessions_spawn` 之前，manager 必须先调用 `prepare-dispatch`。Intent 保存 `dispatch_id`、`workflow/task/run/agent/attempt` 幂等键、session key、input manifest SHA-256、lease deadline 和 retry budget。spawn 返回后用 `record-dispatch-receipt` 依次记录 `SENT`、可选 `ACKNOWLEDGED` 和 `RUNNING`，所有 receipt 必须绑定同一个 session ID；Agent 结果落盘后再写 `SUCCEEDED` / `FAILED` / `LOST` completion receipt。只有 retry 已耗尽且已有 FAILED/LOST completion 时才能写 dead letter。
+
+同一 task/run 在任一时刻最多一个非终态 dispatch；prepare 使用短暂 workflow 锁消除竞态，不同 task/run 随后可以并行执行。`reconcile-dispatch` 发现 lease 过期时只返回 `QUERY_SESSION_BEFORE_RETRY`：manager 必须先用原 session key/ID 查询 session/history 和已有 completion，不得仅因工具超时再次 spawn。
+
+## 4. ID 规范
+
+所有 workflow / task / run / decision / finding / evidence 均有唯一 ID：
+
+```text
+WF-<UUID> · TASK-<UUID> · RUN-<UUID> · DEC-<UUID> · FIND-<UUID> · EVD-<UUID>
+```
+
+- contracts 中以正则约束前缀（如 `workflow_id` 的 `^WF-`、`task_id` 的 `^TASK-`、`run_id` 的 `^RUN-`、`decision_id` 的 `^DEC-`、`finding_id` 的 `^FIND-`、`evidence_id` 的 `^EVD-`）。
+- UUID 用 **OpenClaw 自身能力或 OS 原生能力**生成：
+  - Windows：`pwsh -NoProfile -Command "[guid]::NewGuid().Guid"`
+  - POSIX：`uuidgen` 或读 `/proc/sys/kernel/random/uuid`
+- **不得**为生成 ID 引入 Python 脚本或 Python 控制平面。
+
+## 5. 恢复算法（新 manager 会话启动时）
+
+1. 读 `<runtime_root_abs>\control\active-workflows.json`。
+2. **恰好一个**活动 workflow → 读其 `workflow.json`、`events.jsonl`、`context-summary.md`、未决 `decisions/`、Git 状态后恢复。
+3. **多个**活动 workflow → **让用户选择**，不擅自挑选。
+4. 对选定 workflow 先运行 `recover-transactions --runtime-root <runtime> --workflow-id <WF-...>`；只允许按日志和哈希滚动完成，不猜测业务状态。
+5. 运行 `reconcile-dispatch --project-root <project> --runtime-root <runtime> --workflow-id <WF-...>`；对每个未终结 dispatch 先按已记录 session key/ID 查询原会话，补齐 receipt 或 completion，再决定是否置 LOST/重试。
+6. 运行 `recovery-check --project-root <project> --runtime-root <runtime> [--workflow-id <WF-...>]`。未指定 ID 时仅允许恰好一个活动 workflow；该命令执行完整 `check-workflow` 校验，涵盖事务日志、dispatch ledger、事件链、状态机迁移、最新快照、当前与历史任务结果、审批、Gate 与 Git 候选 commit。
+7. Guard 失败或发现无法证明安全的不一致 → manager 通过新的合法事务将 workflow 置 **`HOLD`**，保留证据，向用户报告差异，等待指示；**不擅自猜测或覆盖**。
+8. **绝不因聊天上下文丢失而丢失工作流。**
+
+## 6. 不可变性与重做
+
+- 已派发任务的 `input/` **不可变**；已完成 run 目录 **不可变**。
+- 重做 → 新 `run_id` + 新目录（`<wf>\<task>\<新 run>\`），**不覆盖**旧报告/日志/审批/结果；旧任务按状态机置 `SUPERSEDED`。
+- 历史 review/release artifact 保留不覆盖。Guard 只让 current candidate 的 review finding 参与阻断，并按可信 task event `seq` 处理 finding closure；ReviewGate/SecurityGate 的 PASS 必须引用 current candidate 的合法 review 证据。ReleaseReadinessGate 只消费其 `task_id` 当前 task snapshot 所指 `run_id` 的唯一 release decision；历史 release gate/decision 只做自身一致性校验，不参与当前候选或终态裁决，同 candidate 的旧 release rerun 也不覆盖最新 release task/run。release 终态缺少最新 release task/run gate 时必须 fail-closed。
+- 失败 / 脏状态 / 未合并 / 待审批的 worktree **默认保留**，不清理（见 `git-worktree-strategy.md`）。
+
+## 7. 相关文档
+
+`workflow.md`（状态枚举）、`manager-orchestration.md`（写状态的时机）、`context-and-rule-passing.md`（快照与上下文摘要）、`git-worktree-strategy.md`（Git 与 worktree 一致性）、`evidence-and-claims.md`（证据与哈希）。
+# Monitor 与监督恢复补充
+
+Supervisor Core 重启时先运行 `supervisor:check` 的 Control Kernel audit，再从 `control.db`、
+session cursor、artifact cursor 和 `monitor.db` 重建快照。`monitor.db` 删除或损坏不会回滚、
+修复或推进 workflow；它只会导致活动时间线暂时降级。
+
+Wake Adapter 重启时重复读取 `manager_wake_outbox`。每个 wake 先核查指定 manager session；
+外部响应不确定时不直接重复发送。请求已经 CLAIMED/完成时，Adapter 只记录 settled wake receipt。
+lease 过期仍需 manager 查询原 session，不能直接写 LOST 或 retry。

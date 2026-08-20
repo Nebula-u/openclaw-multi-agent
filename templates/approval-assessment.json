@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "workflow_id": "WF-00000000-0000-0000-0000-000000000000",
+  "scope": "INTAKE",
+  "task_id": null,
+  "run_id": null,
+  "assessed_at": "2026-01-01T00:00:00Z",
+  "evaluations": [
+    {
+      "trigger": "REQUIREMENT_AMBIGUITY",
+      "status": "NOT_TRIGGERED",
+      "rationale": "<PLACEHOLDER: 记录检查依据>",
+      "decision_id": null
+    }
+  ]
+}

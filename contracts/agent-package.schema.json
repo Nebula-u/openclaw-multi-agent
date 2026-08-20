@@ -1,0 +1,111 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://openclaw.local/contracts/agent-package.schema.json",
+  "title": "OpenClaw Agent Package",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "kind",
+    "id",
+    "display_name",
+    "origin",
+    "protected",
+    "deletable",
+    "workspace_source_rel",
+    "runtime_subdir",
+    "role",
+    "capabilities",
+    "delegation",
+    "assembly",
+    "lifecycle"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "kind": { "const": "openclaw-agent-package" },
+    "id": { "type": "string", "pattern": "^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$" },
+    "display_name": { "type": "string", "minLength": 1 },
+    "description": { "type": "string" },
+    "origin": { "enum": ["builtin", "generated"] },
+    "protected": { "type": "boolean" },
+    "deletable": { "type": "boolean" },
+    "workspace_source_rel": { "type": "string", "minLength": 1 },
+    "runtime_subdir": { "type": "string", "minLength": 1 },
+    "role": { "enum": ["manager", "worker"] },
+    "capabilities": {
+      "type": "array",
+      "items": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]*$" },
+      "uniqueItems": true
+    },
+    "model": { "type": "string" },
+    "delegation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["callable_by_manager", "allow_agents"],
+      "properties": {
+        "callable_by_manager": { "type": "boolean" },
+        "allow_agents": {
+          "type": "array",
+          "items": { "type": "string" },
+          "uniqueItems": true
+        },
+        "require_agent_id": { "type": "boolean" },
+        "delegation_mode": { "enum": ["prefer", "off"] }
+      }
+    },
+    "sandbox_mode": { "enum": ["off", "non-main", "all", null] },
+    "sandbox_config": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "properties": {
+        "mode": { "enum": ["off", "non-main", "all"] },
+        "backend": { "enum": ["docker", "ssh", "openshell"] },
+        "scope": { "enum": ["session", "agent", "shared"] },
+        "workspaceAccess": { "enum": ["none", "ro", "rw"] },
+        "docker": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "image": { "type": "string", "minLength": 1 },
+            "workdir": { "type": "string", "minLength": 1 },
+            "network": { "type": "string", "minLength": 1 },
+            "readOnlyRoot": { "type": "boolean" },
+            "capDrop": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
+            "pidsLimit": { "type": "integer", "exclusiveMinimum": 0 },
+            "memory": { "type": ["string", "number"] },
+            "cpus": { "type": "number", "exclusiveMinimum": 0 },
+            "dangerouslyAllowExternalBindSources": { "type": "boolean" },
+            "dangerouslyAllowReservedContainerTargets": { "type": "boolean" }
+          }
+        }
+      }
+    },
+    "tools_config": { "type": ["object", "null"], "additionalProperties": true },
+    "assembly": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["include_common_rules", "include_templates"],
+      "properties": {
+        "include_common_rules": { "type": "boolean" },
+        "include_templates": { "type": "boolean" }
+      }
+    },
+    "skills": {
+      "type": "array",
+      "items": { "type": "string" },
+      "uniqueItems": true
+    },
+    "lifecycle": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["register", "active"],
+      "properties": {
+        "register": { "type": "boolean" },
+        "active": { "type": "boolean" }
+      }
+    },
+    "created_by": { "type": "string" },
+    "created_from_workflow": { "type": ["string", "null"] },
+    "created_from_request": { "type": "string" }
+  }
+}

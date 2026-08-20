@@ -1,0 +1,13 @@
+{
+  "$comment": "复制为 agent-models.json 并按需修改。安装脚本会同步每个 provider/model 的 contextWindow、maxTokens 与 compat.maxTokensField；留空 model 表示继承 OpenClaw 默认，显式 model 必须已存在于 OpenClaw 模型目录。",
+  "schema_version": 1,
+  "agents": {
+    "manager-agent":     { "model": "", "context_window_tokens": 200000, "max_output_tokens": 32000, "max_tokens_field": "max_output_tokens" },
+    "requirement-agent": { "model": "", "context_window_tokens": 200000, "max_output_tokens": 32000, "max_tokens_field": "max_output_tokens" },
+    "architect-agent":   { "model": "", "context_window_tokens": 200000, "max_output_tokens": 32000, "max_tokens_field": "max_output_tokens" },
+    "developer-agent":   { "model": "", "context_window_tokens": 200000, "max_output_tokens": 32000, "max_tokens_field": "max_output_tokens" },
+    "review-agent":      { "model": "", "context_window_tokens": 200000, "max_output_tokens": 32000, "max_tokens_field": "max_output_tokens" },
+    "test-agent":        { "model": "", "context_window_tokens": 200000, "max_output_tokens": 32000, "max_tokens_field": "max_output_tokens" },
+    "release-agent":     { "model": "", "context_window_tokens": 200000, "max_output_tokens": 32000, "max_tokens_field": "max_output_tokens" }
+  }
+}

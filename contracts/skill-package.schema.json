@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://openclaw.local/contracts/skill-package.schema.json",
+  "title": "Generated OpenClaw Skill Package",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "kind",
+    "name",
+    "origin",
+    "protected",
+    "deletable",
+    "description",
+    "lifecycle"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "kind": { "const": "openclaw-skill-package" },
+    "name": { "type": "string", "pattern": "^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$" },
+    "origin": { "const": "generated" },
+    "protected": { "const": false },
+    "deletable": { "const": true },
+    "description": { "type": "string", "minLength": 1 },
+    "created_by": { "type": "string" },
+    "created_from_workflow": { "type": ["string", "null"] },
+    "created_from_request": { "type": "string" },
+    "target_agent_id": { "type": ["string", "null"] },
+    "workshop_proposal_id": { "type": ["string", "null"] },
+    "lifecycle": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status"],
+      "properties": {
+        "status": { "enum": ["DRAFT", "PROPOSED", "APPLIED", "REJECTED", "QUARANTINED"] }
+      }
+    }
+  }
+}

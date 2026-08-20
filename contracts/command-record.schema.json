@@ -1,0 +1,35 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://openclaw-sdlc-multi-agent/contracts/command-record.schema.json",
+  "title": "CommandRecord",
+  "description": "每行一条（command-records.jsonl）。记录真实执行的命令。禁止编造。",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "command_record_id", "executable", "cwd_abs", "started_at", "finished_at",
+    "exit_code", "timed_out", "stdout_path_abs", "stderr_path_abs",
+    "attempt", "invoked_by_agent", "task_id", "run_id", "isolation_mode"
+  ],
+  "properties": {
+    "command_record_id": { "type": "string" },
+    "argv": { "type": "array", "items": { "type": "string" } },
+    "command_text": { "type": "string" },
+    "executable": { "type": "string" },
+    "executable_version": { "type": ["string", "null"] },
+    "cwd_abs": { "type": "string", "minLength": 1 },
+    "started_at": { "type": "string", "format": "date-time" },
+    "finished_at": { "type": "string", "format": "date-time" },
+    "exit_code": { "type": ["integer", "null"] },
+    "timed_out": { "type": "boolean" },
+    "stdout_path_abs": { "type": "string", "minLength": 1 },
+    "stderr_path_abs": { "type": "string", "minLength": 1 },
+    "stdout_sha256": { "type": ["string", "null"], "pattern": "^[a-f0-9]{64}$" },
+    "stderr_sha256": { "type": ["string", "null"], "pattern": "^[a-f0-9]{64}$" },
+    "attempt": { "type": "integer", "minimum": 1 },
+    "invoked_by_agent": { "type": "string" },
+    "task_id": { "type": "string", "pattern": "^TASK-" },
+    "run_id": { "type": "string", "pattern": "^RUN-" },
+    "isolation_mode": { "type": "string", "enum": ["UNSANDBOXED_LOCAL", "SANDBOXED_DOCKER"] },
+    "redactions_applied": { "type": "boolean" }
+  }
+}

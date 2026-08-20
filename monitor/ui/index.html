@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src 'self' http://127.0.0.1:*; script-src 'self'; style-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>OpenClaw Monitor</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="shell">
+    <header class="masthead">
+      <div class="brand"><span class="brand-mark" aria-hidden="true">OC</span><span>OPENCLAW</span><small>MONITOR</small></div>
+      <div class="connection"><i id="connection-dot"></i><span id="connection-state">正在连接</span><time id="sync-state">--:--:--</time></div>
+    </header>
+    <main class="board">
+      <aside class="workflow-rail" aria-label="工作流">
+        <div class="rail-heading"><span>WORKFLOWS</span><b id="workflow-count">0</b></div>
+        <nav id="workflow-list" class="workflow-list"><p class="empty-note">正在读取 Kernel...</p></nav>
+        <section class="rail-foot"><span>DATA SOURCE</span><strong>POSTGRESQL<br>CONTROL KERNEL</strong></section>
+      </aside>
+      <section class="operations" aria-live="polite">
+        <header class="workflow-head">
+          <div><span class="eyebrow">CURRENT WORKFLOW</span><h1 id="workflow-title">等待工作流</h1><p id="workflow-summary">选择工作流以查看任务、会话和审查记录。</p></div>
+          <div class="state-stack"><span id="workflow-state" class="state-pill">UNKNOWN</span><span id="workflow-step">STEP --</span></div>
+        </header>
+        <section class="task-strip" aria-label="路线任务"><div id="task-list" class="task-list"><p class="empty-note">暂无已冻结路线</p></div></section>
+        <section class="session-console" aria-label="Agent 实时会话">
+          <header class="section-head"><div><span class="eyebrow">LIVE SESSIONS</span><h2>Agent 对话</h2></div><span id="session-status" class="muted">等待 session</span></header>
+          <div id="agent-tabs" class="agent-tabs" role="tablist" aria-label="Agent 会话"></div>
+          <div id="session-meta" class="session-meta">选择 Agent 后显示当前会话。</div>
+          <div id="session-window" class="session-window"><p class="empty-note">没有可显示的会话文本</p></div>
+        </section>
+      </section>
+      <aside class="watchtower" aria-label="监控状态">
+        <section class="watch-section"><header><span>MANAGER DELIVERY</span></header><div id="notification-list" class="notice-list"><p class="empty-note">没有待转达信息</p></div></section>
+        <section class="watch-section"><header><span>HUMAN APPROVAL</span></header><div id="approval-view" class="approval-view">没有待审批事项</div></section>
+        <section class="watch-section alert-section"><header><span>HR KEYWORD ALERTS</span><b id="alert-count">0</b></header><div id="alert-list" class="alert-list"><p class="empty-note">暂无即时预警</p></div></section>
+        <section class="watch-section"><header><span>HR REVIEWS</span></header><div id="hr-review-list" class="review-list"><p class="empty-note">暂无 HR 复核</p></div></section>
+        <section class="watch-section"><header><span>TASK DAILY REPORTS</span></header><div id="daily-report-list" class="review-list"><p class="empty-note">任务结束后将显示日报</p></div></section>
+      </aside>
+    </main>
+  </div>
+  <script src="config.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

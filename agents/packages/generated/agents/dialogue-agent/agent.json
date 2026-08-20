@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "kind": "openclaw-agent-package",
+  "id": "dialogue-agent",
+  "display_name": "QQ 对话 Agent",
+  "description": "QQ 自然语言对话、信息查询与需求路由。",
+  "origin": "generated",
+  "protected": false,
+  "deletable": true,
+  "workspace_source_rel": "agents/packages/generated/agents/dialogue-agent/workspace",
+  "runtime_subdir": "agents/generated/dialogue-agent",
+  "role": "worker",
+  "capabilities": ["qq.conversation", "general.qa", "web.search"],
+  "model": "",
+  "delegation": {
+    "callable_by_manager": true,
+    "allow_agents": [],
+    "require_agent_id": true,
+    "delegation_mode": "prefer"
+  },
+  "sandbox_mode": null,
+  "assembly": {
+    "include_common_rules": true,
+    "include_templates": false
+  },
+  "skills": [],
+  "lifecycle": {
+    "register": false,
+    "active": false
+  },
+  "created_by": "manager-agent",
+  "created_from_workflow": null,
+  "created_from_request": "manual-user-request-2026-07-29"
+}

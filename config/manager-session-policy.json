@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "model_context_window_tokens": 200000,
+  "max_output_tokens": 32000,
+  "soft_budget_percent": 60,
+  "soft_budget_tokens": 120000,
+  "prompt_max_chars": 12000,
+  "thinking_level": "high",
+  "on_soft_budget_reached": "start_new_manager_session",
+  "compaction": {
+    "allowed": true,
+    "command": "openclaw sessions compact <session-key> --max-lines <N>",
+    "mode": "truncate_only"
+  },
+  "prompt_content": {
+    "include": ["context-summary.md", "rules-snapshot.md", "latest Kernel event", "pending approval and artifact locators"],
+    "exclude": ["complete chat history", "complete historical checkpoint output", "complete raw command logs", "complete historical Agent summaries"]
+  }
+}

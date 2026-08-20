@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "catalog": {
+    "builtin_glob": "agents/packages/builtin/*.json",
+    "generated_agent_glob": "agents/packages/generated/agents/*/agent.json",
+    "generated_skill_glob": "agents/packages/generated/skills/*/skill.json"
+  },
+  "protection": {
+    "builtin_packages_read_only": true,
+    "generated_agents_root": "agents/packages/generated/agents",
+    "generated_skills_root": "agents/packages/generated/skills",
+    "allow_modify_builtin_agents": false,
+    "allow_delete_builtin_agents": false
+  },
+  "creation": {
+    "approval_required_before_build": true,
+    "approval_required_before_activation": true,
+    "approval_required_before_delete": true,
+    "allow_network": false,
+    "allow_dependency_install": false,
+    "new_agent_default_allow_agents": [],
+    "new_agent_default_active": false,
+    "new_agent_default_register": false
+  },
+  "skills": {
+    "creator": "openclaw-bundled/skill-creator",
+    "use_openclaw_workshop": true,
+    "allow_apply_to_builtin_agents": false,
+    "allow_apply_to_generated_agents": true
+  }
+}

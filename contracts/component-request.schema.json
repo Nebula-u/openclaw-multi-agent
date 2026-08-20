@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://openclaw.local/contracts/component-request.schema.json",
+  "title": "Generated Component Request",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "request_id",
+    "decision_id",
+    "component_type",
+    "proposed_id",
+    "purpose",
+    "capabilities",
+    "requested_by",
+    "created_at"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "request_id": { "type": "string", "pattern": "^CMP-[A-Za-z0-9-]+$" },
+    "decision_id": { "type": "string", "pattern": "^DEC-[A-Za-z0-9-]+$" },
+    "workflow_id": { "type": ["string", "null"] },
+    "component_type": { "enum": ["agent", "skill"] },
+    "proposed_id": { "type": "string", "pattern": "^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$" },
+    "purpose": { "type": "string", "minLength": 1 },
+    "capabilities": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
+    "requested_by": { "const": "manager-agent" },
+    "target_agent_id": { "type": ["string", "null"] },
+    "model": { "type": "string" },
+    "retention": { "enum": ["ask_after_build", "keep_inactive"] },
+    "created_at": { "type": "string", "format": "date-time" }
+  }
+}

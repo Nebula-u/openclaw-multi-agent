@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://openclaw.local/contracts/monitor-event.schema.json",
+  "title": "Monitor Event",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "event_id", "workflow_id", "topic", "event_type", "producer", "source", "timestamp", "payload", "meta"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "event_id": { "type": "string", "pattern": "^MEVT-[A-Za-z0-9-]+$" },
+    "sequence": { "type": ["integer", "null"], "minimum": 1 },
+    "workflow_id": { "type": "string" },
+    "task_id": { "type": ["string", "null"] },
+    "run_id": { "type": ["string", "null"] },
+    "session_id": { "type": ["string", "null"] },
+    "topic": { "type": "string", "minLength": 1 },
+    "event_type": { "type": "string", "minLength": 1 },
+    "producer": { "type": "string", "minLength": 1 },
+    "source": { "enum": ["EXPLICIT_ACTIVITY", "SESSION_TAILER", "ARTIFACT_WATCHER", "CONTROL_DB", "HEALTH_CLASSIFIER", "WATCHDOG"] },
+    "timestamp": { "type": "string", "format": "date-time" },
+    "payload": { "type": "object" },
+    "meta": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["redacted", "inferred", "confidence"],
+      "properties": {
+        "redacted": { "type": "boolean" },
+        "inferred": { "type": "boolean" },
+        "confidence": { "enum": ["HIGH", "MEDIUM", "LOW", "UNKNOWN"] }
+      }
+    }
+  }
+}
