@@ -176,6 +176,31 @@ node scripts/orchestrator-cli.mjs status --project-root .
 
 Linux 使用相同的 `node` 命令。请求处理和通知重试可以安全重复运行；回执和 PostgreSQL 事实会保证幂等性。
 
+### 前台常驻轮询
+
+日常运行应启动前台 Orchestrator 服务，而不是反复手动执行 `scan` 或 `run`。服务会每秒消费 Manager 请求、推进活动工作流、投递通知和运行待处理 HR 任务；同一 runtime 只能有一个实例持有前台服务锁。
+
+```powershell
+npm run orchestrator:start
+# 或
+pwsh -NoProfile -File scripts/start-orchestrator.ps1 -PollMs 1000
+```
+
+```bash
+npm run orchestrator:start
+# 或
+bash scripts/start-orchestrator.sh
+```
+
+服务前台运行，关闭终端时会进入受控停止。日常优雅停止请从另一个终端执行：
+
+```powershell
+npm run orchestrator:status
+npm run orchestrator:stop
+```
+
+`stop` 会先停止接收新工作并进入 `DRAINING`；默认最多等待 120 秒让当前 Agent 结束，超过时间才取消其 OpenClaw 子进程。服务状态位于 `runtime/orchestrator/service/foreground.status.json`，用于查看心跳、轮询次数和最近错误。当前阶段不注册 Windows 服务或计划任务。
+
 ## Monitor
 
 启动本地 Monitor：

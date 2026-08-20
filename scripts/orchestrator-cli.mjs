@@ -7,6 +7,7 @@ import { validateManagerRequestFile } from './orchestrator/request-validation.mj
 import { createOrchestrator } from './orchestrator/service.mjs';
 import { createHrService } from './hr/service.mjs';
 import { createKernelPool, resolveKernelConfig } from './control-kernel/pool.mjs';
+import { readForegroundServiceStatus, requestForegroundServiceStop, runForegroundService } from './orchestrator/foreground-service.mjs';
 
 function parseArgs(argv) {
   const [command, ...tokens] = argv; const options = {};
@@ -21,6 +22,8 @@ function emit(value, status = 0) { process.stdout.write(`${JSON.stringify(value,
 export async function main(argv = process.argv.slice(2)) {
   const { command, options } = parseArgs(argv); const projectRoot = resolve(options['project-root'] ?? process.cwd());
   if (command === 'init') return emit({ ok: true, command, runtime: 'orchestrator-postgresql', project_root: projectRoot });
+  if (command === 'service-status') return emit({ ok: true, command, service: readForegroundServiceStatus(projectRoot) });
+  if (command === 'stop') return emit({ ok: true, command, result: requestForegroundServiceStop(projectRoot) });
   if (command === 'validate-request') {
     if (!options['request-file']) throw Object.assign(new Error('--request-file is required'), { code: 'REQUEST_FILE_REQUIRED' });
     const request = validateManagerRequestFile(projectRoot, options['request-file']);
@@ -49,10 +52,32 @@ export async function main(argv = process.argv.slice(2)) {
       return emit({ ok: true, command, kernel_schema: config.kernelSchema, ...status });
     } finally { await pool.end(); }
   }
-  const orchestrator = createOrchestrator({ projectRoot });
+  const serveAbortController = command === 'serve' ? new AbortController() : null;
+  const orchestrator = createOrchestrator({ projectRoot, signal: serveAbortController?.signal ?? null });
   const hr = createHrService({ projectRoot, repository: orchestrator.repository, kernel: orchestrator.kernel });
   orchestrator.attachHrService(hr);
   try {
+    if (command === 'serve') {
+      const requestShutdown = () => serveAbortController.abort();
+      process.once('SIGINT', requestShutdown);
+      process.once('SIGTERM', requestShutdown);
+      try {
+        const result = await runForegroundService({
+          projectRoot,
+          orchestrator,
+          hr,
+          managerWorkspace: options['manager-workspace'] ? resolve(options['manager-workspace']) : null,
+          pollMs: Number(options['poll-ms'] ?? 1000),
+          shutdownTimeoutMs: Number(options['shutdown-timeout-seconds'] ?? 120) * 1000,
+          signal: serveAbortController.signal,
+          abort: () => serveAbortController.abort(),
+        });
+        return emit({ ok: true, command, result });
+      } finally {
+        process.removeListener('SIGINT', requestShutdown);
+        process.removeListener('SIGTERM', requestShutdown);
+      }
+    }
     if (command === 'process-request') {
       if (!options['request-file']) throw Object.assign(new Error('--request-file is required'), { code: 'REQUEST_FILE_REQUIRED' });
       const processor = createManagerRequestProcessor({ orchestrator, projectRoot, managerWorkspace: options['manager-workspace'] ? resolve(options['manager-workspace']) : null });
@@ -76,7 +101,7 @@ export async function main(argv = process.argv.slice(2)) {
         tasks: workflow && runs[0] ? await orchestrator.repository.listTasks({ runId: runs[0].runId }) : undefined,
         notifications: workflow && runs[0] ? await orchestrator.repository.listNotifications({ runId: runs[0].runId, statuses: ['PENDING', 'SENT', 'DELIVERED', 'FAILED'] }) : undefined });
     }
-    throw new Error('usage: orchestrator-cli.mjs <init|validate-request|process-request|kernel-status|scan|run|retry-notifications|status> [options]');
+    throw new Error('usage: orchestrator-cli.mjs <init|validate-request|process-request|kernel-status|scan|run|retry-notifications|status|serve|service-status|stop> [options]');
   } finally { await orchestrator.close(); }
 }
 

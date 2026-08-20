@@ -35,7 +35,7 @@ export function taskMessage(task) {
 }
 
 export function createOrchestrator({ projectRoot: projectRootInput, pool = null, kernel = null, repository = null, worktrees = null,
-  runner = runOpenClawAgent, notificationRunner = runOpenClawAgent, hr = null, clock = () => new Date(), maxAttempts = 3, timeoutSeconds = 900 } = {}) {
+  runner = runOpenClawAgent, notificationRunner = runOpenClawAgent, hr = null, clock = () => new Date(), maxAttempts = 3, timeoutSeconds = 900, signal = null } = {}) {
   const projectRoot = resolve(projectRootInput ?? process.cwd());
   const ownedPool = !pool && !kernel && !repository;
   const config = resolveKernelConfig({ projectRoot });
@@ -189,7 +189,7 @@ export function createOrchestrator({ projectRoot: projectRootInput, pool = null,
     const messagePath = join(dispatchRoot, `attempt-${task.attempt}.message.md`); atomicWriteFile(messagePath, taskMessage(task));
     atomicWriteJson(join(dispatchRoot, `attempt-${task.attempt}.dispatch.json`), { schema_version: 1, execution_id: execution.executionId, session_id: sessionId, message_path_abs: messagePath, started_at: now(clock) });
     try {
-      const result = await runner({ agentId: task.agentId, sessionId, messagePath, timeoutSeconds });
+      const result = await runner({ agentId: task.agentId, sessionId, messagePath, timeoutSeconds, signal });
       processLog(task, `attempt-${task.attempt}.stdout.log`, result.stdout); processLog(task, `attempt-${task.attempt}.stderr.log`, result.stderr);
       if (result.exitCode !== 0) throw Object.assign(new Error(`OpenClaw Agent exited with ${result.exitCode}`), { code: 'OPENCLAW_AGENT_EXIT_NONZERO', details: { stderr: String(result.stderr ?? '').slice(-4000) } });
       const ingested = ingestTaskOutput({ projectRoot, task, occurredAt: now(clock) });

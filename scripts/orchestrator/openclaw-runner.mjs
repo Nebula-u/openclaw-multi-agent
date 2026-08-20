@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { openClawSpawnSpec } from './process-utils.mjs';
+import { openClawSpawnSpec, terminateProcessTree } from './process-utils.mjs';
 
 const EXPLICIT_DELIVERY_CHANNELS = new Set([
   'last', 'telegram', 'whatsapp', 'discord', 'irc', 'googlechat', 'slack', 'signal', 'imessage',
@@ -32,15 +32,29 @@ export function buildOpenClawAgentArgs({ agentId, sessionId, messagePath, timeou
   return args;
 }
 
-export function runOpenClawAgent({ agentId, sessionId, messagePath, timeoutSeconds = 900, deliver = null }) {
+export function runOpenClawAgent({ agentId, sessionId, messagePath, timeoutSeconds = 900, deliver = null, signal = null }) {
+  if (signal?.aborted) return Promise.reject(Object.assign(new Error('OpenClaw Agent launch was cancelled before dispatch'), { code: 'ORCHESTRATOR_SHUTDOWN' }));
   const args = buildOpenClawAgentArgs({ agentId, sessionId, messagePath, timeoutSeconds, deliver });
   const command = openClawSpawnSpec(args);
   return new Promise((resolveRun, rejectRun) => {
     const child = spawn(command.file, command.args, { ...command.options, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
     let stdout = ''; let stderr = '';
+    let cancelled = false;
+    const cancel = () => {
+      cancelled = true;
+      const stopped = terminateProcessTree(child.pid);
+      if (!stopped.ok) child.kill();
+    };
     child.stdout.setEncoding('utf8'); child.stderr.setEncoding('utf8');
     child.stdout.on('data', (value) => { stdout += value; }); child.stderr.on('data', (value) => { stderr += value; });
-    child.once('error', (error) => rejectRun(Object.assign(error, { stdout, stderr })));
-    child.once('close', (exitCode, signal) => resolveRun({ exitCode: exitCode ?? -1, signal, stdout, stderr }));
+    signal?.addEventListener('abort', cancel, { once: true });
+    child.once('error', (error) => {
+      signal?.removeEventListener('abort', cancel);
+      rejectRun(Object.assign(error, { stdout, stderr }));
+    });
+    child.once('close', (exitCode, closeSignal) => {
+      signal?.removeEventListener('abort', cancel);
+      resolveRun({ exitCode: exitCode ?? -1, signal: closeSignal, stdout, stderr, cancelled });
+    });
   });
 }

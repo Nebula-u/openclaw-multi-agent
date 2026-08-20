@@ -18,6 +18,9 @@
     "test:kernel": "node --test --test-concurrency=1 tests/control-kernel-*.test.mjs",
     "kernel:schema": "node scripts/control-kernel/apply-schema.mjs",
     "kernel:status": "node scripts/orchestrator-cli.mjs kernel-status --project-root .",
+    "orchestrator:start": "node scripts/orchestrator-cli.mjs serve --project-root . --poll-ms 1000",
+    "orchestrator:status": "node scripts/orchestrator-cli.mjs service-status --project-root .",
+    "orchestrator:stop": "node scripts/orchestrator-cli.mjs stop --project-root .",
     "monitor:start": "node monitor/main.mjs"
   },
   "dependencies": {

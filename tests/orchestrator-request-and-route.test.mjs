@@ -8,6 +8,7 @@ import { deliveryArgs } from '../scripts/orchestrator/openclaw-runner.mjs';
 import { assertManagerRequest } from '../scripts/orchestrator/request-validation.mjs';
 import { compileRoutePlan, RoutePlanError } from '../scripts/orchestrator/route-policy.mjs';
 import { atomicWriteJson } from '../scripts/runtime-core/atomic-store.mjs';
+import { readForegroundServiceStatus, requestForegroundServiceStop, runForegroundService } from '../scripts/orchestrator/foreground-service.mjs';
 
 const ROOT = resolve(process.cwd());
 
@@ -83,4 +84,27 @@ test('webchat delivery uses the originating session channel', () => {
   assert.deepEqual(deliveryArgs({ reply_channel: 'webchat', reply_to: 'agent:manager:source' }), []);
   assert.deepEqual(deliveryArgs({ reply_channel: 'slack', reply_to: '#ops' }), ['--deliver', '--reply-channel', 'slack', '--reply-to', '#ops']);
   assert.throws(() => deliveryArgs({ reply_channel: 'not-a-channel', reply_to: 'target' }), (error) => error.code === 'OPENCLAW_DELIVERY_CHANNEL_UNSUPPORTED');
+});
+
+test('foreground service polls automatically and exits cleanly after a stop request', async () => {
+  const projectRoot = mkdtempSync(join(tmpdir(), 'orchestrator-foreground-'));
+  let ticks = 0; let hrRuns = 0; let waits = 0;
+  const orchestrator = { projectRoot, async tickAll() { ticks += 1; return []; } };
+  const hr = { async runPending() { hrRuns += 1; return []; } };
+  const result = await runForegroundService({
+    projectRoot,
+    orchestrator,
+    hr,
+    pollMs: 100,
+    shutdownTimeoutMs: 1000,
+    waitFor: async () => {
+      waits += 1;
+      if (waits === 1) requestForegroundServiceStop(projectRoot);
+    },
+  });
+  assert.equal(result.state, 'STOPPED');
+  assert.equal(ticks, 1);
+  assert.equal(hrRuns, 1);
+  assert.equal(readForegroundServiceStatus(projectRoot).state, 'STOPPED');
+  assert.throws(() => requestForegroundServiceStop(mkdtempSync(join(tmpdir(), 'orchestrator-not-running-'))), (error) => error.code === 'ORCHESTRATOR_NOT_RUNNING');
 });
