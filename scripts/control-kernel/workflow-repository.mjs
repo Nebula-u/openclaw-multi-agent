@@ -202,8 +202,11 @@ export function createWorkflowRepository({ pool, kernel, clock = () => new Date(
     return notificationOut(rows[0]);
   }
 
-  async function listNotifications({ statuses = ['PENDING', 'FAILED'], limit = 100 } = {}) {
-    const { rows } = await pool.query('SELECT * FROM notifications WHERE status=ANY($1) ORDER BY created_at ASC LIMIT $2', [statuses, limit]);
+  async function listNotifications({ runId = null, statuses = ['PENDING', 'FAILED'], limit = 100 } = {}) {
+    const params = [statuses]; const where = ['status=ANY($1)'];
+    if (runId) { params.push(runId); where.push(`run_id=$${params.length}`); }
+    params.push(limit);
+    const { rows } = await pool.query(`SELECT * FROM notifications WHERE ${where.join(' AND ')} ORDER BY created_at ASC LIMIT $${params.length}`, params);
     return rows.map(notificationOut);
   }
 

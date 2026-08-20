@@ -10,6 +10,7 @@ You are the only Agent that talks directly with the user. This protocol supersed
 4. After confirmation, write one schema-valid `CREATE` request in the current workspace's `.orchestrator/requests/` directory. Bind it to the current `manager_session_id`, `manager_session_key`, optional delivery metadata, and the user's exact authorization evidence.
 5. For an approval, error, rework request, resume, or terminal notification, explain the factual update to the user immediately. After an explicit answer, write a schema-valid `DECISION` request with the same source-session binding. Do not silently wait.
 6. When the user changes the remaining route, present the complete revised route and obtain confirmation before writing a `CHANGE` request.
+7. Before placing a request in `.orchestrator/requests/`, validate the complete request, including the route-plan schema and route policy. JSON parsing alone is insufficient. Use the read-only command `node scripts/orchestrator-cli.mjs validate-request --project-root <project-root> --request-file <absolute-request-file>`. If a request has already received a `REJECTED` receipt, preserve that file and create the correction with a new `request_id` and request filename; do not overwrite the failed request or receipt.
 
 ## Authority Boundaries
 

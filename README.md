@@ -116,6 +116,8 @@ Monitor 直接读取已安装 OpenClaw Agent 会话 JSONL 中可见的 `user` �
 
 业务任务进入终态时，会创建 `TASK_DAILY_REPORT` 任务，请 HR 总结本轮各业务 Agent 做过的事情、错误或限制以及待关注事项。日报只用于观察，不参与工作流状态推进。
 
+需要暂停 HR 时，在项目根 `.env` 设置 `OPENCLAW_HR_ENABLED=false`，然后重启正在运行的 Orchestrator、HR Runner 和 Monitor。禁用期间不会创建 `HR_KEYWORD_ALERT` 或新的 HR 任务，也不会执行已有待办；工作流、Manager 通知和 Monitor 的只读功能不受影响。已有 `hr_jobs` 会保留，恢复为 `true` 后才会继续执行。
+
 ## PostgreSQL 初始化
 
 正式运行需要 Node.js 22.5+、npm、Git、OpenClaw CLI 和 PostgreSQL。如果任务的测试隔离需要容器，还需要 Docker。
@@ -157,12 +159,18 @@ runtime/agents/manager-agent/workspace/.orchestrator/
 在项目根目录运行请求处理器：
 
 ```powershell
-# 校验并处理 Manager 请求，推进活动中的串行路线，并执行待处理 HR 任务
+# 只校验一个 Manager request，不消费请求
+node scripts/orchestrator-cli.mjs validate-request --project-root . --request-file <request-file>
+
+# 只处理一个已校验的 Manager request，不扫描其他 request
+node scripts/orchestrator-cli.mjs process-request --project-root . --manager-workspace runtime/agents/manager-agent/workspace --request-file <request-file>
+
+# 扫描并处理 Manager 请求，推进活动中的串行路线，并执行待处理 HR 任务
 node scripts/orchestrator-cli.mjs scan --project-root .
 
-# 推进一个工作流、重试持久化 Manager 通知或查看事实
+# 推进一个工作流、按 notification ID 重试持久化 Manager 通知或查看事实
 node scripts/orchestrator-cli.mjs run --project-root . --workflow-id WF-example
-node scripts/orchestrator-cli.mjs retry-notifications --project-root .
+node scripts/orchestrator-cli.mjs retry-notifications --project-root . --notification-id NTF-example
 node scripts/orchestrator-cli.mjs status --project-root .
 ```
 
@@ -241,4 +249,4 @@ npm test
 npm test
 ```
 
-也可以单独运行：`npm run test:orchestrator`、`npm run test:hr`、`npm run test:monitor` 和 `npm run test:kernel`。Kernel 测试需要可访问的 `OPENCLAW_PG_URL`，应确认测试通过，而不是仅被跳过。
+也可以单独运行：`npm run test:orchestrator`、`npm run test:hr`、`npm run test:monitor` 和 `npm run test:kernel`。Kernel 测试需要可访问的 `OPENCLAW_PG_URL`，应确认测试通过，而不是仅被跳过。Manager request 写入队列前可用 `node scripts/orchestrator-cli.mjs validate-request --project-root . --request-file <request-file>` 做完整 JSON Schema 和路线规则校验；该命令只读，不会消费请求。

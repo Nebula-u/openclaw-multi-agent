@@ -4,6 +4,8 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import test from 'node:test';
 import { createManagerRequestProcessor } from '../scripts/orchestrator/manager-request-queue.mjs';
+import { deliveryArgs } from '../scripts/orchestrator/openclaw-runner.mjs';
+import { assertManagerRequest } from '../scripts/orchestrator/request-validation.mjs';
 import { compileRoutePlan, RoutePlanError } from '../scripts/orchestrator/route-policy.mjs';
 import { atomicWriteJson } from '../scripts/runtime-core/atomic-store.mjs';
 
@@ -62,4 +64,23 @@ test('Manager request queue requires session-bound requests and records a receip
   assert.equal(JSON.parse(readFileSync(join(queue.receipts, 'request.json.receipt.json'), 'utf8')).status, 'ACCEPTED');
   delete request.manager_session_id; atomicWriteJson(join(queue.requests, 'missing-session.json'), request);
   assert.equal((await queue.processFile('missing-session.json')).status, 'REJECTED');
+});
+
+test('Manager request validation rejects invalid route metadata before orchestration', () => {
+  const request = {
+    schema_version: 1, request_id: 'REQ-002', request_type: 'CREATE', workflow_id: 'WF-Route-002', submitted_by: 'manager-agent',
+    manager_session_id: 'manager-session', manager_session_key: 'agent:manager:source', project_path_abs: ROOT, original_request: 'Review code', route_plan: routePlan('WF-Route-002'),
+    user_authorized: { confirmed: true, actor: 'human:liuxu', message: 'Please run this reviewed route.' },
+  };
+  request.route_plan.display_title = 'This title is too long';
+  assert.throws(() => assertManagerRequest(ROOT, request), (error) => error.code === 'ROUTE_PLAN_SCHEMA_INVALID');
+  request.route_plan.display_title = 'Review';
+  request.route_plan.risk_flags = ['local_persistence'];
+  assert.throws(() => assertManagerRequest(ROOT, request), (error) => error.code === 'ROUTE_PLAN_SCHEMA_INVALID');
+});
+
+test('webchat delivery uses the originating session channel', () => {
+  assert.deepEqual(deliveryArgs({ reply_channel: 'webchat', reply_to: 'agent:manager:source' }), []);
+  assert.deepEqual(deliveryArgs({ reply_channel: 'slack', reply_to: '#ops' }), ['--deliver', '--reply-channel', 'slack', '--reply-to', '#ops']);
+  assert.throws(() => deliveryArgs({ reply_channel: 'not-a-channel', reply_to: 'target' }), (error) => error.code === 'OPENCLAW_DELIVERY_CHANNEL_UNSUPPORTED');
 });

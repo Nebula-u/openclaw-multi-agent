@@ -1,19 +1,12 @@
 import { createHash } from 'node:crypto';
 import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import Ajv from 'ajv';
-import addFormats from 'ajv-formats';
 import { atomicWriteJson } from '../runtime-core/atomic-store.mjs';
+import { assertManagerRequest } from './request-validation.mjs';
 
 const PROCESSED_NOW = Symbol('processedNow');
 function sha256(value) { return createHash('sha256').update(value, 'utf8').digest('hex'); }
 function requestRoot(projectRoot, managerWorkspace) { return join(resolve(managerWorkspace ?? join(projectRoot, 'runtime', 'agents', 'manager-agent', 'workspace')), '.orchestrator'); }
-
-function requestValidator(projectRoot) {
-  const schema = JSON.parse(readFileSync(join(projectRoot, 'contracts', 'manager-request.schema.json'), 'utf8'));
-  const ajv = new Ajv({ allErrors: true, strict: true }); addFormats(ajv);
-  return ajv.compile(schema);
-}
 
 export function createManagerRequestProcessor({ orchestrator, projectRoot: projectRootInput, managerWorkspace = null } = {}) {
   if (!orchestrator) throw new TypeError('orchestrator is required');
@@ -21,14 +14,10 @@ export function createManagerRequestProcessor({ orchestrator, projectRoot: proje
   const root = requestRoot(projectRoot, managerWorkspace);
   const requests = join(root, 'requests'); const receipts = join(root, 'receipts');
   mkdirSync(requests, { recursive: true }); mkdirSync(receipts, { recursive: true });
-  const validate = requestValidator(projectRoot);
   let scanning = false;
 
   function assertRequest(value) {
-    if (!validate(value)) throw Object.assign(new Error('manager request failed JSON Schema validation'), { code: 'MANAGER_REQUEST_SCHEMA_INVALID', details: structuredClone(validate.errors ?? []) });
-    if (value.submitted_by !== 'manager-agent' || value.user_authorized?.confirmed !== true) throw Object.assign(new Error('request must be an explicit user-authorized Manager action'), { code: 'MANAGER_REQUEST_AUTH_INVALID' });
-    if (value.request_type !== 'DECISION' && value.route_plan.workflow_id !== value.workflow_id) throw Object.assign(new Error('route plan workflow does not match request'), { code: 'ROUTE_PLAN_WORKFLOW_MISMATCH' });
-    return value;
+    return assertManagerRequest(projectRoot, value);
   }
 
   async function processFile(name) {
