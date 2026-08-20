@@ -118,33 +118,111 @@ Monitor 直接读取已安装 OpenClaw Agent 会话 JSONL 中可见的 `user` �
 
 需要暂停 HR 时，在项目根 `.env` 设置 `OPENCLAW_HR_ENABLED=false`，然后重启正在运行的 Orchestrator、HR Runner 和 Monitor。禁用期间不会创建 `HR_KEYWORD_ALERT` 或新的 HR 任务，也不会执行已有待办；工作流、Manager 通知和 Monitor 的只读功能不受影响。已有 `hr_jobs` 会保留，恢复为 `true` 后才会继续执行。
 
-## PostgreSQL 初始化
+## 从零部署
 
-正式运行需要 Node.js 22.5+、npm、Git、OpenClaw CLI 和 PostgreSQL。如果任务的测试隔离需要容器，还需要 Docker。
+以下顺序用于新的机器或新的项目 checkout：安装依赖、启动 PostgreSQL、安装 Agent，最后启动前台 Orchestrator。不要在新部署中执行 `migrate-stategraph.mjs`；它仅用于从旧 StateGraph 安装迁移历史数据。
 
-```bash
-docker run -d --name openclaw-pg \
-  -e POSTGRES_USER=openclaw -e POSTGRES_PASSWORD=password \
-  -e POSTGRES_DB=openclaw -p 5432:5432 postgres:16
+前置条件：Node.js 22.5+、npm、Git、OpenClaw CLI，以及 Docker Desktop/Engine。Linux 还需要 `jq`（`install.sh` 与 `validate-install.sh` 使用它）。OpenClaw CLI 必须已能连接到一个可用的模型提供方；本项目不会替用户创建模型提供方或写入凭据。
+
+先在项目根目录确认基础工具可用：
+
+```powershell
+node --version
+npm --version
+git --version
+openclaw --version
+docker version
+openclaw config validate --json
+openclaw gateway status
 ```
 
-复制 `.env.example` 为 `.env`，至少设置：
+### 1. 安装 Node 依赖并创建环境文件
+
+```powershell
+npm ci
+Copy-Item .env.example .env
+```
+
+```bash
+npm ci
+cp -n .env.example .env
+```
+
+编辑 `.env`，至少确认以下值。若修改数据库密码，`OPENCLAW_PG_URL` 中的密码必须保持一致；含 `@`、`:`、`/` 等字符时需按 URL 编码。
 
 ```text
 OPENCLAW_PG_URL=postgresql://openclaw:password@localhost:5432/openclaw
 OPENCLAW_KERNEL_SCHEMA=kernel
 ```
 
-然后应用幂等 schema 并检查 Kernel：
+### 2. 启动 PostgreSQL 并确认健康
 
-```powershell
-npm install
-npm run kernel:schema
-npm run kernel:status
-node scripts/control-kernel/migrate-stategraph.mjs
+以下 Docker 命令可同时用于 PowerShell、cmd 和 Bash；请完整复制为一行。它只绑定本机回环地址，不会向局域网公开 PostgreSQL 端口。
+
+```text
+docker run --detach --name openclaw-pg --restart unless-stopped --health-cmd "pg_isready -U openclaw -d openclaw" --health-interval 5s --health-timeout 5s --health-retries 12 -e POSTGRES_USER=openclaw -e POSTGRES_PASSWORD=password -e POSTGRES_DB=openclaw -p 127.0.0.1:5432:5432 postgres:16
 ```
 
-`migrate-stategraph.mjs` 默认只执行 dry-run。确认迁移结果后才使用 `--apply`；它不会猜测性重建旧路线。
+确认容器显示 `healthy` 后再继续：
+
+```powershell
+docker inspect --format '{{.State.Health.Status}}' openclaw-pg
+```
+
+```bash
+docker inspect --format '{{.State.Health.Status}}' openclaw-pg
+```
+
+如果机器上已有同名容器，不要重复执行 `docker run`；改用 `docker start openclaw-pg`，然后再次确认健康状态。
+
+### 3. 创建并验证 Control Kernel schema
+
+```powershell
+npm run kernel:schema
+npm run kernel:status
+```
+
+两个命令都必须成功；第二个命令应返回 `runs`、`tasks`、`executions`、`artifacts`、`events`、`approvals`、`notifications` 和 `hr_jobs` 表。
+
+### 4. 安装 OpenClaw Agent 和 runtime
+
+Windows：
+
+```powershell
+pwsh -NoProfile -File scripts/install.ps1 -RuntimeRoot runtime
+pwsh -NoProfile -File scripts/install.ps1 -Apply -Yes -RuntimeRoot runtime
+pwsh -NoProfile -File scripts/validate-install.ps1
+```
+
+Linux：
+
+```bash
+bash scripts/install.sh --runtime-root runtime
+bash scripts/install.sh --apply --yes --runtime-root runtime
+bash scripts/validate-install.sh
+```
+
+### 5. 确认 OpenClaw Gateway 并启动 Orchestrator
+
+`openclaw gateway status` 必须显示 Gateway 可达。若本机尚未运行 Gateway，在单独终端以前台方式启动它：
+
+```text
+openclaw gateway run
+```
+
+随后在另一个独立终端以前台方式运行 Orchestrator：
+
+```powershell
+npm run orchestrator:start
+```
+
+另开终端确认服务健康：
+
+```powershell
+npm run orchestrator:status
+```
+
+可选：再开一个终端启动只读 Monitor：`npm run monitor:start`。至此，Manager 写入的请求会由 Orchestrator 自动消费，无需再手动运行 `scan` 或 `run`。
 
 ## 运行 Orchestrator
 
@@ -233,21 +311,7 @@ bash scripts/start-monitor.sh
 
 更多说明见 [docs/monitoring.md](docs/monitoring.md)。
 
-## 安装与更新 Agent
-
-首次安装先执行 dry-run，再执行 Apply：
-
-```powershell
-pwsh -NoProfile -File scripts/install.ps1 -RuntimeRoot runtime
-pwsh -NoProfile -File scripts/install.ps1 -Apply -Yes -RuntimeRoot runtime
-pwsh -NoProfile -File scripts/validate-install.ps1
-```
-
-```bash
-bash scripts/install.sh --runtime-root runtime
-bash scripts/install.sh --apply --yes --runtime-root runtime
-bash scripts/validate-install.sh
-```
+## 更新已安装 Agent
 
 当修改 Agent workspace、`agents/common/`、Agent package、runtime bundle、sandbox/model/tool 配置或安装行为时，需要更新已安装 Agent：
 
