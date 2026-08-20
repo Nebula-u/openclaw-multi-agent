@@ -1,61 +1,45 @@
 <!doctype html>
-<html lang="zh-CN" data-theme="light">
+<html lang="zh-CN">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="color-scheme" content="light dark">
+  <meta name="color-scheme" content="dark">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src 'self' http://127.0.0.1:*; script-src 'self'; style-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'; form-action 'none'">
-  <title>OpenClaw · Workflow Desk</title>
+  <title>OpenClaw Monitor</title>
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-  <div class="grid-wash" aria-hidden="true"></div>
-  <div class="app-shell">
-    <aside class="sidebar" aria-label="Workflow 导航">
-      <a class="brand" href="#top" aria-label="Workflow Desk 首页"><span class="brand-mark">✦</span><span>work<span>desk</span></span></a>
-      <p class="brand-note">STATEGRAPH<br>LOCAL CONTROL</p>
-      <section class="side-section">
-        <div class="side-heading"><span>进行中的流程</span><b id="workflow-count">0</b></div>
-        <button id="new-workflow" class="control-button primary" type="button">+ 新建 workflow</button>
-        <nav id="workflow-list" class="workflow-list" aria-label="Workflow 列表"><p class="side-empty">正在连接本机服务…</p></nav>
+  <div class="shell">
+    <header class="masthead">
+      <div class="brand"><span class="brand-mark" aria-hidden="true">OC</span><span>OPENCLAW</span><small>MONITOR</small></div>
+      <div class="connection"><i id="connection-dot"></i><span id="connection-state">正在连接</span><time id="sync-state">--:--:--</time></div>
+    </header>
+    <main class="board">
+      <aside class="workflow-rail" aria-label="工作流">
+        <div class="rail-heading"><span>WORKFLOWS</span><b id="workflow-count">0</b></div>
+        <nav id="workflow-list" class="workflow-list"><p class="empty-note">正在读取 Kernel...</p></nav>
+        <section class="rail-foot"><span>DATA SOURCE</span><strong>POSTGRESQL<br>CONTROL KERNEL</strong></section>
+      </aside>
+      <section class="operations" aria-live="polite">
+        <header class="workflow-head">
+          <div><span class="eyebrow">CURRENT WORKFLOW</span><h1 id="workflow-title">等待工作流</h1><p id="workflow-summary">选择工作流以查看任务、会话和审查记录。</p></div>
+          <div class="state-stack"><span id="workflow-state" class="state-pill">UNKNOWN</span><span id="workflow-step">STEP --</span></div>
+        </header>
+        <section class="task-strip" aria-label="路线任务"><div id="task-list" class="task-list"><p class="empty-note">暂无已冻结路线</p></div></section>
+        <section class="session-console" aria-label="Agent 实时会话">
+          <header class="section-head"><div><span class="eyebrow">LIVE SESSIONS</span><h2>Agent 对话</h2></div><span id="session-status" class="muted">等待 session</span></header>
+          <div id="agent-tabs" class="agent-tabs" role="tablist" aria-label="Agent 会话"></div>
+          <div id="session-meta" class="session-meta">选择 Agent 后显示当前会话。</div>
+          <div id="session-window" class="session-window"><p class="empty-note">没有可显示的会话文本</p></div>
+        </section>
       </section>
-      <section class="side-footer" aria-label="本机连接状态">
-        <div class="connection"><i id="connection-dot"></i><span id="connection-state">正在连接</span></div>
-        <p>本机 Node 服务<br>checkpoint 为唯一事实源</p>
-      </section>
-    </aside>
-    <main id="top" class="workspace">
-      <header class="topbar">
-        <div class="crumb"><span>工作台</span><i>/</i><b id="workflow-crumb">选择 workflow</b></div>
-        <div class="top-actions"><span id="sync-state" class="sync-state">尚未同步</span><button id="run-workflow" class="control-button" type="button" disabled>推进一轮</button><button id="advance-workflow" class="control-button" type="button" disabled>连续推进</button><button id="audit-workflow" class="control-button" type="button" disabled>审计</button><button id="history-workflow" class="control-button" type="button" disabled>历史</button><button id="theme-toggle" class="theme-toggle" type="button" aria-label="切换深浅色主题"><span aria-hidden="true">☾</span><em>深色</em></button></div>
-      </header>
-      <section class="dialogue-layout" aria-live="polite">
-        <div class="dialogue">
-          <div id="empty-view" class="empty-view"><span class="spark">✦</span><h1>等待 StateGraph</h1><p>选择左侧 workflow 后查看实时进展。所有确认和变更均在 Manager CLI 对话中完成。</p></div>
-          <div id="conversation" class="conversation" hidden></div>
-          <section id="new-workflow-panel" class="control-panel" hidden>
-            <h2>新建本地 workflow</h2>
-            <label>需求<textarea id="new-workflow-text" rows="4" placeholder="描述要交付的内容"></textarea></label>
-            <label>目标仓库路径<input id="new-workflow-project" type="text" placeholder="留空使用当前项目"></label>
-            <div class="control-actions"><button id="cancel-new-workflow" class="control-button" type="button">取消</button><button id="submit-new-workflow" class="control-button primary" type="button">提交</button></div>
-            <p id="control-message" class="control-message" role="status"></p>
-          </section>
-          <section id="chat-panel" class="control-panel chat-panel">
-            <h2>对话入口</h2>
-            <p>先生成意图草案，确认后才会提交 workflow 或人工决定。</p>
-            <textarea id="chat-input" rows="3" placeholder="例如：创建一个本地聊天室 Demo"></textarea>
-            <div class="control-actions"><button id="chat-send" class="control-button primary" type="button">生成意图草案</button></div>
-            <pre id="chat-draft" class="chat-draft" hidden></pre>
-            <div class="control-actions"><button id="chat-confirm" class="control-button primary" type="button" disabled>确认并提交</button></div>
-            <p id="chat-message" class="control-message" role="status"></p>
-          </section>
-        </div>
-        <aside class="context-panel" aria-label="流程上下文">
-          <section class="context-card workflow-overview"><span class="context-kicker">当前流程</span><h2 id="workflow-title">未选择</h2><p id="workflow-summary">—</p><div class="badge-row"><span id="workflow-condition" class="status-badge">UNKNOWN</span><span id="workflow-phase" class="phase-badge">—</span></div></section>
-          <section class="context-card"><div class="card-heading"><span>已确认流程</span><b id="revision">REV —</b></div><ol id="task-list" class="task-list"><li class="side-empty">暂无阶段</li></ol></section>
-          <section class="context-card quiet-card"><span class="context-kicker">只读监测</span><p>此页面只读取 checkpoint。请在 Manager CLI 中确认步骤、提交人工决定或提出后续流程变更。</p></section>
-        </aside>
-      </section>
+      <aside class="watchtower" aria-label="监控状态">
+        <section class="watch-section"><header><span>MANAGER DELIVERY</span></header><div id="notification-list" class="notice-list"><p class="empty-note">没有待转达信息</p></div></section>
+        <section class="watch-section"><header><span>HUMAN APPROVAL</span></header><div id="approval-view" class="approval-view">没有待审批事项</div></section>
+        <section class="watch-section alert-section"><header><span>HR KEYWORD ALERTS</span><b id="alert-count">0</b></header><div id="alert-list" class="alert-list"><p class="empty-note">暂无即时预警</p></div></section>
+        <section class="watch-section"><header><span>HR REVIEWS</span></header><div id="hr-review-list" class="review-list"><p class="empty-note">暂无 HR 复核</p></div></section>
+        <section class="watch-section"><header><span>TASK DAILY REPORTS</span></header><div id="daily-report-list" class="review-list"><p class="empty-note">任务结束后将显示日报</p></div></section>
+      </aside>
     </main>
   </div>
   <script src="config.js"></script>

@@ -73,9 +73,12 @@ export function loadMonitorConfig(overrides = {}) {
     telemetryMaxEvents: integer(overrides.telemetryMaxEvents ?? fileConfig.telemetry_max_events, 100000),
     activityRetentionDays: integer(overrides.activityRetentionDays ?? fileConfig.activity_retention_days, 30),
     maintenanceIntervalMs: integer(overrides.maintenanceIntervalMs ?? fileConfig.maintenance_interval_ms, 3600000),
-    workflowContinuationEnabled: boolean(overrides.workflowContinuationEnabled ?? environment('MONITOR_CONTINUATION') ?? fileConfig.workflow_continuation_enabled, false),
-    workflowContinuationMaxTurns: integer(overrides.workflowContinuationMaxTurns ?? fileConfig.workflow_continuation_max_turns, 8),
-    interactiveControlsEnabled: boolean(overrides.interactiveControlsEnabled ?? environment('MONITOR_INTERACTIVE') ?? fileConfig.interactive_controls_enabled, false),
-    controlTokenHeader: overrides.controlTokenHeader ?? environment('MONITOR_CONTROL_HEADER') ?? fileConfig.control_token_header ?? 'x-stategraph-control',
+    // The sole write exception is an authenticated retry of notifications that
+    // already exist in the Manager outbox. All workflow mutation stays outside
+    // Monitor in the Orchestrator request queue.
+    internalRetryToken: overrides.internalRetryToken ?? environment('MONITOR_INTERNAL_RETRY_TOKEN')
+      ?? fileConfig.internal_retry_token ?? null,
+    internalRetryTokenHeader: overrides.internalRetryTokenHeader ?? environment('MONITOR_INTERNAL_RETRY_TOKEN_HEADER')
+      ?? fileConfig.internal_retry_token_header ?? 'x-monitor-internal-token',
   };
 }

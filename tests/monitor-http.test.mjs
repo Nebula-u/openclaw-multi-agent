@@ -42,6 +42,7 @@ test('monitor reads workflows only from latest LangGraph checkpoints', async () 
     assert.match(await (await fetch(value.base + '/styles.css')).text(), /workflow-item/u);
     const health = await fetch(value.base + '/api/health');
     assert.equal(health.status, 200);
+    assert.equal(health.headers.get('access-control-allow-origin'), null);
     const healthBody = await health.json();
     assert.equal(healthBody.status, 'HEALTHY');
     assert.equal(healthBody.audit.database, 'LANGGRAPH_CHECKPOINTS');
@@ -117,6 +118,23 @@ test('monitor rejects unknown origins and every state mutation', async () => {
   } finally { await value.close(); }
 });
 
+test('monitor permits both local browser origins on its bound port only', async () => {
+  const value = await setup();
+  try {
+    const port = new URL(value.base).port;
+    const allowed = [
+      `http://127.0.0.1:${port}`,
+      `http://localhost:${port}`,
+    ];
+    for (const origin of allowed) {
+      const response = await fetch(value.base + '/api/workflows', { headers: { origin } });
+      assert.equal(response.status, 200);
+      assert.equal(response.headers.get('access-control-allow-origin'), origin);
+    }
+    assert.equal((await fetch(value.base + '/api/workflows', { headers: { origin: `http://localhost:${Number(port) + 1}` } })).status, 403);
+  } finally { await value.close(); }
+});
+
 test('interactive monitor keeps chat as a two-step intent flow', async () => {
   const value = await setup();
   initializeAuthority(ROOT);
@@ -130,7 +148,7 @@ test('interactive monitor keeps chat as a two-step intent flow', async () => {
   const address = await monitor.start();
   try {
     const base = `http://127.0.0.1:${address.port}`;
-    const headers = { 'content-type': 'application/json', 'x-stategraph-control': '1' };
+    const headers = { 'content-type': 'application/json', 'x-stategraph-control': '1', origin: `http://localhost:${address.port}` };
     const draftResponse = await fetch(`${base}/api/conversations/test/messages`, { method: 'POST', headers, body: JSON.stringify({ message: '创建一个本地 demo' }) });
     assert.equal(draftResponse.status, 200);
     const draft = (await draftResponse.json()).intent_draft;

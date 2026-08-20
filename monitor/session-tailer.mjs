@@ -5,10 +5,10 @@ import { parseSessionRecord } from './session-parser.mjs';
 
 function hash(value) { return createHash('sha256').update(value).digest('hex').slice(0, 24); }
 
-export function createSessionTailer({ taskSource, telemetry, sessionRoot, publish }) {
+export function createSessionTailer({ taskSource = () => [], sessionSource = null, telemetry, sessionRoot, publish }) {
   return {
     scan() {
-      const dispatches = taskSource().filter((task) => task.session_id).map((task) => ({
+      const raw = sessionSource ? sessionSource() : taskSource().filter((task) => task.session_id).map((task) => ({
         dispatch_id: task.dispatches?.at(-1)?.dispatch_id ?? null,
         workflow_id: task.workflow_id,
         task_id: task.task_id,
@@ -16,6 +16,9 @@ export function createSessionTailer({ taskSource, telemetry, sessionRoot, publis
         agent_id: task.agent_id,
         session_id: task.session_id,
       }));
+      const dispatches = [...new Map(raw.filter((item) => item?.agent_id && item?.session_id).map((item) => [`${item.agent_id}:${item.session_id}`, {
+        ...item, workflow_id: item.workflow_id ?? 'UNBOUND', task_id: item.task_id ?? null, run_id: item.run_id ?? null,
+      }])).values()];
       const emitted = [];
       for (const dispatch of dispatches) {
         const path = resolve(join(sessionRoot, dispatch.agent_id, 'sessions', `${dispatch.session_id}.jsonl`));

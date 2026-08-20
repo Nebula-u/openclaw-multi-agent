@@ -4,7 +4,7 @@
 //
 // 设计约定：run_id 与 langgraph_thread_id 是**两个独立标识**。
 //   run_id              由 Kernel 生成，形如 RUN-<12hex>，是事实表主键；
-//   langgraph_thread_id 由 StateGraph 侧决定，形如 WF-WEB-<hex> / WF-SMOKE-001。
+//   langgraph_thread_id 是历史兼容列；新的 workflow_id 由 Orchestrator 冻结。
 // 两者 1:1 关联，通过 kernel.runs 行绑定。之所以不复用同一个值：
 // executionIdFor / artifactIdFor 都要从 run_id 剥掉 "RUN-" 前缀拼子 ID，
 // 而 schema 的 runs.run_id 也有 ^RUN- 的 CHECK 约束，与 WF-* 形态冲突。
@@ -38,7 +38,7 @@ export function runIdFor(runId) {
   return runId;
 }
 
-/** 校验 StateGraph 线程标识（形态不受 Kernel 约束，只要非空字符串）。 */
+/** 校验历史兼容线程标识（形态不受 Kernel 约束，只要非空字符串）。 */
 export function threadIdFor(threadId) {
   if (typeof threadId !== 'string' || threadId.length === 0) {
     throw new TypeError(`threadId must be a non-empty string, got ${String(threadId)}`);

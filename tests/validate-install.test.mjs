@@ -28,11 +28,18 @@ test('installers materialize an explicit empty worker delegation allowlist', () 
   assert.match(powershell, /\$currentHasSubagents -and \$allowMatches/u);
   assert.match(powershell, /agents\.list\[\$idx\]\.subagents/u);
   assert.match(powershell, /function Get-OpenClawAgentsWithFallback/u);
+  assert.match(powershell, /function Resolve-OpenClawConfigFilePath/u);
+  assert.match(powershell, /\$candidate = \$Result\.Output\.Trim\(\)[\s\S]*?\$candidate\.StartsWith\('~'\)[\s\S]*?Join-Path \$HOME/u);
+  assert.match(powershell, /function Remove-RetiredStateGraphWebChatReferences/u);
+  assert.match(powershell, /remove retired stategraph-webchat plugin references/u);
   assert.match(powershell, /agents\.list 后备配置输出/u);
   assert.match(powershell, /delegationMode = 'prefer'/u);
   assert.doesNotMatch(powershell, /delegationMode = 'off'/u);
   assert.match(bash, /set_json "agents\.list\[\$idx\]\.subagents"/u);
   assert.match(bash, /ALLOW_JSON\[\$id\]/u);
+  assert.match(bash, /remove_retired_stategraph_webchat_config/u);
+  assert.match(bash, /jq -c '\.agents\.list \/\/ \[\]'/u);
+  assert.match(bash, /remove retired stategraph-webchat plugin references/u);
 });
 
 test('installers synchronize model catalog limits and protect raw artifact storage', () => {

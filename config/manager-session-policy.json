@@ -13,7 +13,7 @@
     "mode": "truncate_only"
   },
   "prompt_content": {
-    "include": ["context-summary.md", "rules-snapshot.md", "latest checkpoint summary", "latest StateGraph event", "pending approval and gate locators"],
+    "include": ["context-summary.md", "rules-snapshot.md", "latest Kernel event", "pending approval and artifact locators"],
     "exclude": ["complete chat history", "complete historical checkpoint output", "complete raw command logs", "complete historical Agent summaries"]
   }
 }

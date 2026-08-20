@@ -196,6 +196,71 @@ function Restore-ConfigOnFailure {
   }
 }
 
+function Resolve-OpenClawConfigFilePath {
+  param([Parameter(Mandatory)]$Result)
+  if ($Result.ExitCode -eq 0 -and -not [string]::IsNullOrWhiteSpace($Result.Output)) {
+    $candidate = $Result.Output.Trim()
+    if ($candidate.StartsWith('~')) {
+      $candidate = Join-Path $HOME ($candidate.Substring(1).TrimStart([char[]]@('\', '/')))
+    }
+    return Get-NormalizedPath $candidate
+  }
+
+  # OpenClaw refuses `config file` when a removed plugin is still referenced.
+  # Its diagnostic contains the configured file path, which is safe to use only
+  # when it resolves to an existing local JSON file.
+  $match = [regex]::Match([string]$Result.Output, '(?ms)File:\s*(?<path>.+?)(?:\s+Problem:|\r?$)')
+  $candidate = if ($match.Success) { $match.Groups['path'].Value.Trim() } else { '' }
+  if ($candidate.StartsWith('~')) {
+    $candidate = Join-Path $HOME ($candidate.Substring(1).TrimStart([char[]]@('\', '/')))
+  }
+  if ($candidate -and (Test-Path -LiteralPath $candidate -PathType Leaf)) {
+    return Get-NormalizedPath $candidate
+  }
+  $defaultPath = Join-Path $HOME '.openclaw\openclaw.json'
+  if (Test-Path -LiteralPath $defaultPath -PathType Leaf) {
+    return Get-NormalizedPath $defaultPath
+  }
+  throw "无法获取 OpenClaw 配置文件，且未找到可恢复的本地配置路径：$($Result.Output)"
+}
+
+function Test-RetiredStateGraphWebChatPath {
+  param([AllowNull()][string]$Path)
+  return $Path -match '(?i)(?:^|[\\/])stategraph-webchat[\\/]*$'
+}
+
+function Get-RetiredStateGraphWebChatReferences {
+  param([Parameter(Mandatory)][string]$ConfigPath)
+  $config = Read-JsonFile $ConfigPath
+  $paths = @()
+  $entryPresent = $false
+  if ($config.PSObject.Properties.Name -contains 'plugins' -and $config.plugins) {
+    if ($config.plugins.PSObject.Properties.Name -contains 'load' -and $config.plugins.load -and
+        $config.plugins.load.PSObject.Properties.Name -contains 'paths') {
+      $paths = @($config.plugins.load.paths | Where-Object { Test-RetiredStateGraphWebChatPath ([string]$_) })
+    }
+    if ($config.plugins.PSObject.Properties.Name -contains 'entries' -and $config.plugins.entries) {
+      $entryPresent = $null -ne $config.plugins.entries.PSObject.Properties['stategraph-webchat']
+    }
+  }
+  return [pscustomobject]@{ config = $config; paths = $paths; entry_present = $entryPresent; found = ($paths.Count -gt 0 -or $entryPresent) }
+}
+
+function Remove-RetiredStateGraphWebChatReferences {
+  param(
+    [Parameter(Mandatory)]$Reference,
+    [Parameter(Mandatory)][string]$ConfigPath
+  )
+  if (-not $Reference.found) { return $false }
+  $plugins = $Reference.config.plugins
+  if ($Reference.paths.Count -gt 0) {
+    $plugins.load.paths = @($plugins.load.paths | Where-Object { -not (Test-RetiredStateGraphWebChatPath ([string]$_)) })
+  }
+  if ($Reference.entry_present) { [void]$plugins.entries.PSObject.Properties.Remove('stategraph-webchat') }
+  Write-JsonAtomic -Value $Reference.config -Path $ConfigPath -Depth 24
+  return $true
+}
+
 Write-Host "== openclaw-sdlc-multi-agent package 同步 ($Mode) ==" -ForegroundColor Cyan
 Write-Host "ProjectRoot : $ProjectRoot"
 Write-Host "RuntimeRoot : $RuntimeRootAbs"
@@ -204,8 +269,15 @@ Write-Host "调用时 PWD  : $((Get-Location).Path)（不用于路径解析）"
 if (-not (Get-Command openclaw -ErrorAction SilentlyContinue)) { throw '未找到 openclaw CLI。' }
 $versionResult = Invoke-OpenClaw @('--version')
 $configFileResult = Invoke-OpenClaw @('config','file')
-if ($configFileResult.ExitCode -ne 0) { throw "无法获取 OpenClaw 配置文件：$($configFileResult.Output)" }
-$ConfigFilePath = $configFileResult.Output.Trim()
+$ConfigFilePath = Resolve-OpenClawConfigFilePath -Result $configFileResult
+$retiredPluginReferences = Get-RetiredStateGraphWebChatReferences -ConfigPath $ConfigFilePath
+if ($retiredPluginReferences.found) {
+  $retiredSummary = @()
+  if ($retiredPluginReferences.paths.Count -gt 0) { $retiredSummary += "plugins.load.paths ($($retiredPluginReferences.paths -join ', '))" }
+  if ($retiredPluginReferences.entry_present) { $retiredSummary += 'plugins.entries.stategraph-webchat' }
+  Write-Host "检测到已移除的 StateGraph WebChat 配置：$($retiredSummary -join '；')" -ForegroundColor Yellow
+  if (-not $Apply) { Write-Host '[DRYRUN] APPLY 时将先备份并移除这些已废弃引用，再继续安装。' -ForegroundColor Yellow }
+}
 
 $Packages = @(Get-AgentPackages -ProjectRoot $ProjectRoot -RuntimeRootAbs $RuntimeRootAbs -ModelConfig $ModelConfig)
 if ($AgentIds) {
@@ -222,7 +294,16 @@ $Manager = Get-ManagerPackage $Packages
 if (-not $Manager.register -or -not $Manager.active) { throw 'manager package 必须 register=true 且 active=true。' }
 $ManagerAllow = @(Get-ManagerAllowAgents $Packages)
 
-$ExistingAgents = @(Get-OpenClawAgentsWithFallback)
+$ExistingAgents = if ($retiredPluginReferences.found) {
+  # The CLI cannot read an invalid config.  Its on-disk agents list is used
+  # only for preflight conflict detection; APPLY repairs the exact retired
+  # references from the backed-up file before any CLI mutation.
+  if ($retiredPluginReferences.config.PSObject.Properties.Name -contains 'agents' -and
+      $retiredPluginReferences.config.agents -and
+      $retiredPluginReferences.config.agents.PSObject.Properties.Name -contains 'list') {
+    @($retiredPluginReferences.config.agents.list)
+  } else { @() }
+} else { @(Get-OpenClawAgentsWithFallback) }
 $ExistingIds = @($ExistingAgents | ForEach-Object { [string]$_.id })
 
 $workspaceSeen = @($RegisteredPackages | ForEach-Object workspace | Sort-Object -Unique)
@@ -337,6 +418,10 @@ if (Test-Path $ConfigFilePath) {
 
 $changes = [System.Collections.Generic.List[string]]::new()
 try {
+  if (Remove-RetiredStateGraphWebChatReferences -Reference $retiredPluginReferences -ConfigPath $ConfigFilePath) {
+    $changes.Add('remove retired stategraph-webchat plugin references')
+    Write-Host '已移除已废弃的 StateGraph WebChat 插件配置。' -ForegroundColor Yellow
+  }
   Sync-ModelCatalog -Packages $RegisteredPackages -Changes $changes
   $commonSource = Join-Path $ProjectRoot 'agents\common'
   $templatesSource = Join-Path $ProjectRoot 'templates'
@@ -386,7 +471,7 @@ try {
     }
     $subagents = if ($p.role -eq 'manager') {
       # OpenClaw accepts only suggest/prefer.  An empty allowlist preserves the
-      # StateGraph-only dispatch boundary while keeping the native schema valid.
+      # Orchestrator-only dispatch boundary while keeping the native schema valid.
       [ordered]@{ delegationMode = 'prefer'; requireAgentId = $true; allowAgents = @() }
     } else {
       [ordered]@{ allowAgents = @($p.allow_agents) }

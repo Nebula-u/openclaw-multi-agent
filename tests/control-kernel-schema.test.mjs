@@ -41,7 +41,7 @@ describe('control-kernel schema', { skip: skipReason() }, () => {
     assert.ok(names.includes('executions'), `executions 不存在: ${names}`);
     assert.ok(names.includes('artifacts'), `artifacts 不存在: ${names}`);
     assert.ok(names.includes('events'), `events 不存在: ${names}`);
-    assert.deepEqual(names.sort(), ['artifacts', 'events', 'executions', 'runs', 'tasks']);
+    assert.deepEqual(names.sort(), ['approvals', 'artifacts', 'events', 'executions', 'hr_jobs', 'notifications', 'runs', 'tasks']);
   });
 
   it('重复 apply 幂等（不报错）', async () => {
@@ -78,6 +78,24 @@ describe('control-kernel schema', { skip: skipReason() }, () => {
             task_group_id)
          VALUES ($1,$2,'CODE','step1','title','agent1','BOGUS', $1)`,
         [`TSK-${Date.now()}`, runId]),
+      (err) => err.message.includes('tasks_state_check'),
+    );
+  });
+
+  it('tasks only expose the minimal Orchestrator states', async () => {
+    const runId = `RUN-minimal-${Date.now()}`;
+    await pool.query(
+      `INSERT INTO "${schema}".runs
+         (run_id, langgraph_thread_id, state, request, request_sha256,
+          target_project_root_abs, base_commit)
+       VALUES ($1,$2,'ACTIVE','{}', $3, '/tmp', 'abc123')`,
+      [runId, `T-${runId}`, '9'.repeat(64)]);
+    await assert.rejects(
+      () => pool.query(
+        `INSERT INTO "${schema}".tasks
+           (task_id, run_id, kind, step_id, title, agent_id, state, task_group_id)
+         VALUES ($1,$2,'CODE','step1','title','agent1','DISPATCHED', $1)`,
+        [`TSK-minimal-${Date.now()}`, runId]),
       (err) => err.message.includes('tasks_state_check'),
     );
   });

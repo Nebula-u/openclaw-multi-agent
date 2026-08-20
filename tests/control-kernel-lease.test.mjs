@@ -64,7 +64,7 @@ describe('control-kernel lease', { skip: skipReason() }, () => {
       stepId: 'step-1',
       title: 'Lease test task',
       agentId: 'developer-agent',
-      state: 'DISPATCHED',
+      state: 'READY',
       taskGroupId: taskId(),
     });
     return { run: r, task: t };

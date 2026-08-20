@@ -12,10 +12,8 @@
   "possibly_stalled_seconds": 300,
   "starting_timeout_seconds": 120,
   "tool_running_grace_seconds": 900,
-  "workflow_continuation_enabled": false,
-  "workflow_continuation_max_turns": 8,
-  "interactive_controls_enabled": false,
-  "control_token_header": "x-stategraph-control",
+  "internal_retry_token": null,
+  "internal_retry_token_header": "x-monitor-internal-token",
   "telemetry_max_events": 100000,
   "activity_retention_days": 30,
   "maintenance_interval_ms": 3600000

@@ -1,10 +1,10 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://openclaw-sdlc-multi-agent/contracts/manager-request.schema.json",
-  "title": "ManagerStateGraphRequest",
+  "title": "ManagerOrchestratorRequest",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema_version", "request_id", "request_type", "workflow_id", "submitted_by", "user_authorized"],
+  "required": ["schema_version", "request_id", "request_type", "workflow_id", "submitted_by", "manager_session_id", "manager_session_key", "user_authorized"],
   "properties": {
     "schema_version": { "type": "integer", "const": 1 },
     "request_id": { "type": "string", "pattern": "^REQ-[A-Za-z0-9][A-Za-z0-9-]*$" },
@@ -12,6 +12,16 @@
     "workflow_id": { "type": "string", "pattern": "^WF-[A-Za-z0-9][A-Za-z0-9-]*$" },
     "submitted_by": { "type": "string", "const": "manager-agent" },
     "submitted_at": { "type": "string", "format": "date-time" },
+    "manager_session_id": { "type": "string", "minLength": 1, "maxLength": 512 },
+    "manager_session_key": { "type": "string", "minLength": 1, "maxLength": 1024 },
+    "manager_delivery": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "properties": {
+        "reply_channel": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "reply_to": { "type": "string", "minLength": 1, "maxLength": 1024 }
+      }
+    },
     "source_session_key": { "type": "string" },
     "project_path_abs": { "type": "string", "minLength": 1 },
     "original_request": { "type": "string", "minLength": 1 },
