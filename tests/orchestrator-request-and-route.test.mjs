@@ -86,6 +86,18 @@ test('webchat delivery uses the originating session channel', () => {
   assert.throws(() => deliveryArgs({ reply_channel: 'not-a-channel', reply_to: 'target' }), (error) => error.code === 'OPENCLAW_DELIVERY_CHANNEL_UNSUPPORTED');
 });
 
+test('Manager is isolated and cannot use direct development tools', () => {
+  const managerPackage = JSON.parse(readFileSync(join(ROOT, 'agents', 'packages', 'builtin', 'manager-agent.json'), 'utf8'));
+  assert.equal(managerPackage.sandbox_mode, 'all');
+  assert.equal(managerPackage.sandbox_config?.mode, 'all');
+  assert.equal(managerPackage.sandbox_config?.workspaceAccess, 'rw');
+  assert.equal(managerPackage.sandbox_config?.docker?.readOnlyRoot, true);
+  assert.equal(managerPackage.tools_config?.profile, 'minimal');
+  assert.equal(managerPackage.tools_config?.deny?.includes('exec'), true);
+  assert.equal(managerPackage.tools_config?.deny?.includes('apply_patch'), true);
+  assert.equal(managerPackage.tools_config?.deny?.includes('browser'), true);
+});
+
 test('foreground service polls automatically and exits cleanly after a stop request', async () => {
   const projectRoot = mkdtempSync(join(tmpdir(), 'orchestrator-foreground-'));
   let ticks = 0; let hrRuns = 0; let waits = 0;

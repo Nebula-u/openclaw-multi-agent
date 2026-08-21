@@ -33,6 +33,9 @@ export function publishedOutputPath(task) { return join(task.artifactRootAbs, 'o
 
 export function createContextManifest({ projectRoot: projectRootInput, task, priorArtifacts = [] }) {
   const projectRoot = resolve(projectRootInput);
+  if (typeof task.originalRequest !== 'string' || !task.originalRequest.trim()) {
+    throw Object.assign(new Error('task is missing the immutable original user request'), { code: 'ORIGINAL_REQUEST_MISSING' });
+  }
   const inputRoot = join(task.artifactRootAbs, 'input');
   const rulesRoot = join(inputRoot, 'rules');
   const controlRoot = join(task.artifactRootAbs, '.orchestrator');
@@ -46,10 +49,13 @@ export function createContextManifest({ projectRoot: projectRootInput, task, pri
     target_project_root_abs: task.targetProjectRootAbs, worktree_path_abs: task.worktreePathAbs,
     artifact_root_abs: task.artifactRootAbs, allowed_write_paths_abs: [task.worktreePathAbs, join(task.artifactRootAbs, '.agent-raw')],
     forbidden_paths_abs: [inputRoot, join(task.artifactRootAbs, 'output')], required_gate_checks: task.requiredGateChecks,
-    prior_artifacts: priorArtifacts,
+    original_request_path_abs: join(inputRoot, 'user-request.md'), prior_artifacts: priorArtifacts,
   };
   atomicWriteJson(taskPath, taskInput); readOnly(taskPath);
   const inputs = [{ path_abs: taskPath, sha256: sha256File(taskPath), role: 'task' }];
+  const originalRequestPath = join(inputRoot, 'user-request.md');
+  writeFileSync(originalRequestPath, task.originalRequest, 'utf8'); readOnly(originalRequestPath);
+  inputs.push({ path_abs: originalRequestPath, sha256: sha256File(originalRequestPath), role: 'user_request' });
   const rules = [];
   for (const [index, source] of ruleSources(projectRoot, task.agentId).entries()) {
     regular(source, 'CONTEXT_RULE_UNSAFE');
@@ -59,7 +65,7 @@ export function createContextManifest({ projectRoot: projectRootInput, task, pri
     rules.push({ name: basename(source), sha256: sha256File(target) });
   }
   const contextPath = join(inputRoot, 'context.md');
-  writeFileSync(contextPath, `# Orchestrator task context\n\n- Workflow: ${task.workflowId}\n- Task: ${task.taskId}\n- Stage: ${task.kind}\n- Assigned agent: ${task.agentId}\n- Input commit: ${task.inputCommit ?? 'none'}\n\n## Objective\n${task.title}\n\nOnly use published artifacts listed in task.json for earlier-stage context.\n`, 'utf8');
+  writeFileSync(contextPath, `# Orchestrator task context\n\n- Workflow: ${task.workflowId}\n- Task: ${task.taskId}\n- Stage: ${task.kind}\n- Assigned agent: ${task.agentId}\n- Input commit: ${task.inputCommit ?? 'none'}\n\n## Objective\n${task.title}\n\nRead \`user-request.md\` first. It is the immutable original user request for this workflow and is the authoritative source for product requirements, constraints, and approval expectations.\n\nOnly use published artifacts listed in task.json for earlier-stage context.\n`, 'utf8');
   readOnly(contextPath); inputs.push({ path_abs: contextPath, sha256: sha256File(contextPath), role: 'context' });
   const manifest = {
     schema_version: 1, workflow_id: task.workflowId, task_id: task.taskId, run_id: task.runId,

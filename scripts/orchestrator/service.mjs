@@ -145,10 +145,14 @@ export function createOrchestrator({ projectRoot: projectRootInput, pool = null,
     const prepared = selectedWorktrees.prepare({ workflowId: run.workflowId, taskId: stored.taskId, runId: run.runId, inputCommit: stored.inputCommit, targetProjectRootAbs: run.targetProjectRootAbs });
     const task = { workflowId: run.workflowId, runId: run.runId, taskId: stored.taskId, stepId: stored.stepId, kind: stored.kind, title: stored.title,
       agentId: stored.agentId, attempt: stored.attempt, routeHash: stored.routeHash, inputCommit: stored.inputCommit,
+      originalRequest: run.request?.original_request ?? null,
       targetProjectRootAbs: run.targetProjectRootAbs, worktreePathAbs: prepared.worktreePathAbs, artifactRootAbs,
       requiredGateChecks: GATE_CHECKS_BY_KIND[stored.kind] ?? [], contextManifestPathAbs: stored.contextManifest?.path_abs ?? null,
       contextManifestSha256: stored.contextManifest?.sha256 ?? null };
-    if (!task.contextManifestPathAbs || !existsSync(task.contextManifestPathAbs)) {
+    // Context manifests created before original-request propagation did not contain
+    // input/user-request.md. Regenerate those incomplete manifests before dispatch.
+    const originalRequestPath = join(artifactRootAbs, 'input', 'user-request.md');
+    if (!task.contextManifestPathAbs || !existsSync(task.contextManifestPathAbs) || !existsSync(originalRequestPath)) {
       const context = createContextManifest({ projectRoot, task, priorArtifacts: stored.payload?.prior_artifacts ?? [] });
       task.contextManifestPathAbs = context.path; task.contextManifestSha256 = context.sha256;
       stored = await selectedRepository.updateTask(stored.taskId, { contextManifest: { path_abs: context.path, sha256: context.sha256 }, payload: { ...(stored.payload ?? {}), artifact_root_abs: artifactRootAbs, worktree_path_abs: prepared.worktreePathAbs } }, { eventType: 'TASK_CONTEXT_PREPARED', eventPayload: { context_manifest_sha256: context.sha256 } });

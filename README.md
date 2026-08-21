@@ -124,6 +124,8 @@ Monitor 直接读取已安装 OpenClaw Agent 会话 JSONL 中可见的 `user` �
 
 前置条件：Node.js 22.5+、npm、Git、OpenClaw CLI，以及 Docker Desktop/Engine。Linux 还需要 `jq`（`install.sh` 与 `validate-install.sh` 使用它）。OpenClaw CLI 必须已能连接到一个可用的模型提供方；本项目不会替用户创建模型提供方或写入凭据。
 
+Manager 也会在 Docker sandbox 中运行：容器根文件系统为只读、没有网络，只挂载其自身 workspace；其工具集不包含命令执行、补丁、浏览器或预览能力，因此不能直接修改业务仓库、构建或运行项目。Manager 的 workspace 协议只允许它在 `.orchestrator/requests/` 提交请求 JSON。首次安装前请确认本机已有 `openclaw-test-node:22-slim` 镜像（或按项目既有 sandbox 镜像流程构建）。
+
 先在项目根目录确认基础工具可用：
 
 ```powershell
