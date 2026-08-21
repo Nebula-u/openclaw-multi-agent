@@ -530,8 +530,10 @@ restore_on_failure() {
 # This happens after the backup and restore helper are available, but before
 # any OpenClaw CLI mutation.  The retired plugin is the only invalid-config
 # migration this installer is allowed to perform automatically.
+CONFIG_CHANGES=()
 if [ "$RETIRED_STATEGRAPH_WECHAT" -eq 1 ]; then
   remove_retired_stategraph_webchat_config || { restore_on_failure "移除已废弃 StateGraph WebChat 配置失败"; exit 1; }
+  CONFIG_CHANGES+=("remove retired stategraph-webchat plugin references")
   echo "已移除已废弃的 StateGraph WebChat 插件配置。"
 fi
 
@@ -564,7 +566,6 @@ done
 echo "已复制 workspace prompt / 共享规则 / 模板到绝对 workspace。"
 
 # 7.4 创建 package 中声明 register=true 的 Agent（幂等）
-CONFIG_CHANGES=()
 for id in "${AGENT_IDS[@]}"; do
   if contains "$EXISTING_IDS" "$id"; then
     echo "跳过已存在且兼容的 Agent：$id"
