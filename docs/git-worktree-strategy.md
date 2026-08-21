@@ -8,7 +8,9 @@
 
 ## 执行和验收
 
-Orchestrator 为每个 task/attempt 创建隔离 worktree。Agent 可以在获准 worktree 中修改和正常提交，但不能创建快照记录或更新候选版本。
+Orchestrator 为每个 task/attempt 创建隔离 worktree；重试增加 attempt 并使用不同路径，不复用已被 recovery commit 改变 HEAD 的失败 worktree。只有 `developer-agent` 和 `test-agent` 可以改变目标 Git；其他角色必须产出 `NO_CHANGE`，否则宿主返回 `SNAPSHOT_AGENT_CHANGE_UNAUTHORIZED`。Agent 不能创建快照记录或更新候选版本。
+
+Agent 执行期间 Orchestrator 约每个 lease 周期的三分之一续租。心跳丢失会中止 Agent 并返回 `EXECUTION_LEASE_LOST`；重启后的 reaper 在同一 SQLite 事务中把过期 execution 标为 `LEASE_EXPIRED`、对应 RUNNING task 标为 `FAILED`，再按 bounded retry 创建下一 attempt。
 
 `COMPLETED` 结果必须通过宿主验证：
 
@@ -65,7 +67,20 @@ Revert：
 node scripts/orchestrator-cli.mjs snapshot-revert --project-root . --snapshot-id SNP-... --confirm SNP-...
 ```
 
-它要求目标仓库 clean，并要求 `--confirm` 与 snapshot ID 完全一致。成功时使用 `git revert` 创建反向 commit；发生冲突会 abort 并返回 `SNAPSHOT_REVERT_CONFLICT`。系统不使用 `git reset --hard`，也不静默重写历史。
+它要求目标仓库 clean、snapshot output commit 是当前 HEAD 的祖先，并要求 `--confirm` 与 snapshot ID 完全一致。非祖先返回 `SNAPSHOT_REVERT_NOT_ANCESTOR`；成功时使用 `git revert` 创建反向 commit；发生冲突会 abort 并返回 `SNAPSHOT_REVERT_CONFLICT`。系统不使用 `git reset --hard`，也不静默重写历史。
+
+## 单写者与失败补偿
+
+前台 Orchestrator、一次性写 CLI、Kernel schema 初始化和独立 HR runner 共用 `runtime/orchestrator/service/foreground.lock`。任一写者运行时，其他写入口返回 `WORKFLOW_LOCK_CONFLICT`；`status`、`kernel-status`、snapshot list/show/diff 使用只读连接，不创建缺失的数据库。`stop` 只写服务控制文件，不写 Kernel，因此允许在前台写者持锁时调用。
+
+Git 与 SQLite 是两个资源，轻量实现不引入分布式事务：
+
+- hidden ref 创建后若 SQLite snapshot 写入失败，删除刚创建且仍指向该 commit 的 ref；
+- Restore 索引失败时清理本次新建的 restore worktree 和分支；
+- accepted snapshot 已写入、candidate 更新失败时保留 snapshot 并让任务失败，供人工对账；
+- Revert commit 已创建但索引失败时不改写历史，返回 `SNAPSHOT_REVERT_INDEX_FAILED` 和实际 commit SHA。
+
+因此不存在 Git/SQLite 跨资源 ACID 保证；错误返回和完整备份是恢复边界。
 
 ## 备份和保留
 

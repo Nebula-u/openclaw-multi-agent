@@ -7,7 +7,12 @@ import { validateManagerRequestFile } from './orchestrator/request-validation.mj
 import { createOrchestrator } from './orchestrator/service.mjs';
 import { createHrService } from './hr/service.mjs';
 import { openKernelDatabase, resolveKernelConfig } from './control-kernel/database.mjs';
-import { readForegroundServiceStatus, requestForegroundServiceStop, runForegroundService } from './orchestrator/foreground-service.mjs';
+import { createWorkflowRepository } from './control-kernel/workflow-repository.mjs';
+import { createGitWorktreeManager } from './orchestrator/git-worktree.mjs';
+import { createSnapshotService } from './orchestrator/snapshot-service.mjs';
+import { acquireOrchestratorWriterLock, readForegroundServiceStatus, requestForegroundServiceStop, runForegroundService } from './orchestrator/foreground-service.mjs';
+
+const READ_ONLY_COMMANDS = new Set(['kernel-status', 'status', 'snapshot-list', 'snapshot-show', 'snapshot-diff']);
 
 function parseArgs(argv) {
   const [command, ...tokens] = argv; const options = {};
@@ -21,10 +26,6 @@ function emit(value, status = 0) { process.stdout.write(`${JSON.stringify(value,
 
 export async function main(argv = process.argv.slice(2)) {
   const { command, options } = parseArgs(argv); const projectRoot = resolve(options['project-root'] ?? process.cwd());
-  if (command === 'init') {
-    const config = resolveKernelConfig({ projectRoot }); const database = openKernelDatabase(config); database.close();
-    return emit({ ok: true, command, runtime: 'orchestrator-sqlite', project_root: projectRoot, database_path: config.databasePath });
-  }
   if (command === 'service-status') return emit({ ok: true, command, service: readForegroundServiceStatus(projectRoot) });
   if (command === 'stop') return emit({ ok: true, command, result: requestForegroundServiceStop(projectRoot) });
   if (command === 'validate-request') {
@@ -32,25 +33,51 @@ export async function main(argv = process.argv.slice(2)) {
     const request = validateManagerRequestFile(projectRoot, options['request-file']);
     return emit({ ok: true, command, request_id: request.request_id, workflow_id: request.workflow_id, request_type: request.request_type });
   }
-  if (command === 'kernel-status') {
+  if (READ_ONLY_COMMANDS.has(command)) {
     const config = resolveKernelConfig({ projectRoot });
-    const database = openKernelDatabase(config);
+    const database = openKernelDatabase({ ...config, readonly: true, initialize: false });
     try {
-      const tables = database.all("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").map((row) => row.name);
-      const required = ['runs', 'tasks', 'executions', 'artifacts', 'approvals', 'notifications', 'hr_jobs', 'snapshots'];
-      const missing = required.filter((name) => !tables.includes(name));
-      if (missing.length) {
-        throw Object.assign(new Error(`Control Kernel schema is incomplete: ${missing.join(', ')}`), { code: 'KERNEL_SCHEMA_INCOMPLETE', details: { missing } });
+      if (command === 'kernel-status') {
+        const tables = database.all("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").map((row) => row.name);
+        const required = ['runs', 'tasks', 'executions', 'artifacts', 'approvals', 'notifications', 'hr_jobs', 'snapshots'];
+        const missing = required.filter((name) => !tables.includes(name));
+        if (missing.length) {
+          throw Object.assign(new Error(`Control Kernel schema is incomplete: ${missing.join(', ')}`), { code: 'KERNEL_SCHEMA_INCOMPLETE', details: { missing } });
+        }
+        return emit({ ok: true, command, database_path: config.databasePath, tables,
+          journal_mode: database.get('PRAGMA journal_mode').journal_mode, foreign_keys: database.get('PRAGMA foreign_keys').foreign_keys === 1 });
       }
-      return emit({ ok: true, command, database_path: config.databasePath, tables,
-        journal_mode: database.get('PRAGMA journal_mode').journal_mode, foreign_keys: database.get('PRAGMA foreign_keys').foreign_keys === 1 });
+      const repository = createWorkflowRepository({ database });
+      const snapshots = createSnapshotService({ repository, worktrees: createGitWorktreeManager({ projectRoot }) });
+      if (command === 'snapshot-list') return emit({ ok: true, command, snapshots: await snapshots.list({ runId: options['run-id'] ?? null, taskId: options['task-id'] ?? null, agentId: options['agent-id'] ?? null, sessionId: options['session-id'] ?? null }) });
+      if (command === 'snapshot-show') {
+        if (!options['snapshot-id']) throw Object.assign(new Error('--snapshot-id is required'), { code: 'SNAPSHOT_ID_REQUIRED' });
+        return emit({ ok: true, command, snapshot: await snapshots.show(options['snapshot-id']) });
+      }
+      if (command === 'snapshot-diff') {
+        if (!options['snapshot-id']) throw Object.assign(new Error('--snapshot-id is required'), { code: 'SNAPSHOT_ID_REQUIRED' });
+        return emit({ ok: true, command, ...(await snapshots.diff(options['snapshot-id'])) });
+      }
+      const workflow = options['workflow-id'];
+      const runs = workflow ? [await repository.getRun(workflow)] : await repository.listRuns({ limit: Number(options.limit ?? 200) });
+      return emit({ ok: true, command, runs,
+        tasks: workflow && runs[0] ? await repository.listTasks({ runId: runs[0].runId }) : undefined,
+        notifications: workflow && runs[0] ? await repository.listNotifications({ runId: runs[0].runId, statuses: ['PENDING', 'SENT', 'DELIVERED', 'FAILED'] }) : undefined });
     } finally { database.close(); }
   }
+  const writerLock = acquireOrchestratorWriterLock(projectRoot, { purpose: command === 'serve' ? 'foreground-orchestrator-service' : `orchestrator-cli:${command ?? 'unknown'}` });
+  if (command === 'init') {
+    try {
+      const config = resolveKernelConfig({ projectRoot }); const database = openKernelDatabase(config); database.close();
+      return emit({ ok: true, command, runtime: 'orchestrator-sqlite', project_root: projectRoot, database_path: config.databasePath });
+    } finally { writerLock.release(); }
+  }
   const serveAbortController = command === 'serve' ? new AbortController() : null;
-  const orchestrator = createOrchestrator({ projectRoot, signal: serveAbortController?.signal ?? null });
-  const hr = createHrService({ projectRoot, repository: orchestrator.repository, snapshots: orchestrator.snapshots });
-  orchestrator.attachHrService(hr);
+  let orchestrator;
   try {
+    orchestrator = createOrchestrator({ projectRoot, signal: serveAbortController?.signal ?? null });
+    const hr = createHrService({ projectRoot, repository: orchestrator.repository, snapshots: orchestrator.snapshots });
+    orchestrator.attachHrService(hr);
     if (command === 'serve') {
       const requestShutdown = () => serveAbortController.abort();
       process.once('SIGINT', requestShutdown);
@@ -65,6 +92,7 @@ export async function main(argv = process.argv.slice(2)) {
           shutdownTimeoutMs: Number(options['shutdown-timeout-seconds'] ?? 120) * 1000,
           signal: serveAbortController.signal,
           abort: () => serveAbortController.abort(),
+          writerLock,
         });
         return emit({ ok: true, command, result });
       } finally {
@@ -88,15 +116,6 @@ export async function main(argv = process.argv.slice(2)) {
       const notificationIds = options['notification-id'] ? [options['notification-id']] : null;
       return emit({ ok: true, command, notifications: await orchestrator.deliverNotifications({ notificationIds }) });
     }
-    if (command === 'snapshot-list') return emit({ ok: true, command, snapshots: await orchestrator.snapshots.list({ runId: options['run-id'] ?? null, taskId: options['task-id'] ?? null, agentId: options['agent-id'] ?? null, sessionId: options['session-id'] ?? null }) });
-    if (command === 'snapshot-show') {
-      if (!options['snapshot-id']) throw Object.assign(new Error('--snapshot-id is required'), { code: 'SNAPSHOT_ID_REQUIRED' });
-      return emit({ ok: true, command, snapshot: await orchestrator.snapshots.show(options['snapshot-id']) });
-    }
-    if (command === 'snapshot-diff') {
-      if (!options['snapshot-id']) throw Object.assign(new Error('--snapshot-id is required'), { code: 'SNAPSHOT_ID_REQUIRED' });
-      return emit({ ok: true, command, ...(await orchestrator.snapshots.diff(options['snapshot-id'])) });
-    }
     if (command === 'snapshot-restore') {
       if (!options['snapshot-id']) throw Object.assign(new Error('--snapshot-id is required'), { code: 'SNAPSHOT_ID_REQUIRED' });
       return emit({ ok: true, command, snapshot: await orchestrator.snapshots.restore(options['snapshot-id']) });
@@ -118,15 +137,11 @@ export async function main(argv = process.argv.slice(2)) {
       return emit({ ok: true, command, queued, jobs, auto_mode: hr.autoMode });
     }
     if (command === 'hr-run-pending') return emit({ ok: true, command, jobs: await hr.runPending({ limit: Number(options.limit ?? 20) }) });
-    if (command === 'status') {
-      const workflow = options['workflow-id'];
-      const runs = workflow ? [await orchestrator.repository.getRun(workflow)] : await orchestrator.repository.listRuns({ limit: Number(options.limit ?? 200) });
-      return emit({ ok: true, command, runs,
-        tasks: workflow && runs[0] ? await orchestrator.repository.listTasks({ runId: runs[0].runId }) : undefined,
-        notifications: workflow && runs[0] ? await orchestrator.repository.listNotifications({ runId: runs[0].runId, statuses: ['PENDING', 'SENT', 'DELIVERED', 'FAILED'] }) : undefined });
-    }
     throw new Error('usage: orchestrator-cli.mjs <init|validate-request|process-request|kernel-status|scan|run|retry-notifications|status|snapshot-list|snapshot-show|snapshot-diff|snapshot-restore|snapshot-revert|hr-review|hr-review-daily|hr-run-pending|serve|service-status|stop> [options]');
-  } finally { await orchestrator.close(); }
+  } finally {
+    if (orchestrator) await orchestrator.close();
+    writerLock.release();
+  }
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {

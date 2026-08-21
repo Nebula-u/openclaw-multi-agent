@@ -22,13 +22,18 @@ test('HR dossier keeps assistant reasoning, final output and Git changes only', 
   ];
   writeFileSync(join(sessions, 'session-one.jsonl'), `${records.map((item) => JSON.stringify(item)).join('\n')}\n`);
   const dossier = buildSessionDossier({ sessionRoot: root, agentId: 'developer-agent', sessionId: 'session-one',
-    snapshot: { snapshotId: 'SNP-one', inputCommit: '1'.repeat(40), outputCommit: '2'.repeat(40), changeSummary: { modified: ['app.js'] } },
+    snapshot: { snapshotId: 'SNP-one', runId: 'RUN-one', taskId: 'TASK-one', executionId: 'EXE-one', attempt: 2,
+      createdAt: '2026-08-21T01:03:00Z', inputCommit: '1'.repeat(40), outputCommit: '2'.repeat(40), changeSummary: { modified: ['app.js'] } },
+    boundary: { task_kind: 'DEVELOPMENT', title: 'Implement app change', mutation_policy: 'TARGET_REPOSITORY_ALLOWED' },
     patch: 'diff --git a/app.js b/app.js\n+changed\n' });
   assert.deepEqual(dossier.messages.map((item) => item.kind), ['THINKING', 'THINKING', 'FINAL_OUTPUT']);
   assert.doesNotMatch(JSON.stringify(dossier), /private user request|tool-secret|intermediate answer/u);
   assert.doesNotMatch(JSON.stringify(dossier), /secret=abc/u);
   assert.equal(dossier.git.output_commit, '2'.repeat(40));
   assert.deepEqual(dossier.git.change_summary.modified, ['app.js']);
+  assert.equal(dossier.context.task_id, 'TASK-one');
+  assert.equal(dossier.context.execution_id, 'EXE-one');
+  assert.equal(dossier.context.boundary.title, 'Implement app change');
 });
 
 test('HR dossier rejects unsafe identities and reports deterministic truncation', (t) => {
@@ -55,6 +60,8 @@ test('HR dossier applies one total reasoning budget across the Session', (t) => 
   assert.equal(reasoning.reduce((sum, item) => sum + item.retained_chars, 0), 20);
   assert.equal(reasoning.at(-1).truncated, true);
   assert.equal(dossier.selection.reasoning_budget_chars, 20);
+  assert.equal(dossier.selection.reasoning_original_chars, 30);
+  assert.equal(dossier.selection.reasoning_truncated, true);
 });
 
 test('HR dossier rejects an Agent directory link that escapes the Session root', (t) => {

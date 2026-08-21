@@ -36,9 +36,9 @@ npm run monitor:start
 - `GET /api/snapshots/:id/diff`
 - `GET /api/hr/jobs`
 - `GET /api/hr/outputs`
-- `GET /api/agents/:agent/sessions/:session/messages`
+- `GET /api/agents/:agent/sessions/:session/messages`（`hr-agent` 返回 `HR_SESSION_PRIVATE`）
 
-快照 diff 来自目标 Git 仓库，即使原任务 worktree 已清理仍可读取。Monitor 不提供 restore/revert HTTP 写接口；使用 Orchestrator CLI。
+快照 diff 来自目标 Git 仓库，即使原任务 worktree 已清理仍可读取。Monitor 的 HR 输出来自 SQLite 中已校验的结构化 findings，不读取或展示 HR 原始 Session/dossier。Monitor 不提供 restore/revert HTTP 写接口；使用 Orchestrator CLI。
 
 ## 只读边界
 

@@ -17,7 +17,8 @@ Orchestrator 通过 snapshot 中的 `agent_id + session_id` 定位对应 OpenCla
 - assistant `thinking`/`reasoning` 块；
 - 最后一条 assistant 可见输出；
 - snapshot 的 input/output commit、类型和宿主计算的变更摘要；
-- Git patch。
+- task kind、step、标题、rationale、assigned Agent 和是否允许修改目标仓库的最小边界元数据；
+- Git 文本 patch。二进制文件仍进入变更摘要/stat，但 dossier 不内联 binary patch payload。
 
 明确排除：用户消息、system prompt、工具参数、工具输出和中间可见回复。Session ID 必须符合安全字符规则，真实文件路径必须仍位于配置的 Session 根目录内，普通文件和目录链接越界都会失败关闭。
 
@@ -40,13 +41,15 @@ node scripts/orchestrator-cli.mjs hr-review --project-root . --task-id TASK-... 
 node scripts/orchestrator-cli.mjs hr-run-pending --project-root . --limit 20
 ```
 
-同一触发模式、snapshot 和 source Session 生成唯一 `review_key`，重复调用不会重复入队。不同手动/自动触发模式保留独立记录。
+每个 `snapshot + source Session` 生成唯一 `review_key`。手动、task 和 daily 触发共享去重键；同一份 Agent Session 不会因为换了触发方式而重复审查。`RESTORE`/`REVERT` 只引用旧 Session，不会重新排队。
+
+`--date` 必须是有效的 `YYYY-MM-DD`，按 UTC 匹配 `snapshots.created_at` 的日期部分。非法日期会返回 `HR_REVIEW_DATE_INVALID`，不会静默得到空结果。
 
 ## 自动接口
 
 `OPENCLAW_HR_AUTO_MODE`：
 
-- `off`：默认，不自动排队或运行；
+- `off`：默认，不自动排队或运行；手动 `hr-review`/`hr-run-pending` 仍可用；
 - `task`：任务完成/失败后自动按其 snapshot 排队，前台 Orchestrator 处理队列；
 - `daily`：允许外部调度器调用 daily 命令；
 - `both`：同时启用 task 与 daily。
@@ -61,8 +64,10 @@ node scripts/orchestrator-cli.mjs hr-review-daily --project-root . --date 2026-0
 
 ## 隐私和失败处理
 
-- dossier 在交给 HR 前脱敏，HR 输出再次限制长度并脱敏；
+- dossier 在交给 HR 前脱敏；HR 自己的原始 Session 不通过 Monitor 展示；
 - finding 只应引用最短必要的脱敏片段，不复述完整 private reasoning；
+- OpenClaw `--json` 外层 envelope 和 HR 文本结果都会严格解析。结果只能包含三类 category，severity 只能为 `INFO/LOW/MEDIUM/HIGH/CRITICAL`，每条 finding 必须包含证据定位、最短脱敏摘录、解释和建议；
+- Monitor 只展示通过上述校验并写入 SQLite 的结构化 findings，不读取 HR Session 原始输出；
 - Session 缺失、路径越界或 Git diff 不可用时，该 review 不应伪造结论；
-- HR 执行失败写回 `hr_jobs.last_error`，不会改变原 workflow/task 结果；
+- HR 执行失败或结构非法会把该 job 标为 `FAILED` 并写 `hr_jobs.last_error`，不会改变原 workflow/task 结果；
 - HR 自身以 `thinking=off` 运行，避免产生新的待审私有推理链。

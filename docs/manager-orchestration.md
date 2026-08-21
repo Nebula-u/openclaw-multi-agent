@@ -11,9 +11,9 @@ Manager 不能指定任意 worker、直接调用其他 Agent、修改 task/attem
 ## 串行执行
 
 1. Orchestrator 从 SQLite 读取 ACTIVE run 和当前 route step。
-2. 创建 task、context manifest 与 detached worktree。
+2. 按 task/attempt 创建 context manifest 与独立 detached worktree。
 3. 获取该 task 的 execution lease。
-4. 用固定 Agent ID 和确定性 Session ID 调用 OpenClaw。
+4. 用固定 Agent ID 和确定性 Session ID 调用 OpenClaw，并在执行期间周期 heartbeat lease。
 5. 校验并接收 result。
 6. `COMPLETED` 走 accepted snapshot；其他状态走 recovery snapshot。
 7. 成功则推进 candidate/route；需要人工决定则写 approval 和 Manager outbox；失败按 bounded attempt 重试。
@@ -28,9 +28,11 @@ npm run orchestrator:stop
 
 Monitor 不继续 workflow。HR 自动模式为 `off` 时，前台循环也不会运行 HR 队列。
 
+前台服务和所有一次性 Kernel 写命令共用同一写者锁；前台运行时，另一个写命令返回 `WORKFLOW_LOCK_CONFLICT`。`status`、`kernel-status`、snapshot list/show/diff 保持只读，`stop` 仅写控制文件。
+
 ## 恢复
 
-进程重启后直接从 SQLite runs/tasks/executions/approvals 恢复。到期 lease 会被回收；失败现场通过 Git recovery snapshot 和 artifact 保留。系统不依赖事件链重放，也不从 OpenClaw Session 推断 workflow 状态。
+进程重启后直接从 SQLite runs/tasks/executions/approvals 恢复。到期 lease 与对应 RUNNING task 在同一 SQLite 事务中回收；失败现场通过 Git recovery snapshot 和 artifact 保留，下一 attempt 使用新 worktree。系统不依赖事件链重放，也不从 OpenClaw Session 推断 workflow 状态。
 
 常用检查：
 

@@ -100,7 +100,8 @@ test('HR package is manual-first and limited to the three Session review categor
   const manifest = JSON.parse(readFileSync(join(ROOT, 'agents', 'packages', 'builtin', 'hr-agent.json'), 'utf8'));
   assert.match(workspace, /UNAUTHORIZED_ACTION[\s\S]*UNCLEAR_BOUNDARY[\s\S]*SPECULATIVE_OR_VAGUE/u);
   assert.match(workspace, /thinking\/reasoning/u);
-  assert.match(workspace, /manually invoked/u);
+  assert.match(workspace, /manual-by-default[\s\S]*explicitly enabled host automation policy/u);
+  assert.match(workspace, /category[\s\S]*severity[\s\S]*evidence_locator[\s\S]*shortest_redacted_excerpt[\s\S]*explanation[\s\S]*recommendation/u);
   assert.doesNotMatch(workspace, /Never.*read thinking/iu);
   assert.deepEqual(manifest.capabilities, ['observability.session-review', 'observability.git-review', 'automation.review-hook']);
   assert.equal(manifest.delegation.callable_by_manager, false);

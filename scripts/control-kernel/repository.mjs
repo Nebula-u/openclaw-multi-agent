@@ -9,12 +9,16 @@ function mapRun(row) { return row ? { runId: row.run_id, workflowId: row.workflo
   status: row.state, state: row.state, outcome: row.outcome, statusReason: row.status_reason,
   request: decode(row.request), requestSha256: row.request_sha256, targetProjectRootAbs: row.target_project_root_abs,
   baseCommit: row.base_commit, candidateCommit: row.candidate_commit, routeHash: row.route_hash,
-  createdAt: row.created_at, updatedAt: row.updated_at, completedAt: row.completed_at } : undefined; }
+  routePlan: decode(row.route_plan), currentStepIndex: row.current_step_index,
+  managerSessionId: row.manager_session_id, managerSessionKey: row.manager_session_key,
+  managerDelivery: decode(row.manager_delivery), createdAt: row.created_at, updatedAt: row.updated_at,
+  completedAt: row.completed_at } : undefined; }
 function mapTask(row) { return row ? { taskId: row.task_id, runId: row.run_id, kind: row.kind, stepId: row.step_id,
   title: row.title, agentId: row.agent_id, status: row.state, state: row.state, attempt: row.attempt,
   maxAttempts: row.max_attempts, jsonRegenerations: row.json_regenerations, executionRound: row.execution_round,
   routeHash: row.route_hash, inputCommit: row.input_commit, taskGroupId: row.task_group_id,
   parallelSlot: row.parallel_slot, dependsOn: decode(row.depends_on) ?? [], lastError: decode(row.last_error),
+  payload: decode(row.task_payload) ?? {}, contextManifest: decode(row.context_manifest),
   createdAt: row.created_at, updatedAt: row.updated_at } : undefined; }
 function mapExecution(row) { return row ? { executionId: row.execution_id, taskId: row.task_id, runId: row.run_id,
   attempt: row.attempt, cycle: row.cycle, workerId: row.worker_id, state: row.state, phase: row.phase,

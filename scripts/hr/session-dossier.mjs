@@ -18,7 +18,7 @@ function blockText(block) {
 }
 function contentBlocks(content) { return Array.isArray(content) ? content : typeof content === 'string' ? [{ type: 'text', text: content }] : []; }
 
-export function buildSessionDossier({ sessionRoot, agentId, sessionId, snapshot = null, patch = '', limits = {} }) {
+export function buildSessionDossier({ sessionRoot, agentId, sessionId, snapshot = null, boundary = null, patch = '', limits = {} }) {
   if (!SAFE_ID.test(agentId ?? '') || !SAFE_ID.test(sessionId ?? '')) throw Object.assign(new Error('unsafe Agent or Session id'), { code: 'HR_SESSION_ID_UNSAFE' });
   const root = realpathSync.native(resolve(sessionRoot));
   const path = resolve(join(root, agentId, 'sessions', `${sessionId}.jsonl`));
@@ -27,7 +27,8 @@ export function buildSessionDossier({ sessionRoot, agentId, sessionId, snapshot 
   const canonicalPath = realpathSync.native(path);
   if (!inside(root, canonicalPath)) throw Object.assign(new Error('Session path escapes configured root'), { code: 'HR_SESSION_PATH_ESCAPE' });
   const stat = lstatSync(path); if (!stat.isFile() || stat.isSymbolicLink()) throw Object.assign(new Error('Session transcript must be a regular file'), { code: 'HR_SESSION_UNSAFE' });
-  const selectedLimits = { ...DEFAULT_LIMITS, ...limits }; const thinking = []; let final = null; let thinkingRemaining = selectedLimits.thinkingChars;
+  const selectedLimits = { ...DEFAULT_LIMITS, ...limits }; const thinking = []; let final = null;
+  let thinkingRemaining = selectedLimits.thinkingChars; let thinkingOriginalChars = 0;
   for (const line of readFileSync(path, 'utf8').split(/\r?\n/u)) {
     if (!line.trim()) continue; let record; try { record = JSON.parse(line); } catch { continue; }
     if (record.type !== 'message' || record.message?.role !== 'assistant') continue;
@@ -35,9 +36,12 @@ export function buildSessionDossier({ sessionRoot, agentId, sessionId, snapshot 
     for (const block of contentBlocks(record.message.content)) {
       const type = String(block?.type ?? '').toLowerCase();
       const text = blockText(block); if (!text) continue;
-      if ((type.includes('thinking') || type.includes('reasoning')) && thinkingRemaining > 0) {
-        const value = bounded(text, thinkingRemaining); thinkingRemaining -= value.retained_chars;
-        thinking.push({ kind: 'THINKING', timestamp: record.timestamp ?? record.message.timestamp ?? null, ...value });
+      if (type.includes('thinking') || type.includes('reasoning')) {
+        thinkingOriginalChars += text.length;
+        if (thinkingRemaining > 0) {
+          const value = bounded(text, thinkingRemaining); thinkingRemaining -= value.retained_chars;
+          thinking.push({ kind: 'THINKING', timestamp: record.timestamp ?? record.message.timestamp ?? null, ...value });
+        }
       }
       else if (type === 'text' || type === 'output_text') visible.push(text);
     }
@@ -48,6 +52,10 @@ export function buildSessionDossier({ sessionRoot, agentId, sessionId, snapshot 
   const patchValue = bounded(patch, selectedLimits.patchChars);
   return {
     schema_version: 1, agent_id: agentId, session_id: sessionId,
+    context: { workflow_id: boundary?.workflow_id ?? null, run_id: snapshot?.runId ?? null,
+      task_id: snapshot?.taskId ?? null, execution_id: snapshot?.executionId ?? null,
+      attempt: snapshot?.attempt ?? null, snapshot_created_at: snapshot?.createdAt ?? null,
+      boundary: boundary ?? null },
     messages,
     git: snapshot ? { snapshot_id: snapshot.snapshotId, input_commit: snapshot.inputCommit,
       output_commit: snapshot.outputCommit, snapshot_kind: snapshot.snapshotKind ?? null,
@@ -55,7 +63,9 @@ export function buildSessionDossier({ sessionRoot, agentId, sessionId, snapshot 
       patch_original_chars: patchValue.original_chars, patch_retained_chars: patchValue.retained_chars } : null,
     selection: { included: ['assistant thinking/reasoning', 'last assistant output', 'verified Git changes'],
       excluded: ['user messages', 'system prompt', 'tool arguments', 'tool output', 'intermediate visible replies'],
-      reasoning_budget_chars: selectedLimits.thinkingChars, reasoning_retained_chars: selectedLimits.thinkingChars - thinkingRemaining },
+      reasoning_budget_chars: selectedLimits.thinkingChars, reasoning_original_chars: thinkingOriginalChars,
+      reasoning_retained_chars: selectedLimits.thinkingChars - thinkingRemaining,
+      reasoning_truncated: thinkingOriginalChars > selectedLimits.thinkingChars },
   };
 }
 

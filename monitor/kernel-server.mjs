@@ -67,6 +67,7 @@ export function createKernelMonitorServer(config, { database: providedDatabase =
   function discoveredSessions() {
     const values = [];
     for (const agent of catalog.agents()) {
+      if (agent.agent_id === 'hr-agent') continue;
       for (const session of catalog.sessions(agent.agent_id) ?? []) {
         const task = runsCache.tasks.find((item) => item.execution?.sessionId === session.session_id && item.agentId === agent.agent_id) ?? null;
         const managerRun = runsCache.runs.find((item) => item.managerSessionId === session.session_id && agent.agent_id === 'manager-agent') ?? null;
@@ -81,14 +82,13 @@ export function createKernelMonitorServer(config, { database: providedDatabase =
     return values;
   }
   function hrOutputs(jobs) {
-    return jobs.filter((job) => job.hrSessionId).map((job) => ({
+    return jobs.filter((job) => Array.isArray(job.result?.findings)).map((job) => ({
       job_id: job.jobId,
       task_id: job.taskId,
       kind: job.kind,
       session_id: job.hrSessionId,
-      messages: (catalog.messages('hr-agent', job.hrSessionId)?.messages ?? [])
-        .filter((message) => message.role === 'assistant')
-        .map((message) => ({ text: message.text, timestamp: message.timestamp })),
+      report: redactValue({ schema_version: job.result.schema_version, finding_count: job.result.finding_count,
+        findings: job.result.findings }),
     }));
   }
   const sessionTailer = createSessionTailer({ sessionSource: discoveredSessions, telemetry, sessionRoot: config.sessionRoot ?? config.projectRoot,
@@ -103,7 +103,7 @@ export function createKernelMonitorServer(config, { database: providedDatabase =
       const workflowValues = runs.map((run, index) => publicRun(run, enrichedTasks.filter((task) => task.runId === run.runId), telemetry, approvals[index][0] ?? null));
       const healthInput = { workflows: workflowValues }; health.scan(healthInput); sessionTailer.scan();
       const alerts = hrJobs.filter((job) => Array.isArray(job.input?.matches) && job.input.matches.length).map((job) => redactValue({ job_id: job.jobId, run_id: job.runId, task_id: job.taskId, matches: job.input.matches }));
-      const next = { schema_version: 1, source: 'SQLITE_CONTROL_KERNEL', kernel_reachable: true, generated_at: new Date().toISOString(), workflows: workflowValues, snapshots: gitSnapshots, hr_alerts: alerts, hr_jobs: hrJobs, hr_outputs: hrOutputs(hrJobs), notifications, global_sessions: discoveredSessions().filter((item) => item.binding === 'UNBOUND_SESSION') };
+      const next = { schema_version: 1, source: 'SQLITE_CONTROL_KERNEL', kernel_reachable: true, generated_at: new Date().toISOString(), workflows: workflowValues, snapshots: gitSnapshots, hr_alerts: alerts, hr_jobs: hrJobs.map(publicHrJob), hr_outputs: hrOutputs(hrJobs), notifications, global_sessions: discoveredSessions().filter((item) => item.binding === 'UNBOUND_SESSION') };
       const value = JSON.stringify(next); snapshot = next; if (value !== fingerprint) { fingerprint = value; hub.publish('snapshot', snapshot, { source: 'SQLITE_CONTROL_KERNEL' }); } return snapshot;
     } catch (error) { snapshot = { ...snapshot, kernel_reachable: false, degraded: true, degradation: { code: error.code ?? 'KERNEL_UNAVAILABLE', message: error.message }, generated_at: new Date().toISOString() }; hub.publish('monitor-health', snapshot.degradation, { source: 'KERNEL' }); return snapshot; }
     finally { refreshRunning = false; }
@@ -122,8 +122,8 @@ export function createKernelMonitorServer(config, { database: providedDatabase =
       if (request.method === 'GET' && path === '/api/workflows') { await refresh(); return sendJson(response, 200, { ok: true, ...snapshot }, headers); }
       if (request.method === 'GET' && path === '/api/supervisor') return sendJson(response, 200, { ok: true, enabled: false, mode: 'READ_ONLY', continuation: { enabled: false }, generated_at: new Date().toISOString() }, headers);
       if (request.method === 'GET' && path === '/api/agents') return sendJson(response, 200, { ok: true, agents: catalog.agents(), generated_at: new Date().toISOString() }, headers);
-      const agentSessions = path.match(/^\/api\/agents\/([^/]+)\/sessions$/u); if (request.method === 'GET' && agentSessions) { const agentId = decodeURIComponent(agentSessions[1]); const sessions = catalog.sessions(agentId); return sendJson(response, sessions ? 200 : 404, sessions ? { ok: true, agent_id: agentId, sessions } : { ok: false, error: 'AGENT_NOT_FOUND' }, headers); }
-      const sessionMessages = path.match(/^\/api\/agents\/([^/]+)\/sessions\/([^/]+)\/messages$/u); if (request.method === 'GET' && sessionMessages) { const agentId = decodeURIComponent(sessionMessages[1]); const sessionId = decodeURIComponent(sessionMessages[2]); const value = catalog.messages(agentId, sessionId); const messages = value?.messages ?? []; const limit = Math.min(integerQuery(url, 'limit', 500), 500); return sendJson(response, value ? 200 : 404, value ? { ok: true, ...value, messages: messages.slice(-limit), truncated: messages.length > limit } : { ok: false, error: 'SESSION_NOT_FOUND' }, headers); }
+      const agentSessions = path.match(/^\/api\/agents\/([^/]+)\/sessions$/u); if (request.method === 'GET' && agentSessions) { const agentId = decodeURIComponent(agentSessions[1]); if (agentId === 'hr-agent') return sendJson(response, 403, { ok: false, error: 'HR_SESSION_PRIVATE' }, headers); const sessions = catalog.sessions(agentId); return sendJson(response, sessions ? 200 : 404, sessions ? { ok: true, agent_id: agentId, sessions } : { ok: false, error: 'AGENT_NOT_FOUND' }, headers); }
+      const sessionMessages = path.match(/^\/api\/agents\/([^/]+)\/sessions\/([^/]+)\/messages$/u); if (request.method === 'GET' && sessionMessages) { const agentId = decodeURIComponent(sessionMessages[1]); if (agentId === 'hr-agent') return sendJson(response, 403, { ok: false, error: 'HR_SESSION_PRIVATE' }, headers); const sessionId = decodeURIComponent(sessionMessages[2]); const value = catalog.messages(agentId, sessionId); const messages = value?.messages ?? []; const limit = Math.min(integerQuery(url, 'limit', 500), 500); return sendJson(response, value ? 200 : 404, value ? { ok: true, ...value, messages: messages.slice(-limit), truncated: messages.length > limit } : { ok: false, error: 'SESSION_NOT_FOUND' }, headers); }
       if (request.method === 'GET' && path === '/api/hr/alerts') return sendJson(response, 200, { ok: true, alerts: snapshot.hr_alerts }, headers);
       if (request.method === 'GET' && path === '/api/hr/jobs') return sendJson(response, 200, { ok: true, jobs: snapshot.hr_jobs }, headers);
       if (request.method === 'GET' && path === '/api/hr/outputs') return sendJson(response, 200, { ok: true, outputs: snapshot.hr_outputs ?? [] }, headers);
@@ -139,4 +139,11 @@ export function createKernelMonitorServer(config, { database: providedDatabase =
     } catch (error) { return sendJson(response, error.statusCode ?? 400, { ok: false, error: error.code ?? 'MONITOR_REQUEST_FAILED', message: error.message }, headers); }
   });
   return { server, kernel, repository, telemetry, hub, snapshot: () => snapshot, refresh, sessionCatalog: catalog, async start() { await refresh(); await new Promise((resolveStart, reject) => { server.once('error', reject); server.listen(config.port, config.host, () => { server.off('error', reject); resolveStart(); }); }); return server.address(); }, async close() { clearInterval(timer); if (server.listening) await new Promise((resolveClose, reject) => server.close((error) => error ? reject(error) : resolveClose())); if (ownedDatabase) database.close(); if (!providedTelemetryDatabase) telemetryDatabase.close(); } };
+}
+function publicHrJob(job) {
+  return { jobId: job.jobId, reviewKey: job.reviewKey, runId: job.runId, taskId: job.taskId,
+    kind: job.kind, triggerMode: job.triggerMode, sourceAgentId: job.sourceAgentId,
+    sourceSessionId: job.sourceSessionId, hrSessionId: job.hrSessionId, status: job.status,
+    attempts: job.attempts, lastError: job.lastError, createdAt: job.createdAt,
+    startedAt: job.startedAt, finishedAt: job.finishedAt };
 }

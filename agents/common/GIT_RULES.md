@@ -24,7 +24,7 @@
 ## 4. 谁能改什么
 
 - `developer-agent` / `test-agent`：只能修改被分配的 worktree，代码修改必须形成**真实本地 commit**。
-- `requirement` / `architect` / `review` / `release`：正式报告默认写入 artifact，**不**为提交报告污染目标业务仓库；仅当任务明确要求更新业务仓库文档时才 commit。
+- `requirement` / `architect` / `review` / `release` / `manager` / `hr`：只能输出 artifact/结构化结果，不得修改或 commit 目标业务仓库。目标仓库写权限只授予 `developer-agent` 和 `test-agent`；需要文档修改时也必须路由给这两个角色之一。
 - 工作 Agent **不得**合并或推进集成分支。Orchestrator 只在校验 `output_commit` 的存在性、ancestry、worktree HEAD 和 clean 状态后推进 Kernel 的 `candidate_commit`。
 
 ## 5. commit 信息格式
@@ -43,7 +43,7 @@ Input-Commit: <hash>
 ## 6. Orchestrator 候选提交规则
 
 1. DEVELOPMENT/TEST 的 `output_commit` 必须是真实完整 SHA，等于该 run worktree HEAD，且为任务 `input_commit` 的后代。
-2. REVIEW/TEST/RELEASE 只能从 Kernel 当前 `candidate_commit` 开始，不得自行切换候选版本。
+2. TEST 从 Kernel 当前 `candidate_commit` 开始；REVIEW/RELEASE 只读该候选版本并必须保持 `NO_CHANGE`，不得自行切换或提交候选版本。
 3. 宿主从 Git 计算真实新增、修改、删除和重命名清单；Agent 自报文件列表不是权威。
 4. 失败、脏状态、未接收或待审批的 worktree 与隐藏快照引用默认保留，用于取证和重试对比。
 5. 恢复创建新分支/worktree；撤销使用 `git revert` 并要求人工确认；禁止重写历史。

@@ -47,11 +47,12 @@
 Control Kernel 默认使用本机 `runtime/control/kernel.db`，不包含数据库账号或连接口令。按以下要求处置：
 
 - SQLite 文件及其 `-wal` / `-shm` 文件只能位于部署服务器的本地磁盘，不得放在 SMB、NFS、云盘同步目录或供多台机器共享。
-- Orchestrator 是唯一写进程；Monitor 只能通过只读连接查看事实，不得提供数据库写接口。
+- 前台 Orchestrator、一次性写 CLI、schema 初始化和 HR runner 共用单写者锁；Monitor 和只读 CLI 只能通过 `query_only` 连接查看事实，不得初始化数据库或提供数据库写接口。
 - `npm run kernel:schema` 只初始化指定的空 SQLite；运行前仍需确认 `OPENCLAW_KERNEL_DB_PATH` 指向本项目的预期 runtime。
-- 文件权限应限制为部署账号和必要的运维账号。日志不得复制 HR dossier 中的 reasoning 原文或任何脱敏前 Session 内容。
+- 文件权限应限制为部署账号和必要的运维账号。日志不得复制 HR dossier 中的 reasoning 原文或任何脱敏前 Session 内容；Monitor 禁止访问 HR 原始 Session，只能显示校验后的结构化 findings。
 - 完整备份必须在一致性窗口内同时覆盖 Kernel SQLite、目标 Git 仓库（含 `refs/openclaw/snapshots/*`）和 artifacts；只备份数据库不能恢复代码内容。
-- Restore 创建新分支/worktree；Revert 创建反向 commit。禁止用 `git reset --hard` 作为快照恢复方式。
+- Restore 创建新分支/worktree；Revert 只处理当前 HEAD 的祖先并创建反向 commit。禁止用 `git reset --hard` 作为快照恢复方式。
+- Git 与 SQLite 不提供跨资源 ACID：ref/Restore 失败执行安全补偿，已经创建的 Revert commit 保留并返回 SHA，不能用自动改写历史来掩盖索引失败。
 
 > 注：本机 `openclaw doctor --lint` 预先存在与本项目无关的警告（`gateway.auth.token` 明文、缺失 `policy.jsonc`）。这些属于用户既有 OpenClaw 环境，本项目不修改它们，仅在兼容性报告中记录。
 

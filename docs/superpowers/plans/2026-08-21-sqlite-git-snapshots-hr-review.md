@@ -39,7 +39,7 @@
 - Produces: `openKernelDatabase({ databasePath, readonly? }) -> KernelDatabase`
 - `KernelDatabase` exposes `exec(sql)`, `run(sql, params)`, `get(sql, params)`, `all(sql, params)`, `transaction(fn)`, `close()`.
 
-- [ ] **Step 1: Rewrite schema tests for an isolated SQLite file**
+- [x] **Step 1: Rewrite schema tests for an isolated SQLite file**
 
 ```js
 test('initializes all eight authoritative tables and WAL pragmas', () => {
@@ -50,12 +50,12 @@ test('initializes all eight authoritative tables and WAL pragmas', () => {
 });
 ```
 
-- [ ] **Step 2: Run the schema test and confirm it fails because the SQLite database module does not exist**
+- [x] **Step 2: Run the schema test and confirm it fails because the SQLite database module does not exist**
 
 Run: `node --test tests/control-kernel-schema.test.mjs`
 Expected: FAIL with module/export or PostgreSQL fixture errors.
 
-- [ ] **Step 3: Implement the SQLite wrapper and eight-table schema**
+- [x] **Step 3: Implement the SQLite wrapper and eight-table schema**
 
 ```js
 import { DatabaseSync } from 'node:sqlite';
@@ -67,7 +67,7 @@ export function openKernelDatabase({ databasePath, readonly = false, busyTimeout
 }
 ```
 
-- [ ] **Step 4: Remove PostgreSQL configuration/dependency and require Node 22.13+**
+- [x] **Step 4: Remove PostgreSQL configuration/dependency and require Node 22.13+**
 
 ```json
 {
@@ -76,12 +76,12 @@ export function openKernelDatabase({ databasePath, readonly = false, busyTimeout
 }
 ```
 
-- [ ] **Step 5: Run schema tests**
+- [x] **Step 5: Run schema tests**
 
 Run: `node --test tests/control-kernel-schema.test.mjs`
 Expected: PASS with no skipped PostgreSQL suite.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```text
 git add scripts/control-kernel tests/control-kernel-schema.test.mjs tests/helpers/kernel-fixture.mjs .env.example package.json package-lock.json
@@ -104,7 +104,7 @@ git commit -m "refactor: replace kernel storage with SQLite"
 - Produces: existing repository camelCase objects without `revision`, event methods or `sourceEventId`.
 - Produces: `queueHrJob({ reviewKey, triggerMode, ... })` with unique-key deduplication.
 
-- [ ] **Step 1: Add failing SQLite repository and lease tests**
+- [x] **Step 1: Add failing SQLite repository and lease tests**
 
 ```js
 test('only one active execution lease exists per task', async () => {
@@ -116,12 +116,12 @@ test('updating a run does not require or increment revision', async () => {
 });
 ```
 
-- [ ] **Step 2: Run repository and lease tests and confirm PostgreSQL SQL fails**
+- [x] **Step 2: Run repository and lease tests and confirm PostgreSQL SQL fails**
 
 Run: `node --test tests/control-kernel-repository.test.mjs tests/control-kernel-lease.test.mjs`
 Expected: FAIL on `$1`, JSONB, `ANY`, `now()` or pool usage.
 
-- [ ] **Step 3: Rewrite repositories with SQLite statements and explicit JSON mapping**
+- [x] **Step 3: Rewrite repositories with SQLite statements and explicit JSON mapping**
 
 ```js
 const encode = (value) => value == null ? null : JSON.stringify(value);
@@ -129,24 +129,24 @@ const decode = (value, fallback = null) => value == null ? fallback : JSON.parse
 db.run('UPDATE runs SET state=?, updated_at=? WHERE run_id=?', [patch.state, now(), runId]);
 ```
 
-- [ ] **Step 4: Implement lease acquisition with the partial unique index**
+- [x] **Step 4: Implement lease acquisition with the partial unique index**
 
 ```js
 const result = db.run(`INSERT OR IGNORE INTO executions (...) VALUES (?,?,?,?,...)`, values);
 if (result.changes === 0) throw Object.assign(new Error('task already has an active lease'), { code: 'LEASE_HELD', details: holder });
 ```
 
-- [ ] **Step 5: Remove all event append/audit calls and tests**
+- [x] **Step 5: Remove all event append/audit calls and tests**
 
 Run: `rg -n "appendEvent|auditEvents|event_hash|prev_hash|RUN_CAS_CONFLICT|expectedRevision" scripts monitor tests`
 Expected: no active-code matches.
 
-- [ ] **Step 6: Run Kernel tests**
+- [x] **Step 6: Run Kernel tests**
 
 Run: `npm run test:kernel`
 Expected: PASS with no skips.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```text
 git add scripts/control-kernel tests/control-kernel-*.test.mjs
@@ -170,14 +170,14 @@ git commit -m "refactor: simplify SQLite kernel facts"
 - Produces: `worktrees.captureRecovery({ inputCommit, worktreePathAbs, snapshotId })`.
 - Produces: `createSnapshotService({ repository, worktrees }).accept/recover/list/show/diff/restore/revert`.
 
-- [ ] **Step 1: Add failing tests for SHA, ancestry, HEAD and dirty-state validation**
+- [x] **Step 1: Add failing tests for SHA, ancestry, HEAD and dirty-state validation**
 
 ```js
 assert.throws(() => manager.verifyCompletion({ inputCommit: base, outputCommit: sibling, worktreePathAbs }), { code: 'TASK_OUTPUT_COMMIT_NOT_DESCENDANT' });
 assert.throws(() => manager.verifyCompletion({ inputCommit: base, outputCommit: head, worktreePathAbs: dirty }), { code: 'TASK_WORKTREE_DIRTY' });
 ```
 
-- [ ] **Step 2: Add failing recovery/ref/restore tests**
+- [x] **Step 2: Add failing recovery/ref/restore tests**
 
 ```js
 const snapshot = await service.recover(execution);
@@ -187,12 +187,12 @@ const restored = await service.restore(snapshot.snapshotId, target);
 assert.equal(git('-C', restored.worktreePathAbs, 'rev-parse', 'HEAD'), snapshot.outputCommit);
 ```
 
-- [ ] **Step 3: Run snapshot tests and confirm missing interfaces**
+- [x] **Step 3: Run snapshot tests and confirm missing interfaces**
 
 Run: `node --test tests/orchestrator-snapshots.test.mjs tests/orchestrator-output-ingestion.test.mjs`
 Expected: FAIL with missing snapshot service/verification methods.
 
-- [ ] **Step 4: Implement host Git validation, name-status/stat/patch and hidden refs**
+- [x] **Step 4: Implement host Git validation, name-status/stat/patch and hidden refs**
 
 ```js
 git(worktree, ['cat-file', '-e', `${outputCommit}^{commit}`], 'verify output commit');
@@ -200,23 +200,23 @@ git(worktree, ['merge-base', '--is-ancestor', inputCommit, outputCommit], 'verif
 git(projectRoot, ['update-ref', `refs/openclaw/snapshots/${snapshotId}`, outputCommit], 'pin snapshot');
 ```
 
-- [ ] **Step 5: Capture dirty/crashed worktrees as recovery commits without advancing candidate**
+- [x] **Step 5: Capture dirty/crashed worktrees as recovery commits without advancing candidate**
 
 ```js
 git(worktree, ['add', '-A'], 'stage recovery snapshot');
 git(worktree, ['commit', '-m', `openclaw: recovery snapshot ${snapshotId}`], 'commit recovery snapshot');
 ```
 
-- [ ] **Step 6: Implement safe restore and confirmed revert**
+- [x] **Step 6: Implement safe restore and confirmed revert**
 
 Restore creates `openclaw/restore/<snapshot-id>` plus an isolated worktree. Revert requires `confirm === snapshotId`; on conflict aborts the revert and returns `SNAPSHOT_REVERT_CONFLICT` without resetting user branches.
 
-- [ ] **Step 7: Run snapshot and orchestrator tests**
+- [x] **Step 7: Run snapshot and orchestrator tests**
 
 Run: `npm run test:orchestrator`
 Expected: PASS.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```text
 git add scripts/orchestrator scripts/control-kernel/workflow-repository.mjs contracts/result.schema.json tests/orchestrator-*.test.mjs
@@ -233,25 +233,25 @@ git commit -m "feat: add verified Git snapshots and recovery"
 **Interfaces:**
 - Adds commands: `snapshot-list`, `snapshot-show`, `snapshot-diff`, `snapshot-restore`, `snapshot-revert`.
 
-- [ ] **Step 1: Add failing command parsing and confirmation tests**
+- [x] **Step 1: Add failing command parsing and confirmation tests**
 
 ```js
 await assert.rejects(main(['snapshot-revert','--snapshot-id',id]), (error) => error.code === 'SNAPSHOT_REVERT_CONFIRMATION_REQUIRED');
 ```
 
-- [ ] **Step 2: Implement read-only commands and mutation confirmation**
+- [x] **Step 2: Implement read-only commands and mutation confirmation**
 
 ```text
 node scripts/orchestrator-cli.mjs snapshot-list --project-root . --workflow-id WF-...
 node scripts/orchestrator-cli.mjs snapshot-revert --project-root . --snapshot-id SNP-... --confirm SNP-...
 ```
 
-- [ ] **Step 3: Run CLI tests**
+- [x] **Step 3: Run CLI tests**
 
 Run: `node --test tests/orchestrator-cli.test.mjs`
 Expected: PASS.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```text
 git add scripts/orchestrator-cli.mjs package.json tests/orchestrator-cli.test.mjs
@@ -274,7 +274,7 @@ git commit -m "feat: expose safe snapshot commands"
 - Produces: `queueReview({ workflowId?, taskId?, date?, triggerMode })`.
 - Adds commands: `hr-review`, `hr-run-pending`.
 
-- [ ] **Step 1: Add failing dossier tests**
+- [x] **Step 1: Add failing dossier tests**
 
 ```js
 assert.deepEqual(dossier.messages.map((item) => item.kind), ['THINKING','THINKING','FINAL_OUTPUT']);
@@ -282,7 +282,7 @@ assert.equal(dossier.messages.some((item) => item.text.includes('tool-secret')),
 assert.equal(dossier.git.output_commit, snapshot.outputCommit);
 ```
 
-- [ ] **Step 2: Add failing manual/automatic mode and deduplication tests**
+- [x] **Step 2: Add failing manual/automatic mode and deduplication tests**
 
 ```js
 assert.equal(resolveHrAutoMode(root), 'off');
@@ -290,27 +290,27 @@ assert.equal((await service.queueReview({ taskId, triggerMode: 'MANUAL' })).leng
 assert.equal((await service.queueReview({ taskId, triggerMode: 'MANUAL' })).length, 0);
 ```
 
-- [ ] **Step 3: Implement safe Session parsing and bounded dossier generation**
+- [x] **Step 3: Implement safe Session parsing and bounded dossier generation**
 
 Parse only assistant `thinking`/`reasoning` blocks and the last assistant text block. Redact every value, reject path escapes, report truncation metadata, and attach snapshot name-status/stat/patch.
 
-- [ ] **Step 4: Rewrite HR prompt for exactly three finding categories**
+- [x] **Step 4: Rewrite HR prompt for exactly three finding categories**
 
 ```text
 Return JSON findings using only: UNAUTHORIZED_ACTION, UNCLEAR_BOUNDARY, SPECULATIVE_OR_VAGUE.
 Do not reproduce private reasoning; cite the shortest redacted excerpt and source locator.
 ```
 
-- [ ] **Step 5: Make automatic execution opt-in**
+- [x] **Step 5: Make automatic execution opt-in**
 
 Remove unconditional `hr.runPending()` from Monitor, foreground loop, `tick` and `drain`. Gate task enqueue behind `OPENCLAW_HR_AUTO_MODE=task|both`; daily remains an explicit scheduler-callable command.
 
-- [ ] **Step 6: Run HR tests**
+- [x] **Step 6: Run HR tests**
 
 Run: `npm run test:hr`
 Expected: PASS.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```text
 git add scripts/hr scripts/hr-runner.mjs scripts/orchestrator-cli.mjs tests/hr-*.test.mjs
@@ -334,27 +334,27 @@ git commit -m "feat: add manual session-scoped HR review"
 - Kernel source protocol becomes `orchestrator-sqlite-v1`.
 - Adds read-only endpoints `GET /api/snapshots`, `GET /api/snapshots/:id`, `GET /api/snapshots/:id/diff`.
 
-- [ ] **Step 1: Add failing Monitor SQLite and snapshot endpoint tests**
+- [x] **Step 1: Add failing Monitor SQLite and snapshot endpoint tests**
 
 ```js
 assert.equal(clientConfig.source, 'SQLITE_CONTROL_KERNEL');
 assert.equal((await get('/api/snapshots')).snapshots[0].agent_id, 'developer-agent');
 ```
 
-- [ ] **Step 2: Remove event reads and background HR execution**
+- [x] **Step 2: Remove event reads and background HR execution**
 
 The snapshot materializer reads runs/tasks/executions/notifications/hr_jobs/snapshots only. Session tailing remains telemetry-only and never queues HR automatically when mode is `off`.
 
-- [ ] **Step 3: Add compact snapshot/HR panels and CLI restore guidance**
+- [x] **Step 3: Add compact snapshot/HR panels and CLI restore guidance**
 
 The UI shows Agent, Session, input/output commit, change counts and HR findings. It does not perform restore/revert HTTP mutations.
 
-- [ ] **Step 4: Run Monitor tests**
+- [x] **Step 4: Run Monitor tests**
 
 Run: `npm run test:monitor`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```text
 git add monitor tests/monitor-*.test.mjs
@@ -385,27 +385,27 @@ git commit -m "feat: show SQLite snapshots and HR reviews"
 **Interfaces:**
 - Installed Agent rules describe host-verified commits/snapshots and HR's read-only three-category review.
 
-- [ ] **Step 1: Add failing static validation for removed PostgreSQL/event-chain language and new HR capability**
+- [x] **Step 1: Add failing static validation for removed PostgreSQL/event-chain language and new HR capability**
 
 ```js
 assert.doesNotMatch(installedHrAgents, /Never.*read thinking/u);
 assert.match(installedHrAgents, /UNAUTHORIZED_ACTION.*UNCLEAR_BOUNDARY.*SPECULATIVE_OR_VAGUE/su);
 ```
 
-- [ ] **Step 2: Update Agent rules and package capability**
+- [x] **Step 2: Update Agent rules and package capability**
 
 HR can consume only supplied redacted dossier data and cannot independently browse arbitrary Session roots. Developer/Test still commit normally; host performs final verification and recovery snapshots.
 
-- [ ] **Step 3: Keep Windows/Linux install commands and validation consistent**
+- [x] **Step 3: Keep Windows/Linux install commands and validation consistent**
 
 Run dry-run and validation using the exact supported script parameters; do not add a nonexistent reinstall command.
 
-- [ ] **Step 4: Run installation tests**
+- [x] **Step 4: Run installation tests**
 
 Run: `node --test tests/runtime-bundle.test.mjs tests/validate-install.test.mjs`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```text
 git add agents config scripts/install.ps1 scripts/install.sh scripts/validate-install.ps1 scripts/validate-install.sh tests/runtime-bundle.test.mjs tests/validate-install.test.mjs
@@ -431,38 +431,91 @@ git commit -m "docs: align installed agents with snapshots and HR review"
 
 **Interfaces:** Documentation is the deployment and operator contract.
 
-- [ ] **Step 1: Replace deployment instructions with empty-SQLite startup**
+- [x] **Step 1: Replace deployment instructions with empty-SQLite startup**
 
 Document Node 22.13+, local disk requirement, `runtime/control/kernel.db`, no migration, backup of `kernel.db` + WAL checkpoint, and removal of Docker PostgreSQL.
 
-- [ ] **Step 2: Document snapshot and HR commands with safety semantics**
+- [x] **Step 2: Document snapshot and HR commands with safety semantics**
 
 Include exact list/show/diff/restore/revert and `hr-review`/`hr-run-pending` commands, automatic-mode values, retention, privacy and failure handling.
 
-- [ ] **Step 3: Update architecture links and mark old ADR decisions superseded**
+- [x] **Step 3: Update architecture links and mark old ADR decisions superseded**
 
 All active documentation must say SQLite is authoritative, Git stores code snapshots, Monitor is read-only, HR is manual by default, and events are not a fact table.
 
-- [ ] **Step 4: Verify active docs contain no stale PostgreSQL/StateGraph/event-chain instructions**
+- [x] **Step 4: Verify active docs contain no stale PostgreSQL/StateGraph/event-chain instructions**
 
 Run: `rg -n "PostgreSQL|OPENCLAW_PG|KERNEL_SCHEMA|search_path|event hash|事件链|StateGraph" README.md docs --glob '!archive/**' --glob '!plan/**' --glob '!report/**'`
 Expected: only historical/superseded decision explanations that explicitly identify their status.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```text
 git add README.md docs CHANGELOG.md
 git commit -m "docs: document SQLite snapshots and HR operations"
 ```
 
-### Task 9: 全量验证与交付
+### Task 9: 独立审查加固
+
+**Files:**
+- Modify: `scripts/orchestrator-cli.mjs`
+- Modify: `scripts/orchestrator/foreground-service.mjs`
+- Modify: `scripts/orchestrator/git-worktree.mjs`
+- Modify: `scripts/orchestrator/snapshot-service.mjs`
+- Modify: `scripts/orchestrator/service.mjs`
+- Modify: `scripts/hr/service.mjs`
+- Modify: `monitor/kernel-server.mjs`
+- Modify: `monitor/ui/app.js`
+- Test: `tests/orchestrator-cli.test.mjs`
+- Test: `tests/orchestrator-snapshots.test.mjs`
+- Test: `tests/orchestrator-lease-heartbeat.test.mjs`
+- Test: `tests/hr-service.test.mjs`
+- Test: `tests/monitor-kernel-http.test.mjs`
+
+**Interfaces:**
+- 只读 CLI 使用 `readonly + query_only + initialize:false`。
+- 所有 Kernel 写入口共用 `foreground.lock`；`stop` 保持控制文件例外。
+- Git/SQLite 失败使用 ref/Restore 补偿，Revert commit 不重写。
+- HR 输出解析 `result.payloads[].text`，只接受三类结构化 findings。
+
+- [x] **Step 1: 用失败测试证明只读命令会建库、写命令会绕过前台锁**
+
+Run: `node --test tests/orchestrator-cli.test.mjs`
+Observed before fix: read-only and writer-lock regression tests FAIL.
+
+- [x] **Step 2: 分流只读 CLI，并让 CLI/schema/HR runner/foreground 共用写者锁**
+
+Run: `node --test tests/orchestrator-cli.test.mjs`
+Observed after fix: PASS.
+
+- [x] **Step 3: 增加 snapshot ref/Restore 补偿、candidate 对账错误和 Revert 祖先检查**
+
+Run: `node --test tests/orchestrator-snapshots.test.mjs`
+Observed after fix: PASS, including index/candidate failure paths.
+
+- [x] **Step 4: 增加 lease heartbeat、原子 reaper 与 retry attempt worktree 隔离**
+
+Run: `node --test tests/orchestrator-lease-heartbeat.test.mjs tests/control-kernel-sqlite-repository.test.mjs`
+Observed after fix: PASS.
+
+- [x] **Step 5: 补齐 HR 四模式、UTC 日期、跨 trigger 去重和严格 findings 校验**
+
+Run: `node --test tests/hr-service.test.mjs tests/hr-session-dossier.test.mjs`
+Observed after fix: PASS.
+
+- [x] **Step 6: 禁止 Monitor 读取 HR 原始 Session，只展示已校验 findings**
+
+Run: `node --test tests/monitor-kernel-http.test.mjs`
+Observed after fix: PASS; REST/SSE/HR outputs 不含 dossier reasoning.
+
+### Task 10: 全量验证与交付
 
 **Files:**
 - Modify only files needed to fix verification failures within this plan's scope.
 
 **Interfaces:** Produces a verified working tree and deployment handoff.
 
-- [ ] **Step 1: Run focused suites**
+- [x] **Step 1: Run focused suites**
 
 ```text
 npm run test:kernel
@@ -473,23 +526,30 @@ npm run test:monitor
 
 Expected: all PASS, no database-dependent skips.
 
-- [ ] **Step 2: Run full test suite**
+- [x] **Step 2: Run full test suite**
 
 Run: `npm test`
 Expected: exit code 0.
 
-- [ ] **Step 3: Run install dry-runs and validators**
+- [x] **Step 3a: Run Windows install dry-run and validator**
 
 ```text
 pwsh -NoProfile -File scripts/install.ps1 -RuntimeRoot runtime
-bash scripts/install.sh --runtime-root runtime
 pwsh -NoProfile -File scripts/validate-install.ps1 -RuntimeRoot runtime
+```
+
+Observed: dry-run exit 0；validator 123/123 PASS，未修改已安装 Agent。
+
+- [ ] **Step 3b: Run Linux install dry-run and validator on a Bash-capable host**
+
+```text
+bash scripts/install.sh --runtime-root runtime
 bash scripts/validate-install.sh --runtime-root runtime
 ```
 
-Expected: dry-runs/validators succeed without modifying installed Agents.
+Blocked on this Windows host: `bash.exe` is only a WSL relay and `/bin/bash` is absent. Both commands were attempted and failed before script execution with `execvpe(/bin/bash) failed: No such file or directory`; Bash static coverage passed in `npm test`.
 
-- [ ] **Step 4: Search for stale active implementation references**
+- [x] **Step 4: Search for stale active implementation references**
 
 Run: `rg -n "from 'pg'|OPENCLAW_PG|OPENCLAW_KERNEL_SCHEMA|appendEvent|auditEvents|event_hash|prev_hash|RUN_CAS_CONFLICT|runtime/artifacts/cas" scripts monitor agents tests README.md .env.example package.json`
 Expected: no matches except explicit negative migration notes in docs.
@@ -501,4 +561,3 @@ git diff --check
 git status --short
 git commit -m "test: verify SQLite snapshot migration"
 ```
-

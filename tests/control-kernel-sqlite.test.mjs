@@ -30,6 +30,10 @@ test('SQLite kernel config defaults below runtime/control and has no PostgreSQL 
   assert.equal(config.busyTimeoutMs, 5000);
   assert.equal('url' in config, false);
   assert.equal('kernelSchema' in config, false);
+  assert.equal(resolveKernelConfig({ projectRoot, databasePath: 'custom/kernel.db' }).databasePath,
+    join(projectRoot, 'custom', 'kernel.db'));
+  assert.throws(() => resolveKernelConfig({ projectRoot, databasePath: '\\\\server\\share\\kernel.db' }),
+    (error) => error.code === 'KERNEL_DB_NETWORK_PATH_FORBIDDEN');
 });
 
 test('a second connection can read WAL facts but readonly mode rejects writes', (t) => {

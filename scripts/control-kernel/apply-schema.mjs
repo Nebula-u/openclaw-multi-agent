@@ -3,12 +3,16 @@
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { openKernelDatabase, resolveKernelConfig } from './database.mjs';
+import { acquireOrchestratorWriterLock } from '../orchestrator/foreground-service.mjs';
 
 export function applyKernelSchema(options = {}) {
   const config = resolveKernelConfig(options);
-  const database = openKernelDatabase(config);
-  database.close();
-  return { databasePath: config.databasePath };
+  const lock = acquireOrchestratorWriterLock(config.projectRoot, { purpose: 'control-kernel-schema' });
+  try {
+    const database = openKernelDatabase(config);
+    database.close();
+    return { databasePath: config.databasePath };
+  } finally { lock.release(); }
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {

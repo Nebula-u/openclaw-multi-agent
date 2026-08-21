@@ -22,7 +22,7 @@ const request = {
 };
 
 test('workflow repository persists JSON facts without revision or events', async (t) => {
-  const { database, repository } = fixture(t);
+  const { database, kernel, repository } = fixture(t);
   const run = await repository.createRun({
     workflowId: request.workflow_id,
     request: request.request,
@@ -37,6 +37,9 @@ test('workflow repository persists JSON facts without revision or events', async
   const updated = await repository.updateRun(run.runId, { state: 'HOLD', statusReason: 'manual' });
   assert.equal(updated.state, 'HOLD');
   assert.equal(database.get("SELECT count(*) AS count FROM sqlite_master WHERE type='table' AND name='events'").count, 0);
+  const projected = (await kernel.listRuns())[0];
+  assert.deepEqual(projected.routePlan, request.route_plan);
+  assert.equal(projected.currentStepIndex, 0);
 });
 
 test('SQLite partial unique index grants one active lease per task', async (t) => {
@@ -47,6 +50,25 @@ test('SQLite partial unique index grants one active lease per task', async (t) =
   const second = { ...first, executionId: 'EXE-second', workerId: 'two' };
   assert.equal((await kernel.lease.acquireLease(first)).state, 'LEASED');
   await assert.rejects(kernel.lease.acquireLease(second), (error) => error.code === 'LEASE_HELD');
+});
+
+test('expired execution lease atomically returns its running task to retryable failure', async (t) => {
+  const database = openKernelDatabase({ databasePath: ':memory:' }); t.after(() => database.close());
+  let current = new Date('2026-08-21T00:00:00.000Z'); const clock = () => current;
+  const kernel = createKernel({ database, clock, workerId: 'test-worker', leaseSeconds: 120 });
+  const repository = createWorkflowRepository({ database, clock });
+  const run = await repository.createRun({ workflowId: 'WF-expired', request: {}, requestSha256: 'a'.repeat(64),
+    targetProjectRootAbs: 'F:/repo', baseCommit: '1'.repeat(40), routePlan: { steps: [] }, routeHash: '2'.repeat(64) });
+  const task = await repository.createTask({ runId: run.runId, step: { kind: 'DEVELOPMENT', step_id: 'code', title: 'Code' },
+    agentId: 'developer-agent', inputCommit: run.baseCommit });
+  await repository.updateTask(task.taskId, { state: 'RUNNING' });
+  await kernel.lease.acquireLease({ executionId: 'EXE-expired', taskId: task.taskId, runId: run.runId,
+    attempt: 1, cycle: 0, workerId: 'worker-one', agentId: 'developer-agent' });
+  current = new Date('2026-08-21T00:02:01.000Z');
+  assert.equal((await kernel.lease.reapExpiredLeases()).length, 1);
+  const recoveredTask = await repository.getTask(task.taskId);
+  assert.equal(recoveredTask.state, 'FAILED');
+  assert.equal(recoveredTask.lastError.code, 'EXECUTION_LEASE_EXPIRED');
 });
 
 test('HR review keys are idempotent and snapshots round trip', async (t) => {

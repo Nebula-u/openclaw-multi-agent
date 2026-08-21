@@ -35,6 +35,47 @@ export function taskMessage(task) {
   return `# Orchestrator task\n\n- workflow_id: ${task.workflowId}\n- task_id: ${task.taskId}\n- run_id: ${task.runId}\n- step_id: ${task.stepId}\n- assigned_agent: ${task.agentId}\n- attempt: ${task.attempt}\n- worktree_path_abs: ${task.worktreePathAbs}\n- context_manifest_path_abs: ${task.contextManifestPathAbs}\n- context_manifest_sha256: ${task.contextManifestSha256}\n\nComplete only this assigned step. Read the immutable context manifest. Do not communicate with other Agents, alter route or approval records, write to the Control Kernel, or call Monitor controls. Write exactly one result.schema.json object only to:\n\n${task.rawOutputPath}\n\nThe Orchestrator will validate and publish it. Do not write final outputs directly.\n`;
 }
 
+export async function runWithLeaseHeartbeat({ lease, executionId, run, signal = null, intervalMs = null }) {
+  if (!lease?.heartbeat || typeof run !== 'function') throw new TypeError('lease heartbeat and run callback are required');
+  const heartbeatIntervalMs = intervalMs ?? Math.max(10, Math.floor(Number(lease.scheduleSeconds ?? 120) * 1000 / 3));
+  const controller = new AbortController();
+  const relayAbort = () => controller.abort(signal?.reason);
+  if (signal?.aborted) relayAbort(); else signal?.addEventListener('abort', relayAbort, { once: true });
+  let stopped = false; let timer = null; let reportLeaseFailure;
+  const leaseFailure = new Promise((resolveFailure) => { reportLeaseFailure = resolveFailure; });
+  const lost = (cause = null) => Object.assign(new Error(`execution lease was lost: ${executionId}`), {
+    code: 'EXECUTION_LEASE_LOST', details: { execution_id: executionId, cause: cause ? { code: cause.code ?? null, message: cause.message } : null },
+  });
+  const schedule = () => { if (!stopped) { timer = setTimeout(renew, heartbeatIntervalMs); timer.unref?.(); } };
+  const renew = async () => {
+    if (stopped) return;
+    try {
+      const held = await lease.heartbeat({ executionId, phase: 'AGENT_RUNNING' });
+      if (!held) throw lost();
+      schedule();
+    } catch (error) {
+      stopped = true; controller.abort(); reportLeaseFailure(error.code === 'EXECUTION_LEASE_LOST' ? error : lost(error));
+    }
+  };
+  schedule();
+  const runnerPromise = Promise.resolve().then(() => run(controller.signal));
+  try {
+    const outcome = await Promise.race([
+      runnerPromise.then((value) => ({ type: 'runner', value }), (error) => ({ type: 'runner-error', error })),
+      leaseFailure.then((error) => ({ type: 'lease-error', error })),
+    ]);
+    if (outcome.type === 'lease-error') { try { await runnerPromise; } catch { /* lease error is authoritative */ } throw outcome.error; }
+    if (outcome.type === 'runner-error') throw outcome.error;
+    stopped = true; if (timer) clearTimeout(timer);
+    const held = await lease.heartbeat({ executionId, phase: 'RESULT_VALIDATION' });
+    if (!held) throw lost();
+    return outcome.value;
+  } finally {
+    stopped = true; if (timer) clearTimeout(timer);
+    signal?.removeEventListener('abort', relayAbort);
+  }
+}
+
 export function createOrchestrator({ projectRoot: projectRootInput, database = null, kernel = null, repository = null, worktrees = null, snapshots = null,
   runner = runOpenClawAgent, notificationRunner = runOpenClawAgent, hr = null, clock = () => new Date(), maxAttempts = 3, timeoutSeconds = 900, signal = null } = {}) {
   const projectRoot = resolve(projectRootInput ?? process.cwd());
@@ -142,9 +183,11 @@ export function createOrchestrator({ projectRoot: projectRootInput, database = n
     const prior = await selectedRepository.listTasks({ runId: run.runId });
     let stored = prior.find((task) => task.stepId === step.step_id);
     if (!stored) stored = await selectedRepository.createTask({ runId: run.runId, step, agentId: step.agent_id, inputCommit: run.candidateCommit ?? run.baseCommit, maxAttempts, payload: { step, prior_artifacts: prior.filter((task) => task.state === 'SUCCEEDED').map((task) => task.payload?.published_output_path_abs).filter(Boolean) } });
+    if (stored.state !== 'READY') return { stored, task: null };
     const artifactRootAbs = taskRoot(projectRoot, run.workflowId, stored.taskId);
     mkdirSync(artifactRootAbs, { recursive: true });
-    const prepared = selectedWorktrees.prepare({ workflowId: run.workflowId, taskId: stored.taskId, runId: run.runId, inputCommit: stored.inputCommit, targetProjectRootAbs: run.targetProjectRootAbs });
+    const prepared = selectedWorktrees.prepare({ workflowId: run.workflowId, taskId: stored.taskId, runId: run.runId, attempt: stored.attempt,
+      inputCommit: stored.inputCommit, targetProjectRootAbs: run.targetProjectRootAbs });
     const task = { workflowId: run.workflowId, runId: run.runId, taskId: stored.taskId, stepId: stored.stepId, kind: stored.kind, title: stored.title,
       agentId: stored.agentId, attempt: stored.attempt, routeHash: stored.routeHash, inputCommit: stored.inputCommit,
       originalRequest: run.request?.original_request ?? null,
@@ -165,7 +208,6 @@ export function createOrchestrator({ projectRoot: projectRootInput, database = n
 
   async function executeTask(run, step, stored) {
     const { stored: current, task } = await taskForStep(run, step);
-    assertOrchestratorWorker(registry, task.agentId);
     if (current.state === 'SUCCEEDED') return advanceAfterSuccess(run, current, current.payload?.result ?? { summary_for_user: 'Previously published task result.' });
     if (current.state === 'WAITING_HUMAN') return { state: 'WAITING_HUMAN', task: current };
     if (current.state === 'FAILED') {
@@ -179,6 +221,7 @@ export function createOrchestrator({ projectRoot: projectRootInput, database = n
       return { state: 'READY', task: retry };
     }
     if (current.state !== 'READY') return { state: current.state, task: current };
+    assertOrchestratorWorker(registry, task.agentId);
     const sessionId = taskSession(task);
     const executionId = selectedKernel.ids.executionIdFor(run.runId, { attempt: task.attempt, cycle: 0 });
     let execution;
@@ -196,7 +239,8 @@ export function createOrchestrator({ projectRoot: projectRootInput, database = n
     atomicWriteJson(join(dispatchRoot, `attempt-${task.attempt}.dispatch.json`), { schema_version: 1, execution_id: execution.executionId, session_id: sessionId, message_path_abs: messagePath, started_at: now(clock) });
     let taskSnapshot = null;
     try {
-      const result = await runner({ agentId: task.agentId, sessionId, messagePath, timeoutSeconds, signal });
+      const result = await runWithLeaseHeartbeat({ lease: selectedKernel.lease, executionId: execution.executionId, signal,
+        run: (heartbeatSignal) => runner({ agentId: task.agentId, sessionId, messagePath, timeoutSeconds, signal: heartbeatSignal }) });
       processLog(task, `attempt-${task.attempt}.stdout.log`, result.stdout); processLog(task, `attempt-${task.attempt}.stderr.log`, result.stderr);
       if (result.exitCode !== 0) throw Object.assign(new Error(`OpenClaw Agent exited with ${result.exitCode}`), { code: 'OPENCLAW_AGENT_EXIT_NONZERO', details: { stderr: String(result.stderr ?? '').slice(-4000) } });
       const ingested = ingestTaskOutput({ projectRoot, task, occurredAt: now(clock) });
@@ -207,7 +251,10 @@ export function createOrchestrator({ projectRoot: projectRootInput, database = n
         ? await selectedSnapshots.accept({ ...snapshotInput, outputCommit: ingested.value.output_commit ?? task.inputCommit })
         : await selectedSnapshots.recover(snapshotInput);
       taskSnapshot = snapshot;
-      await selectedKernel.lease.releaseLease({ executionId: execution.executionId, state: 'SUCCEEDED', exitCode: result.exitCode });
+      const released = await selectedKernel.lease.releaseLease({ executionId: execution.executionId, state: 'SUCCEEDED', exitCode: result.exitCode });
+      if (!released) throw Object.assign(new Error(`execution lease was lost before completion: ${execution.executionId}`), {
+        code: 'EXECUTION_LEASE_LOST', details: { execution_id: execution.executionId },
+      });
       const payload = { ...(current.payload ?? {}), result: ingested.value, snapshot, published_output_path_abs: ingested.outputPath, ingestion_receipt_path_abs: ingested.receiptPath, session_id: sessionId };
       const completed = await selectedRepository.updateTask(task.taskId, { state: 'SUCCEEDED', payload }, { eventType: 'TASK_SUCCEEDED', eventPayload: { result_status: ingested.value.result_status, output_path_abs: ingested.outputPath } });
       await selectedRepository.registerArtifact({ runId: run.runId, taskId: task.taskId, executionId: execution.executionId, kind: 'RESULT', uri: ingested.outputPath, sha256: sha256File(ingested.outputPath), sizeBytes: 0, mediaType: 'application/json' });
@@ -228,7 +275,7 @@ export function createOrchestrator({ projectRoot: projectRootInput, database = n
     } catch (error) {
       let recoverySnapshot = null;
       try {
-        recoverySnapshot = taskSnapshot ?? await selectedSnapshots.recover({ runId: run.runId, taskId: task.taskId, executionId: execution.executionId,
+        recoverySnapshot = taskSnapshot ?? error.details?.snapshot ?? await selectedSnapshots.recover({ runId: run.runId, taskId: task.taskId, executionId: execution.executionId,
           attempt: task.attempt, agentId: task.agentId, sessionId, inputCommit: task.inputCommit,
           worktreePathAbs: task.worktreePathAbs, targetProjectRootAbs: task.targetProjectRootAbs });
       } catch (recoveryError) {

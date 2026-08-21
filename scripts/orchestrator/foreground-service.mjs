@@ -18,6 +18,12 @@ function pathsFor(projectRoot) {
   };
 }
 
+export function acquireOrchestratorWriterLock(projectRootInput, { purpose = 'orchestrator-writer', staleMs } = {}) {
+  const projectRoot = resolve(projectRootInput);
+  const paths = pathsFor(projectRoot); mkdirSync(paths.root, { recursive: true });
+  return acquireWorkflowLock(paths.lock, { purpose, ...(staleMs === undefined ? {} : { staleMs }) });
+}
+
 function readJson(path) {
   try { return JSON.parse(readFileSync(path, 'utf8')); } catch { return null; }
 }
@@ -66,13 +72,16 @@ export async function runForegroundService({
   abort = null,
   clock = () => new Date(),
   waitFor = wait,
+  writerLock = null,
 } = {}) {
   if (!orchestrator || !hr) throw new TypeError('orchestrator and hr are required');
   const projectRoot = resolve(projectRootInput ?? orchestrator.projectRoot ?? process.cwd());
   if (!Number.isInteger(pollMs) || pollMs < 100) throw new RangeError('pollMs must be an integer of at least 100 ms');
   if (!Number.isInteger(shutdownTimeoutMs) || shutdownTimeoutMs < 1000) throw new RangeError('shutdownTimeoutMs must be an integer of at least 1000 ms');
   const paths = pathsFor(projectRoot); mkdirSync(paths.root, { recursive: true });
-  const lock = acquireWorkflowLock(paths.lock, { purpose: 'foreground-orchestrator-service', staleMs: Math.max(shutdownTimeoutMs * 2, 300_000) });
+  const lock = writerLock ?? acquireOrchestratorWriterLock(projectRoot, {
+    purpose: 'foreground-orchestrator-service', staleMs: Math.max(shutdownTimeoutMs * 2, 300_000),
+  });
   const instanceId = lock.owner.nonce;
   const processor = createManagerRequestProcessor({ orchestrator, projectRoot, managerWorkspace });
   let state = 'STARTING'; let lastError = null; let cycles = 0; let stopRequestedAt = null;

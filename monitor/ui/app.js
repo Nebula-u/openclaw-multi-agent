@@ -27,7 +27,6 @@
     const tasks = workflow?.tasks || []; const list = [];
     if (workflow?.manager_session_id) list.push({ agent_id: 'manager-agent', session_id: workflow.manager_session_id, label: 'Manager' });
     for (const task of tasks) if (task.session_id) list.push({ agent_id: task.assigned_agent, session_id: task.session_id, label: task.assigned_agent });
-    for (const job of (state.snapshot?.hr_jobs || []).filter((item) => item.runId === workflow?.run_id && item.hrSessionId)) list.push({ agent_id: 'hr-agent', session_id: job.hrSessionId, label: 'HR' });
     if (!workflow) for (const session of state.snapshot?.global_sessions || []) list.push({ agent_id: session.agent_id, session_id: session.session_id, label: `${session.agent_id} · UNBOUND` });
     return [...new Map(list.map((item) => [`${item.agent_id}:${item.session_id}`, item])).values()];
   }
@@ -56,10 +55,9 @@
     const alerts = (state.snapshot?.hr_alerts || []).filter((item) => !workflow || item.workflow_id === workflow.workflow_id || item.workflowId === workflow.workflow_id); $('alert-count').textContent = alerts.length;
     $('alert-list').innerHTML = alerts.length ? alerts.slice(-6).reverse().map((alert) => `<article class="alert"><b>${escapeHtml(alert.agent_id || 'Agent')}</b><span>${escapeHtml((alert.matches || []).map((item) => item.keyword).join(' · '))}</span><p>${escapeHtml((alert.matches || [])[0]?.context || alert.text || '')}</p></article>`).join('') : '<p class="empty-note">暂无即时预警</p>';
     const jobs = (state.snapshot?.hr_jobs || []).filter((job) => job.runId === workflow?.run_id); const reviews = jobs.filter((job) => job.kind === 'SESSION_REVIEW' || job.kind === 'TASK_REVIEW'); const reports = jobs.filter((job) => job.kind === 'DAILY_REVIEW'); const outputByJob = new Map((state.snapshot?.hr_outputs || []).map((output) => [output.job_id, output]));
-    const row = (job) => { const output = outputByJob.get(job.jobId); const latest = output?.messages?.at(-1); const session = job.hrSessionId || output?.session_id || null; return `<article class="review"><b>${escapeHtml(job.status)}</b><span>${escapeHtml(job.sourceAgentId || 'HR')}</span><small>${escapeHtml(session || job.jobId)}</small>${latest ? `<p class="review-text">${escapeHtml(latest.text)}</p>` : ''}${session ? `<button class="session-link" type="button" data-hr-session="${escapeHtml(session)}">查看 HR 原始会话</button>` : ''}</article>`; };
+    const row = (job) => { const output = outputByJob.get(job.jobId); const findings = output?.report?.findings || []; const summary = findings.map((finding) => `${finding.severity} ${finding.category}: ${finding.explanation}`).join('\n'); return `<article class="review"><b>${escapeHtml(job.status)}</b><span>${escapeHtml(job.sourceAgentId || 'HR')}</span><small>${escapeHtml(job.jobId)}</small>${summary ? `<p class="review-text">${escapeHtml(summary)}</p>` : ''}</article>`; };
     $('hr-review-list').innerHTML = reviews.length ? reviews.map(row).join('') : '<p class="empty-note">暂无 HR 复核</p>';
     $('daily-report-list').innerHTML = reports.length ? reports.map(row).join('') : '<p class="empty-note">任务结束后将显示日报</p>';
-    document.querySelectorAll('[data-hr-session]').forEach((button) => button.addEventListener('click', () => { state.selectedSessionKey = `hr-agent:${button.dataset.hrSession}`; localStorage.setItem('openclaw.monitor.session', state.selectedSessionKey); state.renderedSessionKey = null; void renderSession(workflow); }));
   }
   function renderSnapshots(workflow) {
     const values = (state.snapshot?.snapshots || []).filter((item) => item.runId === workflow?.run_id).slice(0, 12);

@@ -6,17 +6,18 @@
 
 - Control Kernel 已改为单机 SQLite，默认 `runtime/control/kernel.db`；
 - PostgreSQL 依赖、StateGraph 历史迁移、revision CAS、事件表/哈希链和 artifact CAS 副本已退出活动实现；
-- Git worktree + hidden ref 保存 accepted/no-change/failed-recovery/restore/revert 快照；
+- Git worktree + hidden ref 保存 accepted/no-change/failed-recovery/restore/revert 快照；每个 retry attempt 使用独立 worktree，Revert 校验当前 HEAD 祖先关系；
 - snapshot 可按 Agent/Session 查看，原 worktree 清理后仍从目标仓库读取 diff；
 - HR 可按 Session 读取脱敏 reasoning、最后输出和真实 Git 修改，只检查三类边界问题；
-- HR 默认手动，保留 task/daily/both 自动接口；
-- Monitor 使用只读 Kernel 连接并展示 workflow、Session、HR 和 Git snapshot。
+- HR 默认手动，保留 task/daily/both 自动接口；跨 trigger 按 snapshot + Session 去重，输出只接受三类结构化 findings；
+- Monitor 使用只读 Kernel 连接并展示 workflow、普通 Agent Session、校验后的 HR findings 和 Git snapshot；HR 原始 Session 不公开；
+- 所有 Kernel 写入口共用单写者锁；只读 CLI 不创建数据库；Git/SQLite 索引失败使用轻量补偿，不引入事件链或分布式事务框架。
 
 ## 部署边界
 
 只支持单机本地磁盘。用户并发由同一 OpenClaw Gateway/Orchestrator 处理，不需要多台服务器共享 SQLite。若未来需要多机写入，必须重新评估服务器数据库与分布式协调。
 
-新版本从空 SQLite 开始，不迁移旧数据库或 checkpoint 历史。代码灾备必须同时保存 Kernel、目标 Git 仓库和 artifacts。
+新版本从空 SQLite 开始，不迁移旧数据库或 checkpoint 历史。Git 与 SQLite 没有跨资源 ACID；代码灾备必须在一致性窗口内同时保存 Kernel、目标 Git 仓库和 artifacts。
 
 ## 验收
 

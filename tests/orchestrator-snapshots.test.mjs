@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -29,6 +29,12 @@ function memoryRepository() {
   };
 }
 
+test('retry attempts use different deterministic worktree paths', (t) => {
+  const repo = repository(t); const worktrees = createGitWorktreeManager({ projectRoot: repo.root });
+  const common = { workflowId: 'WF-retry', taskId: 'TASK-retry', runId: 'RUN-retry' };
+  assert.notEqual(worktrees.pathFor({ ...common, attempt: 1 }), worktrees.pathFor({ ...common, attempt: 2 }));
+});
+
 test('host verifies output commit, computes changes and pins an accepted snapshot', async (t) => {
   const repo = repository(t); const worktrees = createGitWorktreeManager({ projectRoot: repo.root });
   const prepared = worktrees.prepare({ workflowId: 'WF-one', taskId: 'TASK-one', runId: 'RUN-one', inputCommit: repo.base, targetProjectRootAbs: repo.root });
@@ -41,6 +47,20 @@ test('host verifies output commit, computes changes and pins an accepted snapsho
   assert.deepEqual(snapshot.changeSummary.modified, ['app.txt']);
   assert.equal(git(repo.root, 'rev-parse', snapshot.gitRef), outputCommit);
   assert.deepEqual(store.updates, [{ runId: 'RUN-one', patch: { candidateCommit: outputCommit } }]);
+});
+
+test('host rejects repository changes from a non-mutating Agent role', async (t) => {
+  const repo = repository(t); const worktrees = createGitWorktreeManager({ projectRoot: repo.root });
+  const prepared = worktrees.prepare({ workflowId: 'WF-review-only', taskId: 'TASK-review-only', runId: 'RUN-review-only', attempt: 1,
+    inputCommit: repo.base, targetProjectRootAbs: repo.root });
+  writeFileSync(join(prepared.worktreePathAbs, 'app.txt'), 'unauthorized review edit\n');
+  git(prepared.worktreePathAbs, 'add', 'app.txt'); git(prepared.worktreePathAbs, 'commit', '-m', 'unauthorized');
+  const outputCommit = git(prepared.worktreePathAbs, 'rev-parse', 'HEAD');
+  const service = createSnapshotService({ repository: memoryRepository(), worktrees });
+  await assert.rejects(service.accept({ snapshotId: 'SNP-review-only', runId: 'RUN-review-only', taskId: 'TASK-review-only',
+    executionId: 'EXE-review-only', attempt: 1, agentId: 'review-agent', sessionId: 'review-session', inputCommit: repo.base,
+    outputCommit, worktreePathAbs: prepared.worktreePathAbs, targetProjectRootAbs: repo.root }),
+  (error) => error.code === 'SNAPSHOT_AGENT_CHANGE_UNAUTHORIZED');
 });
 
 test('restore creates a new branch and worktree without rewriting current history', async (t) => {
@@ -69,6 +89,22 @@ test('snapshot diff remains available after the task worktree is removed', async
   git(repo.root, 'worktree', 'remove', '--force', prepared.worktreePathAbs);
   const value = await service.diff('SNP-diff');
   assert.match(value.patch, /\+historical diff/u);
+});
+
+test('text-only snapshot diff does not inline binary patch payloads', async (t) => {
+  const repo = repository(t); const worktrees = createGitWorktreeManager({ projectRoot: repo.root }); const store = memoryRepository();
+  store.targetProjectRootAbs = repo.root;
+  const prepared = worktrees.prepare({ workflowId: 'WF-binary', taskId: 'TASK-binary', runId: 'RUN-binary', attempt: 1,
+    inputCommit: repo.base, targetProjectRootAbs: repo.root });
+  writeFileSync(join(prepared.worktreePathAbs, 'image.bin'), Buffer.from([0, 1, 2, 3, 255]));
+  git(prepared.worktreePathAbs, 'add', 'image.bin'); git(prepared.worktreePathAbs, 'commit', '-m', 'binary');
+  const outputCommit = git(prepared.worktreePathAbs, 'rev-parse', 'HEAD'); const service = createSnapshotService({ repository: store, worktrees });
+  await service.accept({ snapshotId: 'SNP-binary', runId: 'RUN-binary', taskId: 'TASK-binary', executionId: 'EXE-binary', attempt: 1,
+    agentId: 'developer-agent', sessionId: 'binary-session', inputCommit: repo.base, outputCommit,
+    worktreePathAbs: prepared.worktreePathAbs, targetProjectRootAbs: repo.root });
+  const value = await service.diff('SNP-binary', { binary: false });
+  assert.doesNotMatch(value.patch, /GIT binary patch/u);
+  assert.match(value.patch, /Binary files/u);
 });
 
 test('revert requires exact confirmation and creates a new inverse commit', async (t) => {
@@ -105,4 +141,102 @@ test('host captures a failed dirty worktree as a pinned recovery commit', async 
   assert.equal(snapshot.snapshotKind, 'FAILED_RECOVERY');
   assert.deepEqual(snapshot.changeSummary.added, ['recovery.txt']);
   assert.equal(git(repo.root, 'rev-parse', snapshot.gitRef), snapshot.outputCommit);
+});
+
+test('snapshot persistence failure removes the newly pinned hidden ref', async (t) => {
+  const repo = repository(t); const worktrees = createGitWorktreeManager({ projectRoot: repo.root });
+  const prepared = worktrees.prepare({ workflowId: 'WF-compensate', taskId: 'TASK-compensate', runId: 'RUN-compensate', attempt: 1,
+    inputCommit: repo.base, targetProjectRootAbs: repo.root });
+  writeFileSync(join(prepared.worktreePathAbs, 'app.txt'), 'compensate\n'); git(prepared.worktreePathAbs, 'add', 'app.txt'); git(prepared.worktreePathAbs, 'commit', '-m', 'compensate');
+  const outputCommit = git(prepared.worktreePathAbs, 'rev-parse', 'HEAD');
+  const store = memoryRepository(); store.createSnapshot = async () => { throw Object.assign(new Error('index unavailable'), { code: 'SQLITE_INDEX_FAILED' }); };
+  const service = createSnapshotService({ repository: store, worktrees });
+  await assert.rejects(service.accept({ snapshotId: 'SNP-compensate', runId: 'RUN-compensate', taskId: 'TASK-compensate', executionId: null,
+    attempt: 1, agentId: 'developer-agent', sessionId: 'compensate-session', inputCommit: repo.base, outputCommit,
+    worktreePathAbs: prepared.worktreePathAbs, targetProjectRootAbs: repo.root }), (error) => error.code === 'SQLITE_INDEX_FAILED');
+  const ref = spawnSync('git', ['-C', repo.root, 'show-ref', '--verify', '--quiet', 'refs/openclaw/snapshots/SNP-compensate']);
+  assert.notEqual(ref.status, 0);
+});
+
+test('candidate update failure preserves the accepted snapshot for reconciliation', async (t) => {
+  const repo = repository(t); const worktrees = createGitWorktreeManager({ projectRoot: repo.root });
+  const prepared = worktrees.prepare({ workflowId: 'WF-candidate', taskId: 'TASK-candidate', runId: 'RUN-candidate', attempt: 1,
+    inputCommit: repo.base, targetProjectRootAbs: repo.root });
+  writeFileSync(join(prepared.worktreePathAbs, 'app.txt'), 'candidate\n'); git(prepared.worktreePathAbs, 'add', 'app.txt'); git(prepared.worktreePathAbs, 'commit', '-m', 'candidate');
+  const outputCommit = git(prepared.worktreePathAbs, 'rev-parse', 'HEAD'); const store = memoryRepository();
+  store.updateRun = async () => { throw Object.assign(new Error('candidate update failed'), { code: 'SQLITE_CANDIDATE_FAILED' }); };
+  const service = createSnapshotService({ repository: store, worktrees });
+  await assert.rejects(service.accept({ snapshotId: 'SNP-candidate', runId: 'RUN-candidate', taskId: 'TASK-candidate', executionId: null,
+    attempt: 1, agentId: 'developer-agent', sessionId: 'candidate-session', inputCommit: repo.base, outputCommit,
+    worktreePathAbs: prepared.worktreePathAbs, targetProjectRootAbs: repo.root }), (error) => {
+    assert.equal(error.code, 'SNAPSHOT_CANDIDATE_UPDATE_FAILED');
+    assert.equal(error.details.snapshot.snapshotId, 'SNP-candidate');
+    return true;
+  });
+  assert.equal(store.snapshots.get('SNP-candidate').outputCommit, outputCommit);
+  assert.equal(git(repo.root, 'rev-parse', 'refs/openclaw/snapshots/SNP-candidate'), outputCommit);
+});
+
+test('revert rejects a snapshot commit that is not an ancestor of current HEAD', async (t) => {
+  const repo = repository(t); const branch = git(repo.root, 'branch', '--show-current');
+  git(repo.root, 'checkout', '-b', 'snapshot-sibling'); writeFileSync(join(repo.root, 'sibling.txt'), 'sibling\n');
+  git(repo.root, 'add', 'sibling.txt'); git(repo.root, 'commit', '-m', 'sibling'); const sibling = git(repo.root, 'rev-parse', 'HEAD');
+  git(repo.root, 'checkout', branch);
+  const store = memoryRepository(); store.targetProjectRootAbs = repo.root;
+  store.snapshots.set('SNP-sibling', { snapshotId: 'SNP-sibling', runId: 'RUN-sibling', taskId: 'TASK-sibling', executionId: null,
+    attempt: 1, agentId: 'developer-agent', sessionId: 'sibling-session', inputCommit: repo.base, outputCommit: sibling,
+    gitRef: 'refs/openclaw/snapshots/SNP-sibling', snapshotKind: 'ACCEPTED', changeSummary: {}, worktreePathAbs: repo.root });
+  const service = createSnapshotService({ repository: store, worktrees: createGitWorktreeManager({ projectRoot: repo.root }) });
+  await assert.rejects(service.revert('SNP-sibling', { confirm: 'SNP-sibling' }), (error) => error.code === 'SNAPSHOT_REVERT_NOT_ANCESTOR');
+  assert.equal(git(repo.root, 'rev-parse', 'HEAD'), repo.base);
+});
+
+test('restore index failure removes the new restore branch and worktree', async (t) => {
+  const repo = repository(t); const worktrees = createGitWorktreeManager({ projectRoot: repo.root }); const store = memoryRepository();
+  store.targetProjectRootAbs = repo.root;
+  store.snapshots.set('SNP-restore-failure', { snapshotId: 'SNP-restore-failure', runId: 'RUN-restore-failure', taskId: 'TASK-restore-failure',
+    executionId: null, attempt: 1, agentId: 'developer-agent', sessionId: 'restore-failure-session', inputCommit: repo.base,
+    outputCommit: repo.base, gitRef: 'refs/openclaw/snapshots/SNP-restore-failure', snapshotKind: 'NO_CHANGE', changeSummary: {}, worktreePathAbs: repo.root });
+  store.createSnapshot = async () => { throw Object.assign(new Error('index unavailable'), { code: 'SQLITE_INDEX_FAILED' }); };
+  const service = createSnapshotService({ repository: store, worktrees });
+  await assert.rejects(service.restore('SNP-restore-failure'), (error) => error.code === 'SQLITE_INDEX_FAILED');
+  assert.equal(git(repo.root, 'branch', '--list', 'openclaw/restore/*'), '');
+  assert.doesNotMatch(git(repo.root, 'worktree', 'list', '--porcelain'), /runtime[\\/]restores/u);
+});
+
+test('revert index failure keeps the inverse commit and reports it for reconciliation', async (t) => {
+  const repo = repository(t); const worktrees = createGitWorktreeManager({ projectRoot: repo.root }); const store = memoryRepository();
+  store.targetProjectRootAbs = repo.root;
+  writeFileSync(join(repo.root, 'app.txt'), 'integrated\n'); git(repo.root, 'add', 'app.txt'); git(repo.root, 'commit', '-m', 'integrated');
+  const integrated = git(repo.root, 'rev-parse', 'HEAD');
+  store.snapshots.set('SNP-revert-index', { snapshotId: 'SNP-revert-index', runId: 'RUN-revert-index', taskId: 'TASK-revert-index',
+    executionId: null, attempt: 1, agentId: 'developer-agent', sessionId: 'revert-index-session', inputCommit: repo.base,
+    outputCommit: integrated, gitRef: 'refs/openclaw/snapshots/SNP-revert-index', snapshotKind: 'ACCEPTED', changeSummary: {}, worktreePathAbs: repo.root });
+  store.createSnapshot = async () => { throw Object.assign(new Error('index unavailable'), { code: 'SQLITE_INDEX_FAILED' }); };
+  const service = createSnapshotService({ repository: store, worktrees });
+  let reconciliationCommit = null;
+  await assert.rejects(service.revert('SNP-revert-index', { confirm: 'SNP-revert-index' }), (error) => {
+    assert.equal(error.code, 'SNAPSHOT_REVERT_INDEX_FAILED'); reconciliationCommit = error.details.revert_commit; return true;
+  });
+  assert.equal(git(repo.root, 'rev-parse', 'HEAD'), reconciliationCommit);
+  assert.equal(git(repo.root, 'show', 'HEAD:app.txt'), 'base');
+});
+
+test('revert candidate update failure preserves its indexed inverse snapshot', async (t) => {
+  const repo = repository(t); const worktrees = createGitWorktreeManager({ projectRoot: repo.root }); const store = memoryRepository();
+  store.targetProjectRootAbs = repo.root;
+  writeFileSync(join(repo.root, 'app.txt'), 'integrated\n'); git(repo.root, 'add', 'app.txt'); git(repo.root, 'commit', '-m', 'integrated');
+  const integrated = git(repo.root, 'rev-parse', 'HEAD');
+  store.snapshots.set('SNP-revert-candidate', { snapshotId: 'SNP-revert-candidate', runId: 'RUN-revert-candidate', taskId: 'TASK-revert-candidate',
+    executionId: null, attempt: 1, agentId: 'developer-agent', sessionId: 'revert-candidate-session', inputCommit: repo.base,
+    outputCommit: integrated, gitRef: 'refs/openclaw/snapshots/SNP-revert-candidate', snapshotKind: 'ACCEPTED', changeSummary: {}, worktreePathAbs: repo.root });
+  store.updateRun = async () => { throw Object.assign(new Error('candidate unavailable'), { code: 'SQLITE_CANDIDATE_FAILED' }); };
+  const service = createSnapshotService({ repository: store, worktrees });
+  await assert.rejects(service.revert('SNP-revert-candidate', { confirm: 'SNP-revert-candidate' }), (error) => {
+    assert.equal(error.code, 'SNAPSHOT_CANDIDATE_UPDATE_FAILED');
+    assert.equal(error.details.snapshot.snapshotKind, 'REVERT');
+    return true;
+  });
+  const indexed = [...store.snapshots.values()].find((value) => value.snapshotKind === 'REVERT');
+  assert.equal(indexed.outputCommit, git(repo.root, 'rev-parse', 'HEAD'));
 });

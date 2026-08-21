@@ -40,7 +40,8 @@ export function createGitWorktreeManager({ projectRoot: projectRootInput, runGit
     if (!FULL_SHA.test(head)) fail('TARGET_COMMIT_INVALID', 'target HEAD is not a full commit SHA');
     return { targetProjectRootAbs: top, headCommit: head };
   }
-  function pathFor(task) { return join(worktreesRoot, key('w', task.workflowId), key('t', task.taskId), key('r', task.runId), 'repo'); }
+  function pathFor(task) { return join(worktreesRoot, key('w', task.workflowId), key('t', task.taskId),
+    key('r', task.runId), key('a', String(task.attempt ?? 1)), 'repo'); }
   function prepare(task) {
     if (!FULL_SHA.test(task.inputCommit ?? '')) fail('TASK_INPUT_COMMIT_INVALID', 'task input commit must be a full SHA');
     const expected = pathFor(task); if (!inside(worktreesRoot, expected)) fail('TASK_WORKTREE_ESCAPE', 'worktree path escapes runtime/worktrees');
@@ -71,7 +72,12 @@ export function createGitWorktreeManager({ projectRoot: projectRootInput, runGit
   }
   function pinSnapshot({ targetProjectRootAbs, snapshotId, outputCommit }) {
     const ref = `refs/openclaw/snapshots/${snapshotId}`;
-    git(targetProjectRootAbs, ['update-ref', ref, outputCommit], 'pin snapshot commit');
+    git(targetProjectRootAbs, ['update-ref', ref, outputCommit, '0'.repeat(40)], 'pin snapshot commit');
+    return ref;
+  }
+  function unpinSnapshot({ targetProjectRootAbs, snapshotId, outputCommit }) {
+    const ref = `refs/openclaw/snapshots/${snapshotId}`;
+    git(targetProjectRootAbs, ['update-ref', '-d', ref, outputCommit], 'remove unindexed snapshot ref');
     return ref;
   }
   function captureRecovery({ inputCommit, worktreePathAbs, snapshotId }) {
@@ -104,11 +110,24 @@ export function createGitWorktreeManager({ projectRoot: projectRootInput, runGit
     return { branch, worktreePathAbs: realpathSync.native(expected), inputCommit: outputCommit, outputCommit,
       changeSummary: summarize(expected, outputCommit, outputCommit) };
   }
+  function cleanupRestore({ targetProjectRootAbs, branch, worktreePathAbs }) {
+    const expected = resolve(worktreePathAbs);
+    if (!inside(restoresRoot, expected) || !String(branch).startsWith('openclaw/restore/')) {
+      fail('SNAPSHOT_RESTORE_CLEANUP_UNSAFE', 'restore cleanup target is outside the managed restore area');
+    }
+    if (existsSync(expected)) git(targetProjectRootAbs, ['worktree', 'remove', '--force', expected], 'remove unindexed restore worktree');
+    const existing = invoke(targetProjectRootAbs, ['show-ref', '--verify', '--quiet', `refs/heads/${branch}`]);
+    if (existing.status === 0) git(targetProjectRootAbs, ['branch', '-D', branch], 'remove unindexed restore branch');
+  }
   function revertSnapshot({ targetProjectRootAbs, outputCommit }) {
     const cwd = realpathSync.native(resolve(targetProjectRootAbs));
     const status = git(cwd, ['status', '--porcelain=v1', '--untracked-files=all'], 'verify clean revert target');
     if (status) fail('SNAPSHOT_REVERT_TARGET_DIRTY', 'revert target contains uncommitted changes', { status });
     const inputCommit = git(cwd, ['rev-parse', '--verify', 'HEAD^{commit}'], 'resolve revert input');
+    const ancestry = invoke(cwd, ['merge-base', '--is-ancestor', outputCommit, inputCommit]);
+    if (ancestry.error || ancestry.status !== 0) {
+      fail('SNAPSHOT_REVERT_NOT_ANCESTOR', 'snapshot output commit is not an ancestor of current HEAD', { outputCommit, head: inputCommit });
+    }
     const result = invoke(cwd, ['-c', 'user.name=OpenClaw Snapshot', '-c', 'user.email=openclaw-snapshot@invalid', 'revert', '--no-edit', outputCommit]);
     if (result.error || result.status !== 0) {
       invoke(cwd, ['revert', '--abort']);
@@ -117,6 +136,6 @@ export function createGitWorktreeManager({ projectRoot: projectRootInput, runGit
     const revertedCommit = git(cwd, ['rev-parse', '--verify', 'HEAD^{commit}'], 'resolve revert output');
     return { inputCommit, outputCommit: revertedCommit, worktreePathAbs: cwd, changeSummary: summarize(cwd, inputCommit, revertedCommit) };
   }
-  return { inspectTarget, prepare, pathFor, worktreesRoot, restoresRoot, verifyCompletion, pinSnapshot, captureRecovery,
-    diffCommits, restoreSnapshot, revertSnapshot };
+  return { inspectTarget, prepare, pathFor, worktreesRoot, restoresRoot, verifyCompletion, pinSnapshot, unpinSnapshot, captureRecovery,
+    diffCommits, restoreSnapshot, cleanupRestore, revertSnapshot };
 }

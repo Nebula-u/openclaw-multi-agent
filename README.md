@@ -23,7 +23,7 @@ Read-only Monitor ── SQLite facts + redacted Sessions
 边界：
 
 - SQLite 只支持同一台机器上的本地磁盘，不得放在 SMB、NFS、云盘同步目录，也不得由多台服务器共享。
-- Orchestrator 是 Kernel 唯一常驻写者；Monitor 使用只读连接。
+- 前台 Orchestrator、一次性写 CLI、schema 初始化和 HR runner 共用单写者锁；Monitor 与只读 CLI 使用 `query_only` 连接。
 - Git 是代码版本、差异和回滚的唯一引擎；SQLite `snapshots` 只保存索引。
 - 没有事件哈希链、数据库 revision CAS 或 artifact 内容寻址副本。
 - 本版本从空 SQLite 开始，不迁移 PostgreSQL 或旧 StateGraph 历史数据。
@@ -113,7 +113,7 @@ npm run monitor:start
 
 ## Git 快照与回滚
 
-Agent 每次执行使用独立 detached worktree。成功结果只有在宿主验证以下条件后才会成为快照：
+Agent 每个 task/attempt 使用不同的 detached worktree，失败重试不复用旧 worktree。只有 Developer/Test 可以修改目标 Git；其他 Agent 必须形成 `NO_CHANGE`。成功结果只有在宿主验证以下条件后才会成为快照：
 
 - output commit 存在且为完整 SHA；
 - output commit 是 input commit 的后代；
@@ -131,7 +131,9 @@ node scripts/orchestrator-cli.mjs snapshot-restore --project-root . --snapshot-i
 node scripts/orchestrator-cli.mjs snapshot-revert --project-root . --snapshot-id SNP-... --confirm SNP-...
 ```
 
-`restore` 创建新的 `openclaw/restore/*` 分支和 worktree，不改当前分支。`revert` 创建反向 commit，要求精确确认；冲突时停止。系统不提供 `reset --hard` 回滚。
+`restore` 创建新的 `openclaw/restore/*` 分支和 worktree，不改当前分支。`revert` 只接受当前 HEAD 的祖先 snapshot，创建反向 commit并要求精确确认；冲突时停止。系统不提供 `reset --hard` 回滚。
+
+Git 与 SQLite 不做跨资源分布式事务。snapshot 索引失败会撤销本次 hidden ref，Restore 索引失败会清理新分支/worktree；Revert 已产生但索引失败时保留 commit 并返回 SHA 供人工对账，不自动改写历史。
 
 ## HR Agent
 
@@ -141,7 +143,7 @@ HR 默认只手动运行。它按 Agent Session 分批读取：
 - 最后一条 assistant 输出；
 - 宿主验证的 Git 修改摘要和 patch。
 
-它不会接收用户消息全文、system prompt、工具参数、工具输出或凭据。首版只检查：越权、边界不清晰、猜测/模糊结果。
+它还接收最小任务边界（角色、step、目标、rationale、mutation policy），不会接收用户消息全文、system prompt、工具参数、工具输出或凭据。二进制文件只提供变更摘要/stat，不内联 binary patch。首版只检查：越权、边界不清晰、猜测/模糊结果。
 
 手动审查：
 
@@ -153,6 +155,8 @@ node scripts/orchestrator-cli.mjs hr-run-pending --project-root .
 ```
 
 `hr-review` 默认入队后立即执行；加 `--enqueue-only true` 只入队。
+
+日期必须是有效的 `YYYY-MM-DD`，按 UTC 匹配 snapshot 创建日期。同一 `snapshot + Agent Session` 在 manual/task/daily 之间共享去重键。
 
 自动接口通过 `OPENCLAW_HR_AUTO_MODE` 控制：
 
@@ -167,6 +171,8 @@ node scripts/orchestrator-cli.mjs hr-run-pending --project-root .
 node scripts/orchestrator-cli.mjs hr-review-daily --project-root . --date 2026-08-21
 ```
 
+HR 必须返回结构化 JSON findings，category 只能是上述三类，且每项必须包含 severity、证据定位、最短脱敏摘录、解释和建议。非法输出只把 HR job 标为 `FAILED`，不会修改原 workflow/task。Monitor 只展示校验后的 findings，不开放 HR 原始 Session。
+
 ## 状态、请求和审批
 
 Manager 请求必须符合 `contracts/manager-request.schema.json`，并绑定原始 `manager_session_id` 和 `manager_session_key`。Orchestrator 校验并冻结路线，Worker 不能写 Kernel、派发其他 Agent 或修改审批。
@@ -177,6 +183,8 @@ Manager 请求必须符合 `contracts/manager-request.schema.json`，并绑定�
 node scripts/orchestrator-cli.mjs status --project-root . --workflow-id WF-...
 node scripts/orchestrator-cli.mjs kernel-status --project-root .
 ```
+
+只读命令不会创建缺失的 Kernel。所有写命令与正在运行的前台 Orchestrator 互斥；冲突返回 `WORKFLOW_LOCK_CONFLICT`。停止命令只写服务控制文件，因此仍可在前台服务持锁时使用。
 
 通知重试由 Orchestrator CLI 执行；Monitor 保持只读：
 

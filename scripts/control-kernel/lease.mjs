@@ -54,9 +54,21 @@ export function createLease({ database, scheduleSeconds = 120, clock = () => new
     },
     async reapExpiredLeases() {
       const timestamp = now();
-      const rows = database.all("SELECT * FROM executions WHERE state IN ('LEASED','RUNNING') AND lease_expires_at < ?", [timestamp]);
-      for (const row of rows) database.run(`UPDATE executions SET state='LEASE_EXPIRED',finished_at=?,error=? WHERE execution_id=?`,
-        [timestamp, encode({ code: 'EXECUTION_LEASE_EXPIRED', message: 'execution lease expired without heartbeat renewal', last_heartbeat_at: row.heartbeat_at }), row.execution_id]);
+      const rows = database.transaction(() => {
+        const expired = database.all("SELECT * FROM executions WHERE state IN ('LEASED','RUNNING') AND lease_expires_at < ?", [timestamp]);
+        const reaped = [];
+        for (const row of expired) {
+          const error = { code: 'EXECUTION_LEASE_EXPIRED', message: 'execution lease expired without heartbeat renewal', last_heartbeat_at: row.heartbeat_at };
+          const result = database.run(`UPDATE executions SET state='LEASE_EXPIRED',finished_at=?,error=?
+            WHERE execution_id=? AND state IN ('LEASED','RUNNING') AND lease_expires_at < ?`,
+          [timestamp, encode(error), row.execution_id, timestamp]);
+          if (!result.changes) continue;
+          database.run("UPDATE tasks SET state='FAILED',last_error=?,updated_at=? WHERE task_id=? AND state='RUNNING'",
+            [encode(error), timestamp, row.task_id]);
+          reaped.push(row);
+        }
+        return reaped;
+      });
       return rows.map((row) => read(row.execution_id));
     },
   };

@@ -10,6 +10,11 @@
 - 快照 diff 改从目标 Git 仓库读取，清理原 task worktree 后仍可查看；SQLite 只存 Agent/Session/task/execution 与 commit 的索引和变更摘要。
 - 新增 HR Session dossier：只读取脱敏的 assistant reasoning、最后输出和真实 Git 修改；按 Session 分批、全 Session reasoning 共用 12k 字符预算，并拒绝真实路径逃逸。
 - HR 仅检查 `UNAUTHORIZED_ACTION`、`UNCLEAR_BOUNDARY`、`SPECULATIVE_OR_VAGUE`，默认手动；保留 `off/task/daily/both` 自动调度接口。
+- HR dossier 增加最小任务边界与截断元数据，二进制 patch 不内联；manual/task/daily 跨触发方式按 snapshot + Session 去重，日期按 UTC 严格校验。
+- HR Agent 输出改为解析 OpenClaw JSON envelope 并强校验三类 finding；非法输出只失败 HR job。Monitor 不再读取 HR 原始 Session，只展示校验后的 findings。
+- 所有 Kernel 写入口共用单写者锁；status/kernel-status/snapshot list/show/diff 使用只读连接且不会创建缺失数据库。
+- execution 增加 lease heartbeat，reaper 同一事务回收 execution 与 RUNNING task；重试 attempt 使用独立 worktree。
+- Git/SQLite 增加轻量补偿：索引失败撤销新 hidden ref，Restore 清理新分支/worktree，Revert 要求祖先关系且索引失败保留反向 commit SHA 供对账。
 - Monitor 改用只读 SQLite Kernel，展示 Git snapshot/HR，并提供只读 snapshot list/detail/diff；不负责 workflow、HR、restore 或 revert 写操作。
 - 更新所有受影响 Agent 规则、安装包、README、架构、监控、Git/HR 运维文档和 ADR；旧 PostgreSQL ADR/计划明确标为已取代。
 
