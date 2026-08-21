@@ -12,7 +12,7 @@ Make package installation in the `openclaw-test-node:22-slim` sandbox build use 
 
 ## Design
 
-Immediately before `apt-get update`, the Dockerfile will replace the Debian repository host in `/etc/apt/sources.list` from `deb.debian.org/debian` to `mirrors.cloud.tencent.com/debian`.
+Immediately before `apt-get update`, the Dockerfile will replace the Debian repository host in `/etc/apt/sources.list.d/debian.sources` from `deb.debian.org` to `mirrors.cloud.tencent.com`. This updates both the normal Debian and Debian security repositories supplied by the current `node:22-bookworm-slim` base image.
 
 The existing package-install layer then uses the Tencent Cloud mirror without introducing new build arguments or runtime configuration.
 
