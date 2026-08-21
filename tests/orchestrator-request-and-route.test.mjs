@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import test from 'node:test';
@@ -96,6 +96,58 @@ test('Manager is isolated and cannot use direct development tools', () => {
   assert.equal(managerPackage.tools_config?.deny?.includes('exec'), true);
   assert.equal(managerPackage.tools_config?.deny?.includes('apply_patch'), true);
   assert.equal(managerPackage.tools_config?.deny?.includes('browser'), true);
+});
+
+test('Manager workspace documents the current request queue protocol', () => {
+  const managerRules = readFileSync(join(ROOT, 'agents', 'manager-agent', 'workspace', 'AGENTS.md'), 'utf8');
+  const managerTools = readFileSync(join(ROOT, 'agents', 'manager-agent', 'workspace', 'TOOLS.md'), 'utf8');
+  const managerTemplates = readFileSync(join(ROOT, 'agents', 'manager-agent', 'workspace', 'templates', 'README.md'), 'utf8');
+  assert.equal(existsSync(join(ROOT, 'templates', 'manager-request.change.json')), true);
+  assert.equal(existsSync(join(ROOT, 'templates', 'manager-request.decision.json')), true);
+  assert.match(managerRules, /session_status/u);
+  assert.match(managerRules, /templates\/manager-request\.json/u);
+  assert.match(managerRules, /\.orchestrator\/receipts/u);
+  assert.match(managerRules, /requirement-agent/u);
+  assert.doesNotMatch(managerTools, /\.agent-raw\/route-plan\.json\.raw/u);
+  assert.doesNotMatch(managerTools, /validate-request/u);
+  assert.match(managerTemplates, /manager-request\.change\.json/u);
+  assert.match(managerTemplates, /manager-request\.decision\.json/u);
+});
+
+test('Manager CREATE reference is accepted and routes requirements to requirement-agent', async () => {
+  const createReference = JSON.parse(readFileSync(join(ROOT, 'templates', 'manager-request.json'), 'utf8'));
+  const changeReference = JSON.parse(readFileSync(join(ROOT, 'templates', 'manager-request.change.json'), 'utf8'));
+  assert.equal(typeof changeReference.route_plan, 'object');
+
+  const request = structuredClone(createReference);
+  request.request_id = 'REQ-manager-feature-001';
+  request.workflow_id = 'WF-manager-feature-001';
+  request.submitted_at = '2026-08-21T00:00:00.000Z';
+  request.manager_session_id = 'manager-session';
+  request.manager_session_key = 'agent:manager:source';
+  request.project_path_abs = ROOT;
+  request.original_request = 'Build a persistent web demo.';
+  request.route_plan.workflow_id = request.workflow_id;
+  request.route_plan.summary = 'Build a persistent web demo.';
+  request.route_plan.display_title = 'Web Demo';
+  request.user_authorized = { confirmed: true, actor: 'human:liuxu', message: 'Run the confirmed route.' };
+
+  const calls = [];
+  const orchestrator = {
+    projectRoot: ROOT,
+    async createRun(value) { calls.push(value); return { runId: 'RUN-manager-feature', routeHash: 'b'.repeat(64) }; },
+    async reviseRun() { throw new Error('not used'); },
+    async decide() { throw new Error('not used'); },
+    async tickAll() { return []; },
+  };
+  const workspace = mkdtempSync(join(tmpdir(), 'orchestrator-manager-reference-'));
+  const queue = createManagerRequestProcessor({ orchestrator, projectRoot: ROOT, managerWorkspace: workspace });
+  atomicWriteJson(join(queue.requests, 'manager-feature.json'), request);
+  const receipt = await queue.processFile('manager-feature.json');
+
+  assert.equal(receipt.status, 'ACCEPTED');
+  assert.equal(calls.length, 1);
+  assert.equal(compileRoutePlan(ROOT, calls[0].route_plan).steps[0].agent_id, 'requirement-agent');
 });
 
 test('foreground service polls automatically and exits cleanly after a stop request', async () => {

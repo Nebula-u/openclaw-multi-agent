@@ -1,21 +1,19 @@
 {
   "schema_version": 1,
   "request_id": "REQ-<唯一标识>",
-  "request_type": "CREATE",
-  "workflow_id": "WF-<唯一标识>",
+  "request_type": "CHANGE",
+  "workflow_id": "WF-<当前工作流>",
   "submitted_by": "manager-agent",
   "submitted_at": "2026-01-01T00:00:00Z",
   "manager_session_id": "<current-openclaw-session-id>",
   "manager_session_key": "<current-openclaw-session-key>",
   "manager_delivery": null,
-  "project_path_abs": "<用户目标项目绝对路径>",
-  "original_request": "<用户首次需求原文>",
   "route_plan": {
     "schema_version": 1,
-    "workflow_id": "WF-<唯一标识>",
+    "workflow_id": "WF-<当前工作流>",
     "request_class": "FEATURE",
-    "summary": "<只概括用户请求的工作流摘要>",
-    "display_title": "<十字以内标题>",
+    "summary": "<只概括用户确认的修订请求>",
+    "display_title": "<保留首次请求的十字以内标题>",
     "risk_flags": [],
     "steps": [
       { "step_id": "requirements", "kind": "REQUIREMENTS", "title": "由需求 Agent 给出推荐需求", "rationale": "需求细节由 requirement-agent 分析。", "human_approval_after": true, "approval_reason": "用户确认推荐需求后才进入后续阶段。" },
@@ -32,6 +30,6 @@
   "user_authorized": {
     "confirmed": true,
     "actor": "human:cli-owner",
-    "message": "<用户明确授权原文>"
+    "message": "<用户明确确认修订路线的原文>"
   }
 }
