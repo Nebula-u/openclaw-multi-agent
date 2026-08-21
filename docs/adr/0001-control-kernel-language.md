@@ -1,8 +1,10 @@
 # ADR 0001 · Control Kernel 用 JavaScript 而非 Python
 
-- 状态：已接受
+- 状态：已由 [ADR 0005](./0005-single-machine-sqlite.md) 取代
 - 日期：2026-08-18
 - 相关：`scripts/control-kernel/*`、`scripts/stategraph/events.mjs`、`docs/plan/06-handoff-status.md` §8
+
+> 本文仅保留历史背景；当前实现不含 StateGraph、PostgreSQL pool 或事件哈希链。
 
 ## 背景
 

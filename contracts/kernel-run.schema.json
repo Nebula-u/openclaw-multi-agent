@@ -6,7 +6,7 @@
   "type": "object",
   "additionalProperties": false,
   "required": [
-    "run_id", "langgraph_thread_id", "state", "request",
+    "run_id", "workflow_id", "state", "request",
     "request_sha256", "target_project_root_abs", "base_commit",
     "created_at", "updated_at"
   ],
@@ -14,12 +14,12 @@
     "run_id": {
       "type": "string",
       "pattern": "^RUN-[A-Za-z0-9][A-Za-z0-9-]*$",
-      "description": "不可变主键；值等于 StateGraph threadId。"
+      "description": "Kernel 生成的不可变运行主键。"
     },
-    "langgraph_thread_id": {
+    "workflow_id": {
       "type": "string",
-      "minLength": 1,
-      "description": "LangGraph 线程标识，与 run_id 1:1。"
+      "pattern": "^WF-[A-Za-z0-9][A-Za-z0-9-]*$",
+      "description": "Orchestrator 冻结的 workflow 标识，与 run_id 1:1。"
     },
     "state": {
       "type": "string",

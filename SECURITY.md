@@ -32,7 +32,7 @@
 - 对来源不可信、可能执行任意安装/破坏性行为的测试，必须先人工审批。
 - **不得**把当前状态描述为"完全隔离"。未来运维/加固阶段可另行加入 sandbox。
 
-详见 [docs/unsandboxed-test-policy.md](docs/unsandboxed-test-policy.md) 与 [docs/threat-model.md](docs/threat-model.md)。
+历史威胁分析见 [docs/archive/legacy/unsandboxed-test-policy.md](docs/archive/legacy/unsandboxed-test-policy.md) 与 [docs/archive/legacy/threat-model.md](docs/archive/legacy/threat-model.md)；当前运行边界以本文、README 与 `docs/architecture.md` 为准。
 
 ## 4. Prompt Injection 防护
 
@@ -42,16 +42,16 @@
 
 配置与日志中不得出现 token/password/cookie/private key。命令日志需应用脱敏（`redactions_applied`）。若在目标仓库中发现明文凭证，作为安全发现上报，不复制其明文到 artifact。
 
-### 5.1 PostgreSQL 凭据
+### 5.1 SQLite 与 Git 快照保护
 
-Control Kernel 与 LangGraph Checkpointer 共用一个 PostgreSQL 实例，连接串含数据库口令，按以下要求处置：
+Control Kernel 默认使用本机 `runtime/control/kernel.db`，不包含数据库账号或连接口令。按以下要求处置：
 
-- 连接串只写入本机 `.env`，该文件已在 `.gitignore` 中，**不得提交进仓库**。仓库内只保留 `.env.example`，其中的口令必须是占位值。
-- 不得把 `OPENCLAW_PG_URL` 写进文档、脚本默认值、测试 fixture、commit message 或 issue 正文。文档中一律用 `postgresql://user:password@host:5432/db` 形式的占位串。
-- 日志与错误对象不得回显完整连接串。连接失败时只记录错误 code（如 `ECONNREFUSED`、`KERNEL_PG_URL_MISSING`）与目标 schema 名。
-- 数据库账号应按最小权限授予：仅需要 `kernel` 与 `langgraph` 两个 schema 的 DDL/DML 权限，不需要超级用户。生产环境不要复用 `postgres` 超级用户账号。
-- `npm run kernel:schema` 会执行 DDL，运行前确认目标库正确；该命令幂等（全部 `IF NOT EXISTS`），但仍应避免指向生产库做试验。
-- 更换口令后需同时更新 `.env` 并重启 Monitor 与 workflow 进程；连接池不会热重载凭据。
+- SQLite 文件及其 `-wal` / `-shm` 文件只能位于部署服务器的本地磁盘，不得放在 SMB、NFS、云盘同步目录或供多台机器共享。
+- Orchestrator 是唯一写进程；Monitor 只能通过只读连接查看事实，不得提供数据库写接口。
+- `npm run kernel:schema` 只初始化指定的空 SQLite；运行前仍需确认 `OPENCLAW_KERNEL_DB_PATH` 指向本项目的预期 runtime。
+- 文件权限应限制为部署账号和必要的运维账号。日志不得复制 HR dossier 中的 reasoning 原文或任何脱敏前 Session 内容。
+- 完整备份必须在一致性窗口内同时覆盖 Kernel SQLite、目标 Git 仓库（含 `refs/openclaw/snapshots/*`）和 artifacts；只备份数据库不能恢复代码内容。
+- Restore 创建新分支/worktree；Revert 创建反向 commit。禁止用 `git reset --hard` 作为快照恢复方式。
 
 > 注：本机 `openclaw doctor --lint` 预先存在与本项目无关的警告（`gateway.auth.token` 明文、缺失 `policy.jsonc`）。这些属于用户既有 OpenClaw 环境，本项目不修改它们，仅在兼容性报告中记录。
 

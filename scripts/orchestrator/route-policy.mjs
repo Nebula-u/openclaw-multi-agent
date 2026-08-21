@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import Ajv from 'ajv';
 import addFormats from 'ajv-formats';
-import { canonicalJson, sha256 } from '../runtime-core/hash-chain.mjs';
+import { canonicalJson, sha256Text } from '../runtime-core/atomic-store.mjs';
 
 export const ROUTE_ORDER = ['REQUIREMENTS', 'ARCHITECTURE', 'DESIGN', 'DEVELOPMENT', 'TEST', 'CODE_REVIEW', 'RELEASE'];
 export const TASK_AGENT_BY_KIND = Object.freeze({
@@ -89,5 +89,5 @@ export function compileRoutePlan(projectRootInput, value) {
       execution_mode: 'SERIAL',
     })),
   };
-  return { ...body, route_hash: sha256(canonicalJson(body)), frozen_at: new Date().toISOString() };
+  return { ...body, route_hash: sha256Text(canonicalJson(body)), frozen_at: new Date().toISOString() };
 }

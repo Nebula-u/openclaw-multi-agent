@@ -1,73 +1,23 @@
 # 当前进度评估
 
-> 评估日期：2026-08-14（2026-08-17 补注：本评估未覆盖之后接入的 OpenClaw WebChat 自动接入插件，见下方补注段落）
+> 评估日期：2026-08-21
 
-## 结论
+## 当前实现
 
-StateGraph/checkpointer 单框架重建已完成代码、规则、安装、测试和主要文档迁移。旧控制框架和 Java monitor 代理已删除；Node monitor、固定 dispatch、Git candidate、证据接收和 Docker TEST sandbox 均已进入主测试入口。
+- Control Kernel 已改为单机 SQLite，默认 `runtime/control/kernel.db`；
+- PostgreSQL 依赖、StateGraph 历史迁移、revision CAS、事件表/哈希链和 artifact CAS 副本已退出活动实现；
+- Git worktree + hidden ref 保存 accepted/no-change/failed-recovery/restore/revert 快照；
+- snapshot 可按 Agent/Session 查看，原 worktree 清理后仍从目标仓库读取 diff；
+- HR 可按 Session 读取脱敏 reasoning、最后输出和真实 Git 修改，只检查三类边界问题；
+- HR 默认手动，保留 task/daily/both 自动接口；
+- Monitor 使用只读 Kernel 连接并展示 workflow、Session、HR 和 Git snapshot。
 
-当前状态适合继续进行真实 OpenClaw/Docker 集成演练，但还不能宣称生产验收完成：本机 Docker Desktop Linux daemon 未启动，因此真实容器创建和完整 test-agent E2E 尚无本轮证据。
+## 部署边界
 
-> **2026-08-17 补注：WebChat 接入未纳入本次评估。** 2026-08-14 18:00 后新增了 `extensions/stategraph-webchat` Gateway 插件（`scripts/stategraph/webchat-bridge.mjs`），用于在 manager-agent 对话前接管 WebChat 入站消息并绑定 StateGraph workflow，详见 README.md「OpenClaw WebChat 自动接入」一节。该功能的验收状态本评估未覆盖，需单独核实。
->
-> **2026-08-17 补注：与交接文档的口径差异。** `docs/report/2026-08-14-stategraph-rebuild-handoff.md` 第 6、8 节列出了若干"仍需重做"的遗留风险（worker 规则尚未同步、旧 supervisor/wake 模块引用审计等），本评估的"已完成"表格未逐条对应，读者不应仅凭本文档认为重建已无遗留缺口，请一并阅读该交接文档。
+只支持单机本地磁盘。用户并发由同一 OpenClaw Gateway/Orchestrator 处理，不需要多台服务器共享 SQLite。若未来需要多机写入，必须重新评估服务器数据库与分布式协调。
 
-## 已完成
+新版本从空 SQLite 开始，不迁移旧数据库或 checkpoint 历史。代码灾备必须同时保存 Kernel、目标 Git 仓库和 artifacts。
 
-| 领域 | 当前实现 |
-| --- | --- |
-| 状态权威 | 最新 LangGraph checkpoint；SQLite checkpointer 持久化并带 SHA-256 事件链 |
-| 动态路线 | Manager 提案，代码校验，人工确认后冻结 route hash/steps/approvals |
-| 派发 | task kind 到 Agent 固定映射；dispatch node 是唯一调用入口 |
-| 重试 | JSON 同 session 2 次；Agent 初次加 2 次自动重试；失败后人工升级 |
-| Git | 每 run detached worktree；DEVELOPMENT/TEST commit ancestry 与 HEAD 绑定 |
-| 结果接收 | raw 原文保留、Ajv、身份/路径/字节 SHA、CommandRecord/evidence 校验、原子发布 |
-| TEST 隔离 | Docker fail-closed policy、动态 mount、runtime attestation、全局 lease 和异常恢复 |
-| Manager 成本 | 200k context、32k output、60% soft budget、12k prompt 字符硬上限 |
-| 安装 | 显式 checkpointer 依赖、模型目录同步、Windows DACL / Unix 0700 |
-| 监控 | Node.js GET-only monitor、SSE、continuation、会话、artifact 和健康分类 |
+## 验收
 
-## 重建与提交
-
-- `d776149`：固化 StateGraph/checkpointer、worktree、manifest、Docker sandbox 和 Node monitor 基线。
-- `77a58fc`：统一全部 worker 的 checkpoint/dispatch 可信边界。
-- `2cc17ac`：删除旧控制框架、workflow runner 和 Java monitor 代理。
-- `6976bff`：统一 200k 模型上限、安装模型目录同步和 raw artifact ACL。
-- `c6b3b2f`：补齐候选 commit、证据 SHA、sandbox 异常恢复和 monitor 性能测试。
-
-## 自动化验证
-
-当前 `npm test` 覆盖（2026-08-14 时点数字；2026-08-17 复核，随后续提交新增用例，StateGraph 侧已增至约 31 项顶层 test，具体以 `tests/stategraph-*.test.mjs` 当前文件为准）：
-
-- Runtime Guard：5 项；
-- Agent JSON：12 项；
-- runtime bundle：3 项；
-- StateGraph：26 项（评估当时）；
-- Node monitor：13 项；
-- install validation：6 项。
-
-StateGraph 新增覆盖包括完整 DEVELOPMENT/REVIEW/TEST/RELEASE candidate 链、TEST 修改推进 candidate、非法/非后代/HEAD 不匹配 commit、缺失或 symlink 引用、CommandRecord/evidence SHA、sandbox 并发、陈旧 lease 和异常 attestation 回滚。
-
-Monitor 性能 fixture 为 500 workflows / 2000 tasks，本机 refresh 约 0.4 秒，测试预算 2.5 秒。
-
-## 尚未完成
-
-1. Docker daemon 启动后构建 `openclaw-test-node:22-slim`，执行真实 test-agent E2E，并保存 `docker inspect`、OpenClaw sandbox explain/list 和 Agent result attestation。
-2. 使用真实 OpenClaw Gateway 完成一条含 DEVELOPMENT、REVIEW、TEST、RELEASE 和人工路线确认的业务 workflow。
-3. 根据实际部署账户验证 Linux systemd、artifact `0700`、日志轮换和反向代理认证。
-4. 生产使用前完成服务账户、备份、磁盘容量、告警和恢复演练。
-
-## 风险判断
-
-- 自动化 command-boundary 测试证明代码在 mock CLI 响应下 fail closed，但不替代真实 Docker daemon。
-- SQLite checkpointer 设计目标是本机单写 workflow；不支持多主机分布式写入。
-- runtime/human capability 与 artifact ACL 仍处于同 OS 账户信任模型；生产部署应使用专用服务账户。
-- 历史报告可以保留旧架构语境，但不得作为当前运行说明或恢复步骤。
-
-## 下一步验收顺序
-
-1. 启动 Docker daemon并构建测试镜像。
-2. 运行完整自动化与真实 test-agent E2E。
-3. 运行真实 Gateway workflow，验证 checkpoint 恢复和路线/步骤审批。
-4. 启动 Node monitor，验证 GET-only、SSE、窄屏/宽屏和长会话滚动。
-5. 保存验收证据后再评估发布或部署。
+仓库的最终验收以当前 `npm test`、安装 dry-run、validate 脚本与 `git diff --check` 的新鲜结果为准，不引用旧进度报告中的测试数量。真实服务器部署后仍应补一次 OpenClaw Gateway、Agent Session 目录、Git restore/revert 和定时调度的端到端演练。

@@ -1,5 +1,7 @@
 # 06 · 交接状态报告
 
+> 历史交接：当前状态见 `docs/current-progress-assessment.md`，不得继续执行本文 PostgreSQL/StateGraph 待办。
+
 > 生成时间：2026-08-17 18:00（2026-08-18 更新：P0–P10 全部完成，§9 三个悬置问题已裁决）
 > 分支：`workbuddy/control-kernel-postgres`
 > 用途：记录 Control Kernel + PostgreSQL 重构的交接状态

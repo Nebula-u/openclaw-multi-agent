@@ -54,8 +54,9 @@ export function loadMonitorConfig(overrides = {}) {
   return {
     projectRoot,
     runtimeRoot,
-    // PG 是默认事实源；databasePath 仅作为显式 SQLite 兼容入口保留。
-    databasePath: overrides.databasePath ?? fileConfig.database_path ?? null,
+    // Workflow facts use the single-machine Control Kernel SQLite database.
+    databasePath: overrides.databasePath === ':memory:' ? ':memory:'
+      : resolve(expandEnvironment(overrides.databasePath ?? fileConfig.database_path ?? join(runtimeRoot, 'control', 'kernel.db'))),
     monitorDatabasePath: overrides.monitorDatabasePath === ':memory:' ? ':memory:'
       : resolve(expandEnvironment(overrides.monitorDatabasePath ?? fileConfig.monitor_database_path ?? join(runtimeRoot, 'monitor', 'monitor.db'))),
     sessionRoot: resolve(expandEnvironment(overrides.sessionRoot ?? environment('OPENCLAW_SESSION_ROOT') ?? fileConfig.session_root
@@ -65,7 +66,6 @@ export function loadMonitorConfig(overrides = {}) {
     allowedOrigins,
     reconcileIntervalMs: integer(overrides.reconcileIntervalMs ?? fileConfig.reconcile_interval_ms, 2000),
     sseRetention: integer(overrides.sseRetention ?? fileConfig.sse_retention, 2000),
-    requestBodyLimit: integer(overrides.requestBodyLimit ?? fileConfig.request_body_limit, 1024 * 1024),
     heartbeatStaleSeconds: integer(overrides.heartbeatStaleSeconds ?? fileConfig.heartbeat_stale_seconds, 180),
     possiblyStalledSeconds: integer(overrides.possiblyStalledSeconds ?? fileConfig.possibly_stalled_seconds, 300),
     startingTimeoutSeconds: integer(overrides.startingTimeoutSeconds ?? fileConfig.starting_timeout_seconds, 120),
@@ -73,12 +73,5 @@ export function loadMonitorConfig(overrides = {}) {
     telemetryMaxEvents: integer(overrides.telemetryMaxEvents ?? fileConfig.telemetry_max_events, 100000),
     activityRetentionDays: integer(overrides.activityRetentionDays ?? fileConfig.activity_retention_days, 30),
     maintenanceIntervalMs: integer(overrides.maintenanceIntervalMs ?? fileConfig.maintenance_interval_ms, 3600000),
-    // The sole write exception is an authenticated retry of notifications that
-    // already exist in the Manager outbox. All workflow mutation stays outside
-    // Monitor in the Orchestrator request queue.
-    internalRetryToken: overrides.internalRetryToken ?? environment('MONITOR_INTERNAL_RETRY_TOKEN')
-      ?? fileConfig.internal_retry_token ?? null,
-    internalRetryTokenHeader: overrides.internalRetryTokenHeader ?? environment('MONITOR_INTERNAL_RETRY_TOKEN_HEADER')
-      ?? fileConfig.internal_retry_token_header ?? 'x-monitor-internal-token',
   };
 }

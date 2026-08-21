@@ -6,7 +6,7 @@ import { createManagerRequestProcessor } from './orchestrator/manager-request-qu
 import { validateManagerRequestFile } from './orchestrator/request-validation.mjs';
 import { createOrchestrator } from './orchestrator/service.mjs';
 import { createHrService } from './hr/service.mjs';
-import { createKernelPool, resolveKernelConfig } from './control-kernel/pool.mjs';
+import { openKernelDatabase, resolveKernelConfig } from './control-kernel/database.mjs';
 import { readForegroundServiceStatus, requestForegroundServiceStop, runForegroundService } from './orchestrator/foreground-service.mjs';
 
 function parseArgs(argv) {
@@ -21,7 +21,10 @@ function emit(value, status = 0) { process.stdout.write(`${JSON.stringify(value,
 
 export async function main(argv = process.argv.slice(2)) {
   const { command, options } = parseArgs(argv); const projectRoot = resolve(options['project-root'] ?? process.cwd());
-  if (command === 'init') return emit({ ok: true, command, runtime: 'orchestrator-postgresql', project_root: projectRoot });
+  if (command === 'init') {
+    const config = resolveKernelConfig({ projectRoot }); const database = openKernelDatabase(config); database.close();
+    return emit({ ok: true, command, runtime: 'orchestrator-sqlite', project_root: projectRoot, database_path: config.databasePath });
+  }
   if (command === 'service-status') return emit({ ok: true, command, service: readForegroundServiceStatus(projectRoot) });
   if (command === 'stop') return emit({ ok: true, command, result: requestForegroundServiceStop(projectRoot) });
   if (command === 'validate-request') {
@@ -31,30 +34,21 @@ export async function main(argv = process.argv.slice(2)) {
   }
   if (command === 'kernel-status') {
     const config = resolveKernelConfig({ projectRoot });
-    const pool = createKernelPool(config);
+    const database = openKernelDatabase(config);
     try {
-      const { rows } = await pool.query(
-        `SELECT current_database() AS database, current_schema() AS schema,
-          current_setting('search_path') AS search_path,
-          to_regclass('runs') AS runs, to_regclass('tasks') AS tasks,
-          to_regclass('executions') AS executions, to_regclass('artifacts') AS artifacts,
-          to_regclass('events') AS events, to_regclass('approvals') AS approvals,
-          to_regclass('notifications') AS notifications, to_regclass('hr_jobs') AS hr_jobs`,
-      );
-      const status = rows[0];
-      const missing = ['runs', 'tasks', 'executions', 'artifacts', 'events', 'approvals', 'notifications', 'hr_jobs']
-        .filter((name) => status[name] === null);
+      const tables = database.all("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").map((row) => row.name);
+      const required = ['runs', 'tasks', 'executions', 'artifacts', 'approvals', 'notifications', 'hr_jobs', 'snapshots'];
+      const missing = required.filter((name) => !tables.includes(name));
       if (missing.length) {
-        throw Object.assign(new Error(`Control Kernel schema is incomplete: ${missing.join(', ')}`), {
-          code: 'KERNEL_SCHEMA_INCOMPLETE', details: { missing, schema: config.kernelSchema },
-        });
+        throw Object.assign(new Error(`Control Kernel schema is incomplete: ${missing.join(', ')}`), { code: 'KERNEL_SCHEMA_INCOMPLETE', details: { missing } });
       }
-      return emit({ ok: true, command, kernel_schema: config.kernelSchema, ...status });
-    } finally { await pool.end(); }
+      return emit({ ok: true, command, database_path: config.databasePath, tables,
+        journal_mode: database.get('PRAGMA journal_mode').journal_mode, foreign_keys: database.get('PRAGMA foreign_keys').foreign_keys === 1 });
+    } finally { database.close(); }
   }
   const serveAbortController = command === 'serve' ? new AbortController() : null;
   const orchestrator = createOrchestrator({ projectRoot, signal: serveAbortController?.signal ?? null });
-  const hr = createHrService({ projectRoot, repository: orchestrator.repository, kernel: orchestrator.kernel });
+  const hr = createHrService({ projectRoot, repository: orchestrator.repository, snapshots: orchestrator.snapshots });
   orchestrator.attachHrService(hr);
   try {
     if (command === 'serve') {
@@ -87,13 +81,43 @@ export async function main(argv = process.argv.slice(2)) {
     }
     if (command === 'scan') {
       const processor = createManagerRequestProcessor({ orchestrator, projectRoot, managerWorkspace: options['manager-workspace'] ? resolve(options['manager-workspace']) : null });
-      return emit({ ok: true, command, requests: await processor.scan(), hr_jobs: await hr.runPending(), request_root: processor.root });
+      return emit({ ok: true, command, requests: await processor.scan(), request_root: processor.root });
     }
     if (command === 'run') return emit({ ok: true, command, result: await orchestrator.tick(options['workflow-id']) });
     if (command === 'retry-notifications') {
       const notificationIds = options['notification-id'] ? [options['notification-id']] : null;
-      return emit({ ok: true, command, notifications: await orchestrator.deliverNotifications({ notificationIds }), hr_jobs: await hr.runPending() });
+      return emit({ ok: true, command, notifications: await orchestrator.deliverNotifications({ notificationIds }) });
     }
+    if (command === 'snapshot-list') return emit({ ok: true, command, snapshots: await orchestrator.snapshots.list({ runId: options['run-id'] ?? null, taskId: options['task-id'] ?? null, agentId: options['agent-id'] ?? null, sessionId: options['session-id'] ?? null }) });
+    if (command === 'snapshot-show') {
+      if (!options['snapshot-id']) throw Object.assign(new Error('--snapshot-id is required'), { code: 'SNAPSHOT_ID_REQUIRED' });
+      return emit({ ok: true, command, snapshot: await orchestrator.snapshots.show(options['snapshot-id']) });
+    }
+    if (command === 'snapshot-diff') {
+      if (!options['snapshot-id']) throw Object.assign(new Error('--snapshot-id is required'), { code: 'SNAPSHOT_ID_REQUIRED' });
+      return emit({ ok: true, command, ...(await orchestrator.snapshots.diff(options['snapshot-id'])) });
+    }
+    if (command === 'snapshot-restore') {
+      if (!options['snapshot-id']) throw Object.assign(new Error('--snapshot-id is required'), { code: 'SNAPSHOT_ID_REQUIRED' });
+      return emit({ ok: true, command, snapshot: await orchestrator.snapshots.restore(options['snapshot-id']) });
+    }
+    if (command === 'snapshot-revert') {
+      if (!options['snapshot-id']) throw Object.assign(new Error('--snapshot-id is required'), { code: 'SNAPSHOT_ID_REQUIRED' });
+      return emit({ ok: true, command, snapshot: await orchestrator.snapshots.revert(options['snapshot-id'], { confirm: options.confirm }) });
+    }
+    if (command === 'hr-review') {
+      if (!options['workflow-id'] && !options['task-id'] && !options.date) throw Object.assign(new Error('one of --workflow-id, --task-id or --date is required'), { code: 'HR_REVIEW_SCOPE_REQUIRED' });
+      const queued = await hr.queueReview({ workflowId: options['workflow-id'] ?? null, taskId: options['task-id'] ?? null, date: options.date ?? null, triggerMode: 'MANUAL' });
+      const jobs = options['enqueue-only'] === 'true' ? [] : await hr.runPending();
+      return emit({ ok: true, command, queued, jobs });
+    }
+    if (command === 'hr-review-daily') {
+      if (!options.date) throw Object.assign(new Error('--date is required'), { code: 'HR_REVIEW_DATE_REQUIRED' });
+      if (!['daily', 'both'].includes(hr.autoMode)) throw Object.assign(new Error('daily HR automation is disabled'), { code: 'HR_AUTO_MODE_DISABLED' });
+      const queued = await hr.queueDailyReview(options.date); const jobs = await hr.runPending();
+      return emit({ ok: true, command, queued, jobs, auto_mode: hr.autoMode });
+    }
+    if (command === 'hr-run-pending') return emit({ ok: true, command, jobs: await hr.runPending({ limit: Number(options.limit ?? 20) }) });
     if (command === 'status') {
       const workflow = options['workflow-id'];
       const runs = workflow ? [await orchestrator.repository.getRun(workflow)] : await orchestrator.repository.listRuns({ limit: Number(options.limit ?? 200) });
@@ -101,7 +125,7 @@ export async function main(argv = process.argv.slice(2)) {
         tasks: workflow && runs[0] ? await orchestrator.repository.listTasks({ runId: runs[0].runId }) : undefined,
         notifications: workflow && runs[0] ? await orchestrator.repository.listNotifications({ runId: runs[0].runId, statuses: ['PENDING', 'SENT', 'DELIVERED', 'FAILED'] }) : undefined });
     }
-    throw new Error('usage: orchestrator-cli.mjs <init|validate-request|process-request|kernel-status|scan|run|retry-notifications|status|serve|service-status|stop> [options]');
+    throw new Error('usage: orchestrator-cli.mjs <init|validate-request|process-request|kernel-status|scan|run|retry-notifications|status|snapshot-list|snapshot-show|snapshot-diff|snapshot-restore|snapshot-revert|hr-review|hr-review-daily|hr-run-pending|serve|service-status|stop> [options]');
   } finally { await orchestrator.close(); }
 }
 

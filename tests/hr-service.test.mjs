@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { inspectAssistantText } from '../scripts/hr/keywords.mjs';
-import { createHrService } from '../scripts/hr/service.mjs';
+import { createHrService, resolveHrAutoMode } from '../scripts/hr/service.mjs';
 
 test('HR local rules immediately find configured uncertainty words', () => {
   const matches = inspectAssistantText('我觉得这个方案可能需要再确认，perhaps check the API.');
@@ -9,16 +9,27 @@ test('HR local rules immediately find configured uncertainty words', () => {
   assert.match(matches[0].context, /方案/u);
 });
 
-test('HR queues redacted output review and never reviews its own output', async () => {
+test('HR automatic mode defaults to off', () => {
+  assert.equal(resolveHrAutoMode(process.cwd(), {}), 'off');
+});
+
+test('manual review queues one dossier per Agent Session and deduplicates review keys', async () => {
   const jobs = [];
-  const repository = { async queueHrJob(value) { jobs.push(value); return { jobId: 'HRJ-1', ...value }; } };
-  const service = createHrService({ repository, projectRoot: process.cwd(), keywords: ['guess'], enabled: true });
-  const own = await service.recordAssistantOutput({ agentId: 'hr-agent', sessionId: 'hr-session', text: 'guess secret=should-not-be-read' });
-  assert.equal(own.job, null);
-  const review = await service.recordAssistantOutput({ runId: 'RUN-1', taskId: 'TASK-1', agentId: 'developer-agent', sessionId: 'worker-session', text: 'guess secret=abc' });
-  assert.equal(review.matches[0].keyword, 'guess');
-  assert.equal(jobs.length, 1);
-  assert.doesNotMatch(jobs[0].input.text, /secret=abc/u);
+  const repository = {
+    async getRun() { return { runId: 'RUN-1' }; },
+    async listHrJobs() { return jobs.map((value, index) => ({ jobId: `HRJ-${index}`, ...value })); },
+    async queueHrJob(value) { jobs.push(value); return { jobId: `HRJ-${jobs.length}`, ...value }; },
+  };
+  const snapshots = {
+    async list() { return [{ snapshotId: 'SNP-1', runId: 'RUN-1', taskId: 'TASK-1', agentId: 'developer-agent', sessionId: 'worker-session', inputCommit: '1'.repeat(40), outputCommit: '2'.repeat(40), changeSummary: {} }]; },
+    async diff() { return { patch: 'diff', snapshot: null }; },
+  };
+  const dossierBuilder = () => ({ schema_version: 1, messages: [{ kind: 'FINAL_OUTPUT', text: 'done' }], git: {} });
+  const service = createHrService({ repository, snapshots, dossierBuilder, projectRoot: process.cwd(), enabled: true, autoMode: 'off' });
+  assert.equal((await service.queueReview({ workflowId: 'WF-1', triggerMode: 'MANUAL' })).length, 1);
+  assert.equal((await service.queueReview({ workflowId: 'WF-1', triggerMode: 'MANUAL' })).length, 0);
+  assert.equal(jobs[0].kind, 'SESSION_REVIEW');
+  assert.equal(jobs[0].reviewKey, 'MANUAL:SNP-1:worker-session');
 });
 
 test('disabled HR neither queues new work nor executes existing jobs', async () => {
@@ -27,9 +38,8 @@ test('disabled HR neither queues new work nor executes existing jobs', async () 
     async listHrJobs() { throw new Error('HR runner must not read jobs while disabled'); },
   };
   const service = createHrService({ repository, projectRoot: process.cwd(), enabled: false });
-  const review = await service.recordAssistantOutput({ runId: 'RUN-1', taskId: 'TASK-1', agentId: 'developer-agent', sessionId: 'worker-session', text: '可能需要确认' });
   assert.equal(service.enabled, false);
-  assert.deepEqual(review, { matches: [], job: null, alert: null });
   assert.equal(await service.queueTaskDailyReport({ run: { runId: 'RUN-1' }, task: { taskId: 'TASK-1', agentId: 'developer-agent', payload: {} }, outcome: 'SUCCEEDED' }), null);
+  assert.deepEqual(await service.queueReview({ taskId: 'TASK-1' }), []);
   assert.deepEqual(await service.runPending(), []);
 });

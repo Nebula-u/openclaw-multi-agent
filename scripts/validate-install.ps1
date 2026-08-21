@@ -4,14 +4,21 @@
   清单驱动的静态安装验证；不修改 OpenClaw 配置。
 #>
 [CmdletBinding()]
-param([switch]$SkipOpenClaw)
+param(
+  [switch]$SkipOpenClaw,
+  [string]$RuntimeRoot = 'runtime'
+)
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $ScriptDir = $PSScriptRoot
 $ProjectRoot = [System.IO.Path]::GetFullPath((Join-Path $ScriptDir '..'))
 . (Join-Path $ScriptDir 'component-lib.ps1')
-$RuntimeRootAbs = Get-NormalizedPath (Join-Path $ProjectRoot 'runtime')
+$RuntimeRootAbs = if ([System.IO.Path]::IsPathRooted($RuntimeRoot)) {
+  Get-NormalizedPath $RuntimeRoot
+} else {
+  Get-NormalizedPath (Join-Path $ProjectRoot $RuntimeRoot)
+}
 
 $Results = [System.Collections.Generic.List[object]]::new()
 function Add-Check([string]$Name, [bool]$Pass, [string]$Detail = '') {
@@ -65,18 +72,25 @@ Get-ChildItem -LiteralPath $templatesDir -Filter '*.json' -File | ForEach-Object
 $runtimeGuard = Join-Path $ProjectRoot 'scripts\runtime-guard.mjs'
 $runtimeGuardTest = Join-Path $ProjectRoot 'tests\runtime-guard.test.mjs'
 if (Get-Command node -ErrorAction SilentlyContinue) {
-  $ajvDir = Join-Path $ProjectRoot 'node_modules\ajv'
-  $ajvFormatsDir = Join-Path $ProjectRoot 'node_modules\ajv-formats'
-  if ((Test-Path -LiteralPath $ajvDir) -and (Test-Path -LiteralPath $ajvFormatsDir)) {
-    $guardOutput = & node $runtimeGuard self-check --project-root $ProjectRoot 2>&1
-    Add-Check 'Runtime Guard contracts/templates 自检' ($LASTEXITCODE -eq 0) ($guardOutput -join "`n")
-    $guardTestOutput = & node --test $runtimeGuardTest 2>&1
-    Add-Check 'Runtime Guard 行为测试' ($LASTEXITCODE -eq 0) (($guardTestOutput -join "`n") | Select-Object -Last 8)
+  $nodeVersionText = (& node --version).Trim().TrimStart('v')
+  $nodeVersionOk = try { [version]$nodeVersionText -ge [version]'22.13.0' } catch { $false }
+  Add-Check 'Node.js 22.13.0+（node:sqlite 必需）' $nodeVersionOk $nodeVersionText
+  if ($nodeVersionOk) {
+    $ajvDir = Join-Path $ProjectRoot 'node_modules\ajv'
+    $ajvFormatsDir = Join-Path $ProjectRoot 'node_modules\ajv-formats'
+    if ((Test-Path -LiteralPath $ajvDir) -and (Test-Path -LiteralPath $ajvFormatsDir)) {
+      $guardOutput = & node $runtimeGuard self-check --project-root $ProjectRoot 2>&1
+      Add-Check 'Runtime Guard contracts/templates 自检' ($LASTEXITCODE -eq 0) ($guardOutput -join "`n")
+      $guardTestOutput = & node --test $runtimeGuardTest 2>&1
+      Add-Check 'Runtime Guard 行为测试' ($LASTEXITCODE -eq 0) (($guardTestOutput -join "`n") | Select-Object -Last 8)
+    } else {
+      Add-Check 'Runtime Guard npm 依赖' $false '请先在项目根目录运行 npm install（需要 ajv 与 ajv-formats）'
+    }
   } else {
-    Add-Check 'Runtime Guard npm 依赖' $false '请先在项目根目录运行 npm install（需要 ajv 与 ajv-formats）'
+    Add-Check 'Runtime Guard 自检' $false 'Node.js 版本过低，无法使用稳定 node:sqlite'
   }
 } else {
-  Add-Check 'Node.js 可用（Runtime Guard 必需）' $false 'OpenClaw 运行环境应提供 Node.js'
+  Add-Check 'Node.js 22.13.0+（node:sqlite 必需）' $false '请安装 Node.js 22.13.0 或更高版本'
 }
 
 $installPs1 = Join-Path $ScriptDir 'install.ps1'
@@ -119,7 +133,7 @@ exit /b 0
   $env:PATH = "$validationBin$([System.IO.Path]::PathSeparator)$previousPath"
   Push-Location $nonProjectCwd
   $pushedLocation = $true
-  & pwsh -NoProfile -File $installPs1 -RuntimeRoot runtime | Out-Null
+  & pwsh -NoProfile -File $installPs1 -RuntimeRoot $RuntimeRoot | Out-Null
   if ($LASTEXITCODE -ne 0) { throw "install.ps1 dry-run 退出码：$LASTEXITCODE" }
   $installDryRunSucceeded = $true
   Add-Check 'install.ps1 非项目 cwd dry-run 可执行' $true $nonProjectCwd

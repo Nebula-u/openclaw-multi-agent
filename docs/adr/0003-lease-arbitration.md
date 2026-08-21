@@ -1,8 +1,10 @@
 # ADR 0003 · 并发闸门用 PostgreSQL 部分唯一索引做 lease 仲裁
 
-- 状态：已接受
+- 状态：已由 [ADR 0005](./0005-single-machine-sqlite.md) 取代
 - 日期：2026-08-18
 - 相关：`scripts/control-kernel/lease.mjs`、`scripts/control-kernel/schema.sql`、`config/stategraph-policy.json`
+
+> 当前 lease 由 SQLite 部分唯一索引和单机 Orchestrator 管理，不提供多机仲裁。
 
 ## 背景
 

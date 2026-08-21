@@ -3,10 +3,10 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { URL } from 'node:url';
 import { createKernel } from '../scripts/control-kernel/kernel.mjs';
-import { createKernelPool, resolveKernelConfig } from '../scripts/control-kernel/pool.mjs';
+import { openKernelDatabase, resolveKernelConfig } from '../scripts/control-kernel/database.mjs';
 import { createWorkflowRepository } from '../scripts/control-kernel/workflow-repository.mjs';
-import { createOrchestrator } from '../scripts/orchestrator/service.mjs';
-import { createHrService } from '../scripts/hr/service.mjs';
+import { createGitWorktreeManager } from '../scripts/orchestrator/git-worktree.mjs';
+import { createSnapshotService } from '../scripts/orchestrator/snapshot-service.mjs';
 import { MonitorEventHub, encodeSse } from './event-hub.mjs';
 import { openTelemetryDatabase, createTelemetryRepository } from './telemetry-repository.mjs';
 import { createSessionTailer } from './session-tailer.mjs';
@@ -22,17 +22,8 @@ function sendJson(response, status, value, headers = {}) {
 function sendAsset(response, asset, headers = {}) { response.writeHead(200, { 'content-type': asset.contentType, 'content-length': asset.body.length, 'cache-control': 'no-cache', 'x-content-type-options': 'nosniff', ...headers }); response.end(asset.body); }
 function origins(server, config) { const address = server.address(); const port = typeof address === 'object' && address ? address.port : config.port; return new Set([`http://127.0.0.1:${port}`, `http://localhost:${port}`]); }
 function allowedOrigin(origin, config, server) { return !origin || config.allowedOrigins.includes(origin) || origins(server, config).has(origin); }
-function cors(request, config, server) { const origin = request.headers.origin; return origin && allowedOrigin(origin, config, server) ? { 'access-control-allow-origin': origin, vary: 'Origin', 'access-control-allow-methods': 'GET,POST,OPTIONS', 'access-control-allow-headers': `content-type, ${config.internalRetryTokenHeader}` } : {}; }
+function cors(request, config, server) { const origin = request.headers.origin; return origin && allowedOrigin(origin, config, server) ? { 'access-control-allow-origin': origin, vary: 'Origin', 'access-control-allow-methods': 'GET,OPTIONS', 'access-control-allow-headers': 'content-type' } : {}; }
 function integerQuery(url, name, fallback) { const value = url.searchParams.get(name); if (value === null) return fallback; const parsed = Number.parseInt(value, 10); return Number.isInteger(parsed) && parsed >= 0 ? parsed : fallback; }
-function tokenMatches(value, expected) {
-  if (typeof value !== 'string' || typeof expected !== 'string' || value.length !== expected.length) return false;
-  let difference = 0;
-  for (let index = 0; index < value.length; index += 1) difference |= value.charCodeAt(index) ^ expected.charCodeAt(index);
-  return difference === 0;
-}
-function readBody(request, limit) {
-  return new Promise((resolveBody, rejectBody) => { let size = 0; const chunks = []; request.on('data', (chunk) => { size += chunk.length; if (size > limit) { rejectBody(Object.assign(new Error('request body exceeds configured limit'), { code: 'REQUEST_BODY_TOO_LARGE', statusCode: 413 })); request.destroy(); return; } chunks.push(chunk); }); request.on('end', () => { try { resolveBody(chunks.length ? JSON.parse(Buffer.concat(chunks).toString('utf8')) : {}); } catch (error) { rejectBody(Object.assign(new Error('request body must be valid JSON'), { code: 'REQUEST_BODY_INVALID', statusCode: 400, cause: error })); } }); request.on('error', rejectBody); });
-}
 function publicTask(task, execution, telemetry) {
   return { task_id: task.taskId, run_id: task.runId, task_type: task.kind, step_id: task.stepId, title: task.title, status: task.state,
     attempt: task.attempt, max_attempts: task.maxAttempts, assigned_agent: task.agentId, session_id: execution?.sessionId ?? null,
@@ -40,47 +31,39 @@ function publicTask(task, execution, telemetry) {
     artifact_root_abs: task.payload?.artifact_root_abs ?? null, published_output_path_abs: task.payload?.published_output_path_abs ?? null };
 }
 function publicRun(run, tasks, telemetry, pendingApproval = null) {
-  return { protocol_version: 'orchestrator-postgresql-v1', workflow_id: run.workflowId, run_id: run.runId, state: run.state, outcome: run.outcome,
+  return { protocol_version: 'orchestrator-sqlite-v1', workflow_id: run.workflowId, run_id: run.runId, state: run.state, outcome: run.outcome,
     status_reason: run.statusReason, title: run.routePlan?.display_title ?? run.routePlan?.summary ?? run.workflowId, route_hash: run.routeHash,
     route_plan: run.routePlan, current_step_index: run.currentStepIndex, manager_session_id: run.managerSessionId,
     manager_delivery: run.managerDelivery, created_at: run.createdAt, updated_at: run.updatedAt, completed_at: run.completedAt,
     tasks: tasks.map((task) => publicTask(task, task.execution, telemetry)), pending_approval: pendingApproval };
 }
 
-export function createKernelMonitorServer(config, { pool: providedPool = null, kernel: providedKernel = null, repository: providedRepository = null, telemetryDatabase: providedTelemetryDatabase = null, eventHub: providedHub = null, retryNotifications: providedRetryNotifications = null } = {}) {
+export function createKernelMonitorServer(config, { database: providedDatabase = null, kernel: providedKernel = null, repository: providedRepository = null, snapshots: providedSnapshots = null, telemetryDatabase: providedTelemetryDatabase = null, eventHub: providedHub = null } = {}) {
   config = {
     projectRoot: process.cwd(), runtimeRoot: process.cwd(), sessionRoot: process.cwd(), host: '127.0.0.1', port: 0,
-    allowedOrigins: ['null'], reconcileIntervalMs: 2000, sseRetention: 2000, requestBodyLimit: 1024 * 1024,
+    allowedOrigins: ['null'], reconcileIntervalMs: 2000, sseRetention: 2000,
     telemetryMaxEvents: 100000, activityRetentionDays: 30, heartbeatStaleSeconds: 180, possiblyStalledSeconds: 300,
-    startingTimeoutSeconds: 120, toolRunningGraceSeconds: 900, internalRetryToken: null,
-    internalRetryTokenHeader: 'x-monitor-internal-token', ...config,
+    startingTimeoutSeconds: 120, toolRunningGraceSeconds: 900, ...config,
   };
-  const kernelConfig = resolveKernelConfig({ projectRoot: config.projectRoot });
-  const ownedPool = !providedPool && !providedKernel;
-  const pool = providedPool ?? (providedKernel ? null : createKernelPool({ ...kernelConfig }));
-  const kernel = providedKernel ?? createKernel({ pool, workerId: `${kernelConfig.workerId}-monitor`, leaseSeconds: kernelConfig.leaseSeconds });
-  const repository = providedRepository ?? createWorkflowRepository({ pool, kernel });
+  const kernelConfig = resolveKernelConfig({ projectRoot: config.projectRoot, databasePath: config.databasePath ?? undefined });
+  const ownedDatabase = !providedDatabase && !providedKernel;
+  const database = providedDatabase ?? providedKernel?.database ?? (providedKernel ? null : openKernelDatabase({ ...kernelConfig, readonly: true, initialize: false }));
+  const kernel = providedKernel ?? createKernel({ database, workerId: `${kernelConfig.workerId}-monitor`, leaseSeconds: kernelConfig.leaseSeconds });
+  const repository = providedRepository ?? createWorkflowRepository({ database });
+  const snapshotService = providedSnapshots ?? createSnapshotService({ repository, worktrees: createGitWorktreeManager({ projectRoot: config.projectRoot }) });
   const telemetryDatabase = providedTelemetryDatabase ?? openTelemetryDatabase(config.monitorDatabasePath ?? ':memory:');
   const telemetry = createTelemetryRepository(config.projectRoot, telemetryDatabase);
   const hub = providedHub ?? new MonitorEventHub({ retention: config.sseRetention });
   const catalog = createSessionCatalog({ sessionRoot: config.sessionRoot ?? config.projectRoot, projectRoot: config.projectRoot });
-  let snapshot = { schema_version: 1, source: 'POSTGRESQL_CONTROL_KERNEL', kernel_reachable: false, generated_at: new Date().toISOString(), workflows: [], hr_alerts: [], hr_jobs: [], notifications: [] };
+  let snapshot = { schema_version: 1, source: 'SQLITE_CONTROL_KERNEL', kernel_reachable: false, generated_at: new Date().toISOString(), workflows: [], snapshots: [], hr_alerts: [], hr_jobs: [], notifications: [] };
   let refreshRunning = false; let fingerprint = '';
   const uiRoot = join(config.projectRoot, 'monitor', 'ui');
   const assets = new Map([['/', { contentType: 'text/html; charset=utf-8', body: readFileSync(join(uiRoot, 'index.html')) }], ['/index.html', { contentType: 'text/html; charset=utf-8', body: readFileSync(join(uiRoot, 'index.html')) }], ['/styles.css', { contentType: 'text/css; charset=utf-8', body: readFileSync(join(uiRoot, 'styles.css')) }], ['/app.js', { contentType: 'text/javascript; charset=utf-8', body: readFileSync(join(uiRoot, 'app.js')) }], ['/config.js', { contentType: 'text/javascript; charset=utf-8', body: readFileSync(join(uiRoot, 'config.js')) }]]);
   const health = createHealthClassifier({ telemetry, publish: (type, payload, meta) => hub.publish(type, payload, meta), thresholds: { heartbeatStaleSeconds: config.heartbeatStaleSeconds, possiblyStalledSeconds: config.possiblyStalledSeconds, startingTimeoutSeconds: config.startingTimeoutSeconds, toolRunningGraceSeconds: config.toolRunningGraceSeconds } });
-  const hr = createHrService({ projectRoot: config.projectRoot, repository, kernel });
-  const retryNotifications = providedRetryNotifications ?? (async ({ notificationIds = null } = {}) => {
-    const orchestrator = createOrchestrator({ projectRoot: config.projectRoot, pool, kernel, repository });
-    try { return await orchestrator.deliverNotifications({ notificationIds }); }
-    finally { await orchestrator.close(); }
-  });
   let runsCache = { runs: [], tasks: [], hrJobs: [] };
-  let localHrAlerts = [];
-  let hrRunnerBusy = false;
-  async function readKernelEvents(limit = 500) { if (!pool) return []; const result = await pool.query('SELECT event_id, event_seq, run_id, task_id, execution_id, type, payload, occurred_at FROM events ORDER BY event_seq DESC LIMIT $1', [limit]); return result.rows.reverse().map((row) => ({ event_id: row.event_id, sequence: Number(row.event_seq), run_id: row.run_id, task_id: row.task_id, execution_id: row.execution_id, type: row.type, payload: row.payload, occurred_at: row.occurred_at })); }
   async function readHrJobs(limit = 200) { return repository.listHrJobs({ limit }); }
   async function readNotifications(limit = 200) { return repository.listNotifications({ statuses: ['PENDING', 'FAILED', 'SENT', 'DELIVERED'], limit }); }
+  async function readSnapshots(limit = 500) { return repository.listSnapshots ? repository.listSnapshots({ limit }) : []; }
   function discoveredSessions() {
     const values = [];
     for (const agent of catalog.agents()) {
@@ -108,37 +91,20 @@ export function createKernelMonitorServer(config, { pool: providedPool = null, k
         .map((message) => ({ text: message.text, timestamp: message.timestamp })),
     }));
   }
-  function scheduleHr() {
-    if (hrRunnerBusy) return;
-    hrRunnerBusy = true;
-    void hr.runPending().catch((error) => hub.publish('monitor-health', { code: error.code ?? 'HR_RUNNER_FAILED', message: error.message }, { source: 'HR_RUNNER' }))
-      .finally(() => { hrRunnerBusy = false; });
-  }
-  const sessionTailer = createSessionTailer({ sessionSource: discoveredSessions, telemetry, sessionRoot: config.sessionRoot ?? config.projectRoot, publish: (type, event, meta) => {
-    hub.publish(type, event, meta);
-    if (event.event_type !== 'session.assistant_output') return;
-    void hr.recordAssistantOutput({ runId: event.run_id, taskId: event.task_id, agentId: event.payload.agent_id, sessionId: event.session_id, sourceEventId: event.event_id, text: event.payload.summary, timestamp: event.timestamp })
-      .then((result) => {
-        if (result.alertPayload) {
-          localHrAlerts = [...localHrAlerts.filter((item) => item.source_event_id !== result.alertPayload.source_event_id), result.alertPayload].slice(-200);
-          hub.publish('hr-alert', result.alertPayload, { source: 'HR_KEYWORD_RULE' });
-        }
-        scheduleHr();
-      }).catch((error) => hub.publish('monitor-health', { code: error.code ?? 'HR_JOB_QUEUE_FAILED', message: error.message }, { source: 'HR_QUEUE' }));
-  } });
+  const sessionTailer = createSessionTailer({ sessionSource: discoveredSessions, telemetry, sessionRoot: config.sessionRoot ?? config.projectRoot,
+    publish: (type, event, meta) => hub.publish(type, event, meta) });
   async function refresh() {
     if (refreshRunning) return snapshot; refreshRunning = true;
     try {
-      const [runs, tasks, executions, events, hrJobs, notifications] = await Promise.all([kernel.listRuns({ limit: 200 }), kernel.listTasks({ limit: 2000 }), kernel.listExecutions({ limit: 2000 }), readKernelEvents(), readHrJobs(), readNotifications()]);
+      const [runs, tasks, executions, hrJobs, notifications, gitSnapshots] = await Promise.all([kernel.listRuns({ limit: 200 }), kernel.listTasks({ limit: 2000 }), kernel.listExecutions({ limit: 2000 }), readHrJobs(), readNotifications(), readSnapshots()]);
       const enrichedTasks = tasks.map((task) => ({ ...task, workflowId: runs.find((run) => run.runId === task.runId)?.workflowId ?? null, execution: executions.find((item) => item.taskId === task.taskId) ?? null }));
       runsCache = { runs, tasks: enrichedTasks, hrJobs };
       const approvals = repository.listApprovals ? await Promise.all(runs.map((run) => repository.listApprovals({ runId: run.runId, status: 'PENDING' }))) : runs.map(() => []);
       const workflowValues = runs.map((run, index) => publicRun(run, enrichedTasks.filter((task) => task.runId === run.runId), telemetry, approvals[index][0] ?? null));
       const healthInput = { workflows: workflowValues }; health.scan(healthInput); sessionTailer.scan();
-      const kernelAlerts = events.filter((event) => event.type === 'HR_KEYWORD_ALERT').map((event) => ({ ...redactValue(event.payload?.detail ?? event.payload), workflow_id: runs.find((run) => run.runId === event.run_id)?.workflowId ?? null }));
-      const alerts = [...kernelAlerts, ...localHrAlerts.filter((item) => !kernelAlerts.some((alert) => alert.source_event_id === item.source_event_id))];
-      const next = { schema_version: 1, source: 'POSTGRESQL_CONTROL_KERNEL', kernel_reachable: true, generated_at: new Date().toISOString(), workflows: workflowValues, events, hr_alerts: alerts, hr_jobs: hrJobs, hr_outputs: hrOutputs(hrJobs), notifications, global_sessions: discoveredSessions().filter((item) => item.binding === 'UNBOUND_SESSION') };
-      const value = JSON.stringify(next); snapshot = next; if (value !== fingerprint) { fingerprint = value; hub.publish('snapshot', snapshot, { source: 'POSTGRESQL_CONTROL_KERNEL' }); } return snapshot;
+      const alerts = hrJobs.filter((job) => Array.isArray(job.input?.matches) && job.input.matches.length).map((job) => redactValue({ job_id: job.jobId, run_id: job.runId, task_id: job.taskId, matches: job.input.matches }));
+      const next = { schema_version: 1, source: 'SQLITE_CONTROL_KERNEL', kernel_reachable: true, generated_at: new Date().toISOString(), workflows: workflowValues, snapshots: gitSnapshots, hr_alerts: alerts, hr_jobs: hrJobs, hr_outputs: hrOutputs(hrJobs), notifications, global_sessions: discoveredSessions().filter((item) => item.binding === 'UNBOUND_SESSION') };
+      const value = JSON.stringify(next); snapshot = next; if (value !== fingerprint) { fingerprint = value; hub.publish('snapshot', snapshot, { source: 'SQLITE_CONTROL_KERNEL' }); } return snapshot;
     } catch (error) { snapshot = { ...snapshot, kernel_reachable: false, degraded: true, degradation: { code: error.code ?? 'KERNEL_UNAVAILABLE', message: error.message }, generated_at: new Date().toISOString() }; hub.publish('monitor-health', snapshot.degradation, { source: 'KERNEL' }); return snapshot; }
     finally { refreshRunning = false; }
   }
@@ -162,25 +128,15 @@ export function createKernelMonitorServer(config, { pool: providedPool = null, k
       if (request.method === 'GET' && path === '/api/hr/jobs') return sendJson(response, 200, { ok: true, jobs: snapshot.hr_jobs }, headers);
       if (request.method === 'GET' && path === '/api/hr/outputs') return sendJson(response, 200, { ok: true, outputs: snapshot.hr_outputs ?? [] }, headers);
       if (request.method === 'GET' && path === '/api/notifications') return sendJson(response, 200, { ok: true, notifications: snapshot.notifications }, headers);
+      if (request.method === 'GET' && path === '/api/snapshots') { await refresh(); return sendJson(response, 200, { ok: true, snapshots: snapshot.snapshots }, headers); }
+      const gitSnapshotDiff = path.match(/^\/api\/snapshots\/([^/]+)\/diff$/u); if (request.method === 'GET' && gitSnapshotDiff) { const value = await snapshotService.diff(decodeURIComponent(gitSnapshotDiff[1])); return sendJson(response, 200, { ok: true, ...value }, headers); }
+      const gitSnapshot = path.match(/^\/api\/snapshots\/([^/]+)$/u); if (request.method === 'GET' && gitSnapshot) { await refresh(); const value = snapshot.snapshots.find((item) => item.snapshotId === decodeURIComponent(gitSnapshot[1])); return sendJson(response, value ? 200 : 404, value ? { ok: true, snapshot: value } : { ok: false, error: 'SNAPSHOT_NOT_FOUND' }, headers); }
       const workflowSnapshot = path.match(/^\/api\/workflows\/([^/]+)\/snapshot$/u); if (request.method === 'GET' && workflowSnapshot) { await refresh(); const workflow = snapshot.workflows.find((item) => item.workflow_id === decodeURIComponent(workflowSnapshot[1])); return sendJson(response, workflow ? 200 : 404, workflow ? { ok: true, snapshot: { ...snapshot, workflows: [workflow] } } : { ok: false, error: 'WORKFLOW_NOT_FOUND' }, headers); }
       const taskActivity = path.match(/^\/api\/tasks\/([^/]+)\/activity$/u); if (request.method === 'GET' && taskActivity) { const dialogue = telemetry.events({ limit: 500 }).filter((event) => event.task_id === decodeURIComponent(taskActivity[1]) && event.event_type === 'session.assistant_output').map((event) => ({ agent_id: event.payload.agent_id, summary: event.payload.summary, timestamp: event.timestamp })); return sendJson(response, 200, { ok: true, dialogue }, headers); }
       if (request.method === 'GET' && path === '/api/workflows/stream') { const after = integerQuery(url, 'after', Number.parseInt(request.headers['last-event-id'] ?? '0', 10) || 0); response.writeHead(200, { 'content-type': 'text/event-stream; charset=utf-8', 'cache-control': 'no-cache, no-transform', connection: 'keep-alive', 'x-accel-buffering': 'no', ...headers }); await refresh(); response.write(encodeSse({ sequence: hub.sequence, type: 'snapshot', timestamp: new Date().toISOString(), payload: snapshot, meta: { initial: true, source: snapshot.source } })); for (const event of hub.after(after)) response.write(encodeSse(event)); const unsubscribe = hub.subscribe((event) => response.write(encodeSse(event))); const keepalive = setInterval(() => response.write(': keepalive\n\n'), 15000); keepalive.unref?.(); request.on('close', () => { clearInterval(keepalive); unsubscribe(); }); return; }
-      if (request.method === 'POST' && path === '/internal/notifications/retry') {
-        if (!config.internalRetryToken || !tokenMatches(request.headers[config.internalRetryTokenHeader], config.internalRetryToken)) {
-          return sendJson(response, 403, { ok: false, error: 'MONITOR_INTERNAL_TOKEN_REQUIRED' }, headers);
-        }
-        const body = await readBody(request, config.requestBodyLimit);
-        const notificationIds = body.notification_ids ?? null;
-        if (notificationIds !== null && (!Array.isArray(notificationIds) || notificationIds.length > 100 || notificationIds.some((value) => typeof value !== 'string' || !value))) {
-          return sendJson(response, 400, { ok: false, error: 'NOTIFICATION_IDS_INVALID' }, headers);
-        }
-        const notifications = await retryNotifications({ notificationIds });
-        await refresh();
-        return sendJson(response, 200, { ok: true, retried: notifications.map((item) => ({ notification_id: item.notificationId, status: item.status })) }, headers);
-      }
       if (request.method === 'POST') { return sendJson(response, 403, { ok: false, error: 'MONITOR_READ_ONLY' }, headers); }
       return sendJson(response, 404, { ok: false, error: 'NOT_FOUND' }, headers);
     } catch (error) { return sendJson(response, error.statusCode ?? 400, { ok: false, error: error.code ?? 'MONITOR_REQUEST_FAILED', message: error.message }, headers); }
   });
-  return { server, kernel, repository, telemetry, hub, snapshot: () => snapshot, refresh, sessionCatalog: catalog, hr, async start() { await refresh(); await new Promise((resolveStart, reject) => { server.once('error', reject); server.listen(config.port, config.host, () => { server.off('error', reject); resolveStart(); }); }); return server.address(); }, async close() { clearInterval(timer); if (server.listening) await new Promise((resolveClose, reject) => server.close((error) => error ? reject(error) : resolveClose())); if (ownedPool) await pool.end(); if (!providedTelemetryDatabase) telemetryDatabase.close(); } };
+  return { server, kernel, repository, telemetry, hub, snapshot: () => snapshot, refresh, sessionCatalog: catalog, async start() { await refresh(); await new Promise((resolveStart, reject) => { server.once('error', reject); server.listen(config.port, config.host, () => { server.off('error', reject); resolveStart(); }); }); return server.address(); }, async close() { clearInterval(timer); if (server.listening) await new Promise((resolveClose, reject) => server.close((error) => error ? reject(error) : resolveClose())); if (ownedDatabase) database.close(); if (!providedTelemetryDatabase) telemetryDatabase.close(); } };
 }

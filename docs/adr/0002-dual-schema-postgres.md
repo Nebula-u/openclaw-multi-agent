@@ -1,8 +1,10 @@
 # ADR 0002 · 单库双 schema：kernel 存事实，langgraph 存决策
 
-- 状态：已接受
+- 状态：已由 [ADR 0005](./0005-single-machine-sqlite.md) 取代
 - 日期：2026-08-18
 - 相关：`scripts/control-kernel/schema.sql`、`scripts/stategraph/postgres-checkpointer.mjs`、`monitor/telemetry-repository.mjs`
+
+> 当前从空 SQLite 初始化，不运行 PostgreSQL 或 LangGraph checkpointer，也不迁移本文所述历史数据。
 
 ## 背景
 

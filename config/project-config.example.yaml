@@ -1,6 +1,6 @@
 # project-config.example.yaml
 # 复制为 project-config.yaml（本地，不提交）并按目标业务项目填写。
-# 所有路径必须是规范化绝对路径；StateGraph bootstrap 会校验仓库根与初始 commit。
+# 所有路径必须是规范化绝对路径；Orchestrator 会校验仓库根与初始 commit。
 
 schema_version: 1
 

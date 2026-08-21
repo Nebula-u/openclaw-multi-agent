@@ -43,6 +43,6 @@
 
 ## 7. 最小权限与最小上下文
 
-- StateGraph dispatch 生成的上下文遵循最小必要原则。
+- Orchestrator dispatch 生成的上下文遵循最小必要原则。
 - 工作 Agent 不访问 runtime state、capability、锁或其他 workflow 数据。
 - 工作 Agent 的 subagent 白名单为空，不得再派生 Agent。

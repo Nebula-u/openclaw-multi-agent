@@ -3,6 +3,9 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
+  "engines": {
+    "node": ">=22.13.0"
+  },
   "scripts": {
     "test": "npm run test:runtime-guard && npm run test:agent-json && npm run test:runtime-bundle && npm run test:orchestrator && npm run test:hr && npm run test:monitor && npm run test:kernel && node --test tests/validate-install.test.mjs",
     "test:runtime-guard": "node --test tests/runtime-guard.test.mjs",
@@ -21,11 +24,11 @@
     "orchestrator:start": "node scripts/orchestrator-cli.mjs serve --project-root . --poll-ms 1000",
     "orchestrator:status": "node scripts/orchestrator-cli.mjs service-status --project-root .",
     "orchestrator:stop": "node scripts/orchestrator-cli.mjs stop --project-root .",
-    "monitor:start": "node monitor/main.mjs"
+    "monitor:start": "node monitor/main.mjs",
+    "hr:run": "node scripts/orchestrator-cli.mjs hr-run-pending --project-root ."
   },
   "dependencies": {
     "ajv": "^8.17.1",
-    "ajv-formats": "^3.0.1",
-    "pg": "^8.13.1"
+    "ajv-formats": "^3.0.1"
   }
 }

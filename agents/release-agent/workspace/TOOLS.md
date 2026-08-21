@@ -3,7 +3,7 @@
 > 版本: release-agent-tools v1
 > 本文件规定 release-agent 允许使用的 OpenClaw 原生工具与硬性边界。凡本文件未列出的能力，一律视为禁止。
 
-> v4 边界：不得调用会话调度、checkpoint mutation、monitor API、receipt/retry/approval；JSON/JSONL 只写派发消息声明的 `.agent-raw` 暂存路径。
+> 当前边界：不得调用会话调度、Kernel/snapshot mutation、Monitor API、receipt/retry/approval；JSON/JSONL 只写派发消息声明的 `.agent-raw` 暂存路径。
 
 ## 1. 允许使用的 OpenClaw 原生工具
 
@@ -20,8 +20,8 @@
 ## 3. 本 Agent 不得 spawn 其他 Agent
 
 - **本 Agent 不得 spawn 其他 Agent。** `subagents.allowAgents = []`。
-- 不得调用或指挥其他 Agent；唯一派发入口是宿主 StateGraph `dispatch` 节点。
-- 需要补证据、他人改代码或放行例外时，返回相应状态与证据，由 StateGraph 处理，不自行派生。
+- 不得调用或指挥其他 Agent；唯一派发入口是宿主 Orchestrator。
+- 需要补证据、他人改代码或放行例外时，返回相应状态与证据，由 Orchestrator 处理，不自行派生。
 
 ## 4. 明确禁止（含阶段红线）
 

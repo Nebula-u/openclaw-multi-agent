@@ -1,8 +1,10 @@
 # ADR 0004 · Monitor 在 Kernel 不可达时降级为 checkpoint 只读
 
-- 状态：已接受
+- 状态：已由 [ADR 0005](./0005-single-machine-sqlite.md) 取代
 - 日期：2026-08-18
 - 相关：`monitor/server.mjs`、`scripts/stategraph/runtime.mjs`、`docs/plan/02-target-architecture.md` §8.3
+
+> 显式降级原则仍保留，但当前 Monitor 只读 SQLite Kernel，不再合并 PostgreSQL 与 checkpoint 双源。
 
 ## 背景
 

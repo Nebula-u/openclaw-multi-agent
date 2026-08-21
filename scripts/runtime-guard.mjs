@@ -10,7 +10,7 @@ import addFormats from 'ajv-formats';
 // Runtime Guard remains the stable CLI name used by Agent workspaces. Its
 // current responsibility is deliberately narrow: validate structured JSON/
 // JSONL artifacts and compile the current contract/template set. The
-// PostgreSQL Control Kernel and Orchestrator own state, events, approvals,
+// SQLite Control Kernel and Orchestrator own workflow facts and approvals;
 // dispatch and recovery.
 
 const VALIDATOR_NAME = 'ajv';

@@ -1,39 +1,14 @@
-# StateGraph Local Gate
+# 本地接收与检查清单
 
-Gate 由宿主代码计算，Agent 只提供自检候选项。任何 blocking item 不是 `PASS` 或 `NOT_APPLICABLE` 时，Gate 失败并触发 task attempt 重试。
+Agent 自检是候选信息，不能替代宿主检查。当前 Orchestrator 在接受结果时至少执行：
 
-## 通用项
+- result JSON 可确定性解析并通过 schema；
+- workflow/task/run/Agent/attempt 身份一致；
+- worktree、artifact root、input commit 和 manifest SHA 一致；
+- 引用路径不逃逸授权根且不是 symlink；
+- `COMPLETED` 的 output commit 存在、基于 input、等于 HEAD，worktree clean；
+- 真实变更清单由宿主 Git 计算。
 
-- result status 为 `COMPLETED`；
-- preflight 通过；
-- policy 要求的 checks 全部提供并通过；
-- context manifest、身份、路径和引用 SHA 已由 ingestion 验证；
-- 不存在未绑定或过期的人工审批。
+各角色仍必须提供与阶段相符的证据：需求的范围/验收、架构的约束/风险、开发的实现与验证、测试的命令和失败、Review 的 commit 绑定、Release 的回滚与发布准备。缺少这些内容应返回 `NEEDS_REWORK`、`BLOCKED` 或 `FAILED`，不能用模糊的 `COMPLETED` 掩盖。
 
-## 阶段检查
-
-| 阶段 | 代码要求 |
-| --- | --- |
-| REQUIREMENTS | scope、boundaries、acceptance criteria |
-| ARCHITECTURE | constraints、data flow、risks |
-| DESIGN | interaction states、accessibility、responsive layout |
-| DEVELOPMENT | implementation、build、static checks、commit binding |
-| CODE_REVIEW | candidate binding、findings、regression risk |
-| TEST | test execution、regression、failure evidence、command evidence、Docker attestation、commit binding |
-| RELEASE | candidate binding、rollback、release readiness |
-
-## Commit binding
-
-DEVELOPMENT/TEST 的 output commit 必须为完整 SHA、存在、是 input commit 后代并等于当前 worktree HEAD。其他阶段返回不同 output commit 时 `commit_scope` 失败。
-
-## TEST Gate
-
-TEST 至少引用一个 CommandRecord，并且 task 持有代码验证的 Docker attestation。result isolation mode 必须为 `SANDBOXED_DOCKER`。daemon、container、mount、network、rootfs、capabilities 或资源限制无法验证时失败关闭，不提供人工“无沙箱例外”直通。
-
-## 人工审批
-
-阶段后人工审批只在 Gate PASS 后出现。批准不会修改 Gate；它只决定接受当前已通过结果、让同一 Agent 重做或终止。审批绑定 candidate，不能批准另一个 commit。
-
-## 失败证据
-
-Gate JSON 写入 `<artifact_root>/output/local-gate.json`，并随 task 错误摘要进入 checkpoint。失败 run 和原始输出保留；下一 attempt 不覆盖。
+若结果不能接收，Orchestrator 写 failure receipt、释放 execution lease、捕获 recovery snapshot 并按 attempt 上限处理。人工审批不能绕过 schema、身份或 Git 校验。

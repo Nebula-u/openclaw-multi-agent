@@ -1,11 +1,11 @@
 # CONTEXT_PROTOCOL.md — 上下文与规则传递协议
 
 > 版本: context-protocol v2
-> StateGraph dispatch 是本协议的执行者；工作 Agent 是只读消费者。
+> Orchestrator dispatch 是本协议的执行者；工作 Agent 是只读消费者。
 
 ## 1. 任务上下文包结构
 
-StateGraph 在每次派发前，于 `<artifact_root_abs>/input/` 创建不可变上下文包：
+Orchestrator 在每次派发前，于 `<artifact_root_abs>/input/` 创建不可变上下文包：
 
 ```
 <ABS_ARTIFACT_RUN_ROOT>/input/
@@ -44,8 +44,8 @@ StateGraph 在每次派发前，于 `<artifact_root_abs>/input/` 创建不可变
 3. 派发消息只提供：任务摘要、`dispatch_id`、input manifest SHA-256、绝对 `context-manifest.json` 路径、绝对输出目录 + 绝对 worktree 路径。
 4. 工作 Agent **先读取并校验**上下文包，再开始工作。
 5. 上下文不足 → 只返回缺失项，不自行扩大范围。
-6. 规则更新后，**不篡改**已派发任务的 input；StateGraph 必须创建新 attempt + 新 run_id + 新规则快照。
-7. checkpoint 只保存后续阶段真正需要的事实、决策、限制与证据引用；原始日志留在本 run artifact。
+6. 规则更新后，**不篡改**已派发任务的 input；Orchestrator 必须创建新 attempt + 新 run_id + 新规则快照。
+7. Control Kernel 只保存后续阶段需要的事实、决策、限制与证据引用；原始日志留在本 run artifact，代码版本留在 Git snapshot。
 8. 最小充分原则：只传递完成当前任务所必需的上下文。
 9. Monitor endpoint 只通过运行环境提供；上下文包可以声明“activity enabled”，但不得包含
    `MONITOR_TOKEN` 或其他凭据。
@@ -54,7 +54,7 @@ StateGraph 在每次派发前，于 `<artifact_root_abs>/input/` 创建不可变
 
 1. 工作 Agent 启动后，先比对派发消息中的 `dispatch_id`、workflow/task/run/agent ID 与 `context-manifest.json`，并计算/核对 input manifest SHA-256；不一致即 `BLOCKED`，不写产物、不开始工作。
 2. 校验完成后开始当前任务；启动状态由 runner 的真实进程事实记录，Agent 不发送会改变状态的 ACK。
-3. 先完整落盘所有结构化原文、报告、日志、校验和与（适用时）Git commit；进程退出后由 reconcile 校验结果，Agent 自述不代表完成事实。
+3. 先完整落盘所有结构化原文、报告、日志、校验和与（适用时）Git commit；进程退出后由 Orchestrator 校验结果并创建快照，Agent 自述不代表完成事实。
 4. 若 runner 终止当前 run，立即停止新增写入并如实退出；不得调度其他 Agent或自行重试。
 
 ## 6. 工作 Agent 侧消费步骤

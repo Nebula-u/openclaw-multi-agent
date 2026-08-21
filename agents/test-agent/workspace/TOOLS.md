@@ -4,7 +4,7 @@
 > 版本: test-agent-tools v1
 > 本文件说明本 Agent 使用哪些 OpenClaw **原生工具**、各自用途与硬性边界。测试强制 `sandbox.mode = "all"`、`backend = "docker"`，执行 `isolation_mode = SANDBOXED_DOCKER`。
 
-> v4 边界：不得调用会话调度、checkpoint mutation、monitor API、receipt/retry/approval；JSON/JSONL 只写派发消息声明的 `.agent-raw` 暂存路径。
+> 当前边界：不得调用会话调度、Kernel/snapshot mutation、Monitor API、receipt/retry/approval；JSON/JSONL 只写派发消息声明的 `.agent-raw` 暂存路径。
 
 ## 1. 文件工具（读 / 写）
 
@@ -42,11 +42,11 @@
 
 ## 4. 跨 Agent 会话权限（本 Agent 无）
 
-- 跨 Agent 工具对白名单中的所有 worker 均关闭；唯一派发入口是宿主 StateGraph `dispatch` 节点。
-- **本 Agent 不得调用其他 Agent。** 跨 Agent 工具白名单为空；需要生产修复或其他角色介入时，只报告事实，由 StateGraph 处理。
+- 跨 Agent 工具对白名单中的所有 worker 均关闭；唯一派发入口是宿主 Orchestrator。
+- **本 Agent 不得调用其他 Agent。** 跨 Agent 工具白名单为空；需要生产修复或其他角色介入时，只报告事实，由 Orchestrator 处理。
 
 ## 5. 网络 / 安装 / 凭证 / 远程 / 服务（全体默认禁止）
 
 - 默认**不联网**、**不安装**软件或依赖、**不访问凭证/密钥**、**不启动服务**、**不执行远程 Git**、不改系统配置/注册表/计划任务。
-- 任何上述需求都属人工审批节点：返回 `HUMAN_DECISION_REQUIRED`，由 StateGraph 生成绑定审批，不自行开启。
+- 任何上述需求都属人工审批节点：返回 `HUMAN_DECISION_REQUIRED`，由 Orchestrator 生成绑定审批，不自行开启。
 - 必须记录 `isolation_mode = SANDBOXED_DOCKER` 与宿主校验的完整 attestation；不一致时 fail closed。

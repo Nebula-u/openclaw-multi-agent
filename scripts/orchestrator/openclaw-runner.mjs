@@ -26,15 +26,17 @@ export function deliveryArgs(deliver) {
   return args;
 }
 
-export function buildOpenClawAgentArgs({ agentId, sessionId, messagePath, timeoutSeconds = 900, deliver = null }) {
-  const args = ['agent', '--agent', agentId, '--session-id', sessionId, '--message-file', messagePath, '--thinking', 'off', '--timeout', String(timeoutSeconds), '--json'];
+export function buildOpenClawAgentArgs({ agentId, sessionId, messagePath, timeoutSeconds = 900, deliver = null, thinking = null }) {
+  const args = ['agent', '--agent', agentId, '--session-id', sessionId, '--message-file', messagePath];
+  if (thinking) args.push('--thinking', thinking);
+  args.push('--timeout', String(timeoutSeconds), '--json');
   args.push(...deliveryArgs(deliver));
   return args;
 }
 
-export function runOpenClawAgent({ agentId, sessionId, messagePath, timeoutSeconds = 900, deliver = null, signal = null }) {
+export function runOpenClawAgent({ agentId, sessionId, messagePath, timeoutSeconds = 900, deliver = null, thinking = null, signal = null }) {
   if (signal?.aborted) return Promise.reject(Object.assign(new Error('OpenClaw Agent launch was cancelled before dispatch'), { code: 'ORCHESTRATOR_SHUTDOWN' }));
-  const args = buildOpenClawAgentArgs({ agentId, sessionId, messagePath, timeoutSeconds, deliver });
+  const args = buildOpenClawAgentArgs({ agentId, sessionId, messagePath, timeoutSeconds, deliver, thinking });
   const command = openClawSpawnSpec(args);
   return new Promise((resolveRun, rejectRun) => {
     const child = spawn(command.file, command.args, { ...command.options, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });

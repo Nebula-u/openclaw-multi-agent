@@ -1,4 +1,4 @@
-import { appendFileSync, copyFileSync, existsSync, lstatSync, mkdirSync, readFileSync } from 'node:fs';
+import { appendFileSync, existsSync, lstatSync, mkdirSync, readFileSync } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import Ajv from 'ajv';
 import addFormats from 'ajv-formats';
@@ -42,12 +42,6 @@ function assertIdentity(task, value) {
     }
   }
 }
-function cas(projectRoot, path) {
-  const digest = sha256File(path); const target = join(projectRoot, 'runtime', 'artifacts', 'cas', digest.slice(0, 2), digest);
-  mkdirSync(dirname(target), { recursive: true }); if (!existsSync(target)) copyFileSync(path, target);
-  return { sha256: digest, path_abs: target };
-}
-
 export function ingestTaskOutput({ projectRoot, task, occurredAt = new Date().toISOString() }) {
   const rawPath = rawOutputPath(task); regular(rawPath, 'AGENT_OUTPUT_MISSING');
   const raw = readFileSync(rawPath, 'utf8');
@@ -62,7 +56,8 @@ export function ingestTaskOutput({ projectRoot, task, occurredAt = new Date().to
     cleaned_sha256: ingestion.cleaned_sha256, transformations: ingestion.transformations, accepted_at: occurredAt });
   const logPath = join(task.artifactRootAbs, 'logs', 'agent-output.jsonl'); mkdirSync(dirname(logPath), { recursive: true });
   appendFileSync(logPath, `${JSON.stringify({ recorded_at: occurredAt, task_id: task.taskId, agent_id: task.agentId, raw_sha256: ingestion.raw_sha256, transformations: ingestion.transformations })}\n`, 'utf8');
-  return { value: ingestion.value, outputPath, receiptPath, rawPath, casArtifacts: [cas(projectRoot, outputPath), cas(projectRoot, receiptPath)] };
+  return { value: ingestion.value, outputPath, receiptPath, rawPath,
+    artifacts: [{ sha256: sha256File(outputPath), path_abs: outputPath }, { sha256: sha256File(receiptPath), path_abs: receiptPath }] };
 }
 
 export function writeFailureReceipt(task, error, occurredAt = new Date().toISOString()) {

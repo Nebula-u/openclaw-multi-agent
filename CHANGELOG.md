@@ -1,5 +1,24 @@
 # Changelog
 
+## 2026-08-21 - 单机 SQLite、Git 快照与 HR Session 审查
+
+### 更新内容
+
+- Control Kernel 从 PostgreSQL/StateGraph 改为 Node 22.13+ 内置 SQLite，默认 `runtime/control/kernel.db`，八张事实/索引表启用 WAL、外键、busy timeout 与 `synchronous=FULL`。
+- 删除 `pg` 依赖、旧 pool、StateGraph 历史迁移、revision CAS、事件表/事件哈希链和 artifact CAS 源码副本；新版本从空 SQLite 开始，不迁移历史数据库。
+- 新增宿主验证的 Git snapshot：accepted/no-change/failed-recovery/restore/revert；隐藏 ref 固定 commit，Restore 创建新分支/worktree，Revert 要求精确确认并创建反向 commit。
+- 快照 diff 改从目标 Git 仓库读取，清理原 task worktree 后仍可查看；SQLite 只存 Agent/Session/task/execution 与 commit 的索引和变更摘要。
+- 新增 HR Session dossier：只读取脱敏的 assistant reasoning、最后输出和真实 Git 修改；按 Session 分批、全 Session reasoning 共用 12k 字符预算，并拒绝真实路径逃逸。
+- HR 仅检查 `UNAUTHORIZED_ACTION`、`UNCLEAR_BOUNDARY`、`SPECULATIVE_OR_VAGUE`，默认手动；保留 `off/task/daily/both` 自动调度接口。
+- Monitor 改用只读 SQLite Kernel，展示 Git snapshot/HR，并提供只读 snapshot list/detail/diff；不负责 workflow、HR、restore 或 revert 写操作。
+- 更新所有受影响 Agent 规则、安装包、README、架构、监控、Git/HR 运维文档和 ADR；旧 PostgreSQL ADR/计划明确标为已取代。
+
+### 部署边界
+
+- 只支持同一台机器上的本地磁盘，不支持多台机器或网络文件系统共享 SQLite。
+- 完整备份必须同时覆盖 Kernel SQLite、目标 Git 仓库和需要保留的 artifacts。
+- 本次修改触发已安装 Agent 更新；普通更新不要求停止 Gateway。
+
 ## 2026-08-18 - Control Kernel + PostgreSQL 分层重构
 
 ### 更新内容

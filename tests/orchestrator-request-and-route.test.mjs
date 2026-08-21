@@ -102,7 +102,7 @@ test('foreground service polls automatically and exits cleanly after a stop requ
   const projectRoot = mkdtempSync(join(tmpdir(), 'orchestrator-foreground-'));
   let ticks = 0; let hrRuns = 0; let waits = 0;
   const orchestrator = { projectRoot, async tickAll() { ticks += 1; return []; } };
-  const hr = { async runPending() { hrRuns += 1; return []; } };
+  const hr = { autoMode: 'off', async runPending() { hrRuns += 1; return []; } };
   const result = await runForegroundService({
     projectRoot,
     orchestrator,
@@ -116,7 +116,7 @@ test('foreground service polls automatically and exits cleanly after a stop requ
   });
   assert.equal(result.state, 'STOPPED');
   assert.equal(ticks, 1);
-  assert.equal(hrRuns, 1);
+  assert.equal(hrRuns, 0);
   assert.equal(readForegroundServiceStatus(projectRoot).state, 'STOPPED');
   assert.throws(() => requestForegroundServiceStop(mkdtempSync(join(tmpdir(), 'orchestrator-not-running-'))), (error) => error.code === 'ORCHESTRATOR_NOT_RUNNING');
 });

@@ -1,48 +1,34 @@
 # Agent 运行契约
 
-## 通用身份
+## 通用边界
 
-每个 worker 只接受 StateGraph dispatch 创建的 task。task 固定包含 workflow、step、run、Agent、attempt、input commit、worktree、artifact root、context manifest 和 Gate checks。
+每个 worker 只接受 Orchestrator 创建的 task。task 固定绑定 workflow、step、run、Agent、attempt、input commit、worktree、artifact root 与 context manifest。
 
-Agent 必须：
+Agent 必须核对身份、路径和 manifest SHA，只完成被分配步骤；不得调用其他 Agent、写 Control Kernel、改变路线或审批、操作 Monitor，也不得替用户做决定。
 
-- 核对自身 ID、run、attempt、路径和 manifest SHA；
-- 只在授权 worktree、`.agent-raw` 和 raw log 路径写入；
-- 保留真实命令、stdout、stderr、失败和限制；
-- 返回 checkpoint 指定的 input commit；
-- 不调用其他 Agent、不审批、不改路线、不推进状态。
+## 结构化结果
 
-## 结构化输出
+worker 只向 `<artifact_root>/.agent-raw/result.json.raw` 写一个符合 `contracts/result.schema.json` 的对象。Orchestrator 校验 schema、workflow/task/run/Agent/attempt、worktree、artifact root、input commit 与 context manifest SHA，再发布到 `output/result.json`。
 
-Manager 输出 `route-plan.json.raw`；worker 输出 `result.json.raw`。Agent 不直接写 `output/` 或 ingestion receipt。
-
-result 的身份字段必须与 task 完全一致。`report_files`、`command_record_refs`、`evidence_refs` 只能引用授权根内普通非 symlink 文件。自检只是候选信息，不能替代宿主 ingestion/Gate。
-
-`result_status` 允许：`COMPLETED`、`NEEDS_REWORK`、`BLOCKED`、`HUMAN_DECISION_REQUIRED`、`FAILED`。`HOLD` 是 StateGraph condition，不是 Agent result status。
+`result_status`：`COMPLETED`、`NEEDS_REWORK`、`BLOCKED`、`HUMAN_DECISION_REQUIRED`、`FAILED`。非完成结果仍会捕获 recovery snapshot，但不会作为成功候选推进。
 
 ## Git
 
-DEVELOPMENT 和 TEST 返回完整 `output_commit`。该 commit 必须存在、基于 input commit 并等于 worktree HEAD。TEST 无修改时返回 input commit；REQUIREMENTS、ARCHITECTURE、DESIGN、REVIEW、RELEASE 不得替换 candidate。
+Agent 在授权 worktree 中正常提交。宿主而非 Agent 决定快照是否可信：验证 commit 存在、血缘、HEAD 和 clean 状态，并重新计算文件 diff。Agent 不创建 `refs/openclaw/snapshots/*`。
 
-## TEST
+失败或脏 worktree 可能由宿主生成 recovery commit。Restore/Revert 只能通过宿主 CLI 执行；Agent 禁止用 `reset --hard` 代替回滚。
 
-test-agent 固定使用 `SANDBOXED_DOCKER`，实际执行路径为 `/worktree`、`/input`、`/agent-raw`、`/raw-logs`。禁止主机执行、网络、提权和额外 mount。
+## 角色
 
-TEST result 和 CommandRecord 必须声明 `SANDBOXED_DOCKER`，并包含代码验证的 sandbox attestation。第一次失败即使后续通过也应保留证据并报告潜在 flaky。
+- requirement-agent：范围、边界、验收标准；
+- architect-agent：架构/设计、接口、风险和测试策略；
+- developer-agent：实现并提交代码；
+- test-agent：执行/补充测试并保存真实证据；
+- review-agent：绑定候选 commit 审查；
+- release-agent：核查发布与回滚准备，不执行部署；
+- manager-agent：只在原始用户 Session 中解释路线和收集决定；
+- hr-agent：只读脱敏 dossier，只检查三类边界问题。
 
-## 角色差异
+## Session 与重试
 
-- requirement-agent：范围、边界、验收标准。
-- architect-agent：架构/设计、接口、风险和测试策略。
-- developer-agent：实现代码并提交候选。
-- review-agent：审查 checkpoint candidate，输出发现与回归风险。
-- test-agent：补充/执行测试并提交测试证据或测试 commit。
-- release-agent：绑定最终 candidate，核查回滚与发布准备，不执行部署。
-
-## 重试
-
-JSON repair 使用同一 session，只重写结构化文件，最多 2 次。task attempt 重试使用新 run/session/worktree，最多 3 次。Agent 不自行决定或隐瞒重试。
-
-## 完整契约清单
-
-本文只覆盖 Agent 直接读写的输出契约。`contracts/` 目录当前共 22 个 schema，其余（`approval-request/response/assessment.schema.json`、`agent-package.schema.json`、`skill-package.schema.json`、`component-request/build-result.schema.json`、`gate-result.schema.json`、`release-decision.schema.json` 等）由代码内部在审批、组件管理、Gate 和发布决策环节使用，Agent 不直接读写这些文件。
+Orchestrator 为每个 task/attempt 生成确定性 Session ID。新的 task attempt 使用新的 Session 归属；OpenClaw 保存对话，SQLite execution/snapshot 记录其绑定。Agent 不能自行更换 Session 或把其他 Session 产物冒充为当前任务结果。

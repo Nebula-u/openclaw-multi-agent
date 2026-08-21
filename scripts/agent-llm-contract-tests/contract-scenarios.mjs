@@ -33,7 +33,7 @@ export const INTERNAL_CONTRACTS = new Set([
   // human-confirmation check; they are never emitted directly by an Agent.
   'manager-request.schema.json',
   // Control Kernel 事实表投影：由 scripts/control-kernel/repository.mjs 直接
-  // 从 PostgreSQL 行映射产出，不经过任何 Agent。
+  // 从 SQLite Kernel 行映射产出，不经过任何 Agent。
   'kernel-run.schema.json',
   'kernel-execution.schema.json',
   'kernel-artifact.schema.json',

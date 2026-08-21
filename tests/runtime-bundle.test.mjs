@@ -93,3 +93,15 @@ test('filtered bundle records only selected installed Agents', () => {
     assert.equal(run('verify', value).status, 0);
   } finally { value.cleanup(); }
 });
+
+test('HR package is manual-first and limited to the three Session review categories', () => {
+  const workspace = ['AGENTS.md', 'SOUL.md', 'TOOLS.md']
+    .map((name) => readFileSync(join(ROOT, 'agents', 'hr-agent', 'workspace', name), 'utf8')).join('\n');
+  const manifest = JSON.parse(readFileSync(join(ROOT, 'agents', 'packages', 'builtin', 'hr-agent.json'), 'utf8'));
+  assert.match(workspace, /UNAUTHORIZED_ACTION[\s\S]*UNCLEAR_BOUNDARY[\s\S]*SPECULATIVE_OR_VAGUE/u);
+  assert.match(workspace, /thinking\/reasoning/u);
+  assert.match(workspace, /manually invoked/u);
+  assert.doesNotMatch(workspace, /Never.*read thinking/iu);
+  assert.deepEqual(manifest.capabilities, ['observability.session-review', 'observability.git-review', 'automation.review-hook']);
+  assert.equal(manifest.delegation.callable_by_manager, false);
+});

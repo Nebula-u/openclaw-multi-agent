@@ -1,34 +1,22 @@
-# Evidence、CommandRecord 与 Claims
+# Evidence、Artifact 与 Claims
 
-> 最后核对日期：2026-08-17（对照 `contracts/evidence.schema.json`、`contracts/command-record.schema.json` 当前版本核实一致）
+## Artifact 索引
 
-## Evidence
+`runtime/artifacts/<workflow>/<task>/` 保存 result、context、日志、receipt 和可选证据文件。SQLite `artifacts` 表只记录 URI、SHA-256、大小、类型和 commit 关联，不保存内容寻址副本。
 
-`evidence.jsonl` 每行遵循 `contracts/evidence.schema.json`。存在 `locator_abs` 时，路径必须位于授权 worktree 或本 run artifact；文件必须普通、非 symlink。声明 `sha256` 时，本地代码按原始字节重新计算。
+Agent 输出中的绝对引用只能位于授权 artifact root 或 worktree，且必须是普通非 symlink 文件。Orchestrator 对发布的 result/receipt 重新计算 SHA-256 后登记。
 
-Git 证据可使用 `git_locator`，但 candidate 推进仍以本地 Git 对象、ancestry 和 HEAD 校验为准。
+## Git 证据
 
-## CommandRecord
-
-`command-records.jsonl` 每行记录 executable/argv、cwd、时间、exit code、timeout、stdout/stderr locator、attempt、Agent、task、run 和 isolation mode。
-
-stdout/stderr 必须独立落盘。声明摘要时，必须与文件字节 SHA 一致。TEST 的 isolation mode 必须为 `SANDBOXED_DOCKER`。
+代码修改以宿主 Git 为准。snapshot 保存 input/output commit 与宿主生成的 name-status/stat；patch 按需从目标仓库计算。Session 中声称“修改了某文件”不能替代 Git diff。
 
 ## Claims
 
-Agent 声明分为：
-
-- `OBSERVED`：有当前 run 的 evidence/command/git 证据；
-- `INFERRED`：基于观察推断，必须说明限制；
+- `OBSERVED`：有当前运行的文件、命令或 Git 证据；
+- `INFERRED`：根据观察推断，必须说明限制；
 - `PROPOSED`：建议或计划；
 - `UNKNOWN`：证据不足。
 
-只有 `OBSERVED` 可以直接陈述为已发生事实。Agent 自报“测试通过”“可发布”不构成 Gate PASS。
+只有 `OBSERVED` 可直接陈述为已发生事实。Agent 自报测试通过或可发布仍需对应输出、exit code 或 Git 证据。
 
-## 接收 receipt
-
-ingestion receipt 记录 raw/cleaned SHA、清洗变换、最终 output 和所有 report/CommandRecord/evidence 引用的 SHA。receipt 是接收证据；workflow 是否推进仍由 local Gate 和 checkpoint 决定。
-
-## 事件链
-
-checkpoint 事件对 canonical JSON 使用 SHA-256；文件证据直接哈希原始字节。两者用途不同，不得把对象 canonical hash 当作文件摘要。
+本版本没有 workflow 事件哈希链。文件 SHA 用于验证具体 artifact 字节，Git commit 用于验证代码历史；二者不承担事件重放或数据库防篡改证明。

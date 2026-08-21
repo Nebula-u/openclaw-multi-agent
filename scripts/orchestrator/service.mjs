@@ -3,11 +3,12 @@ import { existsSync, mkdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { atomicWriteFile, atomicWriteJson, sha256File } from '../runtime-core/atomic-store.mjs';
 import { createKernel } from '../control-kernel/kernel.mjs';
-import { createKernelPool, resolveKernelConfig } from '../control-kernel/pool.mjs';
+import { openKernelDatabase, resolveKernelConfig } from '../control-kernel/database.mjs';
 import { createWorkflowRepository } from '../control-kernel/workflow-repository.mjs';
 import { assertOrchestratorWorker, loadActiveAgentRegistry } from './agent-registry.mjs';
 import { createContextManifest } from './context-manifest.mjs';
 import { createGitWorktreeManager } from './git-worktree.mjs';
+import { createSnapshotService } from './snapshot-service.mjs';
 import { ingestTaskOutput, writeFailureReceipt } from './output-ingestion.mjs';
 import { runOpenClawAgent } from './openclaw-runner.mjs';
 import { compileRoutePlan, GATE_CHECKS_BY_KIND } from './route-policy.mjs';
@@ -31,18 +32,19 @@ function approvalRequest(task, result = null, step = null) {
 }
 
 export function taskMessage(task) {
-  return `# Orchestrator task\n\n- workflow_id: ${task.workflowId}\n- task_id: ${task.taskId}\n- run_id: ${task.runId}\n- step_id: ${task.stepId}\n- assigned_agent: ${task.agentId}\n- attempt: ${task.attempt}\n- worktree_path_abs: ${task.worktreePathAbs}\n- context_manifest_path_abs: ${task.contextManifestPathAbs}\n- context_manifest_sha256: ${task.contextManifestSha256}\n\nComplete only this assigned step. Read the immutable context manifest. Do not communicate with other Agents, alter route or approval records, write to PostgreSQL, or call Monitor controls. Write exactly one result.schema.json object only to:\n\n${task.rawOutputPath}\n\nThe Orchestrator will validate and publish it. Do not write final outputs directly.\n`;
+  return `# Orchestrator task\n\n- workflow_id: ${task.workflowId}\n- task_id: ${task.taskId}\n- run_id: ${task.runId}\n- step_id: ${task.stepId}\n- assigned_agent: ${task.agentId}\n- attempt: ${task.attempt}\n- worktree_path_abs: ${task.worktreePathAbs}\n- context_manifest_path_abs: ${task.contextManifestPathAbs}\n- context_manifest_sha256: ${task.contextManifestSha256}\n\nComplete only this assigned step. Read the immutable context manifest. Do not communicate with other Agents, alter route or approval records, write to the Control Kernel, or call Monitor controls. Write exactly one result.schema.json object only to:\n\n${task.rawOutputPath}\n\nThe Orchestrator will validate and publish it. Do not write final outputs directly.\n`;
 }
 
-export function createOrchestrator({ projectRoot: projectRootInput, pool = null, kernel = null, repository = null, worktrees = null,
+export function createOrchestrator({ projectRoot: projectRootInput, database = null, kernel = null, repository = null, worktrees = null, snapshots = null,
   runner = runOpenClawAgent, notificationRunner = runOpenClawAgent, hr = null, clock = () => new Date(), maxAttempts = 3, timeoutSeconds = 900, signal = null } = {}) {
   const projectRoot = resolve(projectRootInput ?? process.cwd());
-  const ownedPool = !pool && !kernel && !repository;
+  const ownedDatabase = !database && !kernel && !repository;
   const config = resolveKernelConfig({ projectRoot });
-  const selectedPool = pool ?? (kernel ? null : createKernelPool({ ...config }));
-  const selectedKernel = kernel ?? createKernel({ pool: selectedPool, workerId: config.workerId, leaseSeconds: config.leaseSeconds, clock });
-  const selectedRepository = repository ?? createWorkflowRepository({ pool: selectedPool, kernel: selectedKernel, clock });
+  const selectedDatabase = database ?? kernel?.database ?? (repository ? null : openKernelDatabase(config));
+  const selectedKernel = kernel ?? createKernel({ database: selectedDatabase, workerId: config.workerId, leaseSeconds: config.leaseSeconds, clock });
+  const selectedRepository = repository ?? createWorkflowRepository({ database: selectedDatabase, clock });
   const selectedWorktrees = worktrees ?? createGitWorktreeManager({ projectRoot });
+  const selectedSnapshots = snapshots ?? createSnapshotService({ repository: selectedRepository, worktrees: selectedWorktrees });
   const registry = loadActiveAgentRegistry(projectRoot);
   let hrService = hr;
 
@@ -192,13 +194,21 @@ export function createOrchestrator({ projectRoot: projectRootInput, pool = null,
     const dispatchRoot = join(task.artifactRootAbs, '.orchestrator'); mkdirSync(dispatchRoot, { recursive: true });
     const messagePath = join(dispatchRoot, `attempt-${task.attempt}.message.md`); atomicWriteFile(messagePath, taskMessage(task));
     atomicWriteJson(join(dispatchRoot, `attempt-${task.attempt}.dispatch.json`), { schema_version: 1, execution_id: execution.executionId, session_id: sessionId, message_path_abs: messagePath, started_at: now(clock) });
+    let taskSnapshot = null;
     try {
       const result = await runner({ agentId: task.agentId, sessionId, messagePath, timeoutSeconds, signal });
       processLog(task, `attempt-${task.attempt}.stdout.log`, result.stdout); processLog(task, `attempt-${task.attempt}.stderr.log`, result.stderr);
       if (result.exitCode !== 0) throw Object.assign(new Error(`OpenClaw Agent exited with ${result.exitCode}`), { code: 'OPENCLAW_AGENT_EXIT_NONZERO', details: { stderr: String(result.stderr ?? '').slice(-4000) } });
       const ingested = ingestTaskOutput({ projectRoot, task, occurredAt: now(clock) });
+      const snapshotInput = { runId: run.runId, taskId: task.taskId, executionId: execution.executionId,
+        attempt: task.attempt, agentId: task.agentId, sessionId, inputCommit: task.inputCommit,
+        worktreePathAbs: task.worktreePathAbs, targetProjectRootAbs: task.targetProjectRootAbs };
+      const snapshot = ingested.value.result_status === 'COMPLETED'
+        ? await selectedSnapshots.accept({ ...snapshotInput, outputCommit: ingested.value.output_commit ?? task.inputCommit })
+        : await selectedSnapshots.recover(snapshotInput);
+      taskSnapshot = snapshot;
       await selectedKernel.lease.releaseLease({ executionId: execution.executionId, state: 'SUCCEEDED', exitCode: result.exitCode });
-      const payload = { ...(current.payload ?? {}), result: ingested.value, published_output_path_abs: ingested.outputPath, ingestion_receipt_path_abs: ingested.receiptPath, session_id: sessionId };
+      const payload = { ...(current.payload ?? {}), result: ingested.value, snapshot, published_output_path_abs: ingested.outputPath, ingestion_receipt_path_abs: ingested.receiptPath, session_id: sessionId };
       const completed = await selectedRepository.updateTask(task.taskId, { state: 'SUCCEEDED', payload }, { eventType: 'TASK_SUCCEEDED', eventPayload: { result_status: ingested.value.result_status, output_path_abs: ingested.outputPath } });
       await selectedRepository.registerArtifact({ runId: run.runId, taskId: task.taskId, executionId: execution.executionId, kind: 'RESULT', uri: ingested.outputPath, sha256: sha256File(ingested.outputPath), sizeBytes: 0, mediaType: 'application/json' });
       await selectedRepository.registerArtifact({ runId: run.runId, taskId: task.taskId, executionId: execution.executionId, kind: 'INGESTION_RECEIPT', uri: ingested.receiptPath, sha256: sha256File(ingested.receiptPath), sizeBytes: 0, mediaType: 'application/json' });
@@ -216,9 +226,17 @@ export function createOrchestrator({ projectRoot: projectRootInput, pool = null,
       }
       return advanceAfterSuccess(run, completed, ingested.value);
     } catch (error) {
+      let recoverySnapshot = null;
+      try {
+        recoverySnapshot = taskSnapshot ?? await selectedSnapshots.recover({ runId: run.runId, taskId: task.taskId, executionId: execution.executionId,
+          attempt: task.attempt, agentId: task.agentId, sessionId, inputCommit: task.inputCommit,
+          worktreePathAbs: task.worktreePathAbs, targetProjectRootAbs: task.targetProjectRootAbs });
+      } catch (recoveryError) {
+        error.details = { ...(error.details ?? {}), recovery_error: { code: recoveryError.code ?? 'SNAPSHOT_RECOVERY_FAILED', message: recoveryError.message } };
+      }
       await selectedKernel.lease.releaseLease({ executionId: execution.executionId, state: 'FAILED', exitCode: 1, error: { code: error.code ?? 'TASK_EXECUTION_FAILED', message: error.message } });
       const receipt = writeFailureReceipt(task, error, now(clock));
-      const failed = await selectedRepository.updateTask(task.taskId, { state: 'FAILED', lastError: { code: error.code ?? 'TASK_EXECUTION_FAILED', message: error.message, receipt_path_abs: receipt } }, { eventType: 'TASK_FAILED', eventPayload: { code: error.code ?? 'TASK_EXECUTION_FAILED', message: error.message } });
+      const failed = await selectedRepository.updateTask(task.taskId, { state: 'FAILED', payload: { ...(current.payload ?? {}), recovery_snapshot: recoverySnapshot }, lastError: { code: error.code ?? 'TASK_EXECUTION_FAILED', message: error.message, receipt_path_abs: receipt } }, { eventType: 'TASK_FAILED', eventPayload: { code: error.code ?? 'TASK_EXECUTION_FAILED', message: error.message } });
       await announce(run, 'TASK_FAILED', { task_id: task.taskId, agent_id: task.agentId, error: failed.lastError }, task.taskId);
       await queueDailyReport(run, failed, 'FAILED');
       return { state: 'FAILED', task: failed };
@@ -266,7 +284,7 @@ export function createOrchestrator({ projectRoot: projectRootInput, pool = null,
     return nextIndex >= run.routePlan.steps.length ? finishRun(resumed, 'SUCCEEDED', 'all route steps approved') : resumed;
   }
 
-  async function close() { if (ownedPool) await selectedPool.end(); }
+  async function close() { if (ownedDatabase) selectedDatabase.close(); }
   function attachHrService(value) { hrService = value; return hrService; }
-  return { projectRoot, repository: selectedRepository, kernel: selectedKernel, createRun, reviseRun, decide, tick, tickAll, deliverNotifications, attachHrService, close };
+  return { projectRoot, repository: selectedRepository, kernel: selectedKernel, snapshots: selectedSnapshots, createRun, reviseRun, decide, tick, tickAll, deliverNotifications, attachHrService, close };
 }

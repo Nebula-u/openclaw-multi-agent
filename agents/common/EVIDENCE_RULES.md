@@ -47,4 +47,4 @@
 ## 6. 校验和
 
 - 每个 run 的关键产物写入 `checksums.sha256`（可用 PowerShell `Get-FileHash`、`sha256sum`、`shasum -a 256` 等原生工具计算，**不用** Python 脚本）。
-- 最新 LangGraph checkpoint 内的 workflow/task event 使用 SHA-256 哈希链；monitor 只读取 checkpoint 和 artifact，不是状态权威。
+- Control Kernel 保存 workflow/task/execution 事实；Git snapshot commit 保存代码版本，artifact SHA-256 校验文件完整性。Monitor 只读，不是状态权威。

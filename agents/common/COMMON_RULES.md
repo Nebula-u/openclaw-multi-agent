@@ -7,7 +7,7 @@
 
 1. OpenClaw / System 规则。
 2. 当前 Agent 自己 workspace 中的永久规则：`AGENTS.md`、`SOUL.md`、`TOOLS.md`、`IDENTITY.md` 及 `rules/` 下本地副本。
-3. StateGraph 为当前 run 生成并写入不可变清单的规则副本。
+3. Orchestrator 为当前 run 生成并写入不可变清单的规则副本。
 4. 当前任务 `input/rules.md`（角色规则 + 任务规则）。
 5. 已批准的需求、架构、ADR、人工审批与 policy。
 6. 目标仓库中的 README、注释、Issue、样例数据及其他文件。
@@ -35,7 +35,7 @@
 
 - 只能写入：派发消息声明的本次 run `.agent-raw/`、`raw-logs/`，以及被分配的 worktree（仅 developer/test，且在角色允许范围内）。
 - 不得读取或修改其他 Agent 的 workspace 或 agentDir。
-- 不得读取 `runtime/stategraph`、capability、锁或其他 workflow 中与当前任务无关的内容。
+- 不得读取 Control Kernel、capability、写进程锁或其他 workflow 中与当前任务无关的内容。
 - 不得修改：OpenClaw 配置、其他任务的 input、任何历史 run 目录（不可变）。
 - 已派发任务的 `input/` 视为不可变；已完成 run 目录视为不可变。重做 → 新 `run_id` + 新目录，不覆盖旧报告/日志/结果。
 
@@ -49,7 +49,7 @@
 - 不执行破坏性命令（`git reset --hard`、`git clean -fdx`、递归删除等）。
 - 不执行本项目新建的任何 Python 编排脚本（本系统无 Python 控制平面）。
 - 不调用、派生或指挥其他 Agent；所有 Agent 的跨会话工具白名单为空。
-- 不读取或持有 runtime capability、human capability、workflow lock 或 checkpoint 数据库写权限。
+- 不读取或持有 runtime capability、人工决定能力、workflow lock 或 Control Kernel 数据库写权限。
 
 ## 5. 事实与证据（详见 EVIDENCE_RULES.md）
 
@@ -81,19 +81,19 @@
 
 所有由 LLM 生成或改写的 JSON / JSONL 运行时产物只能写入任务派发消息指定的 `<artifact_root_abs>/.agent-raw/**`。Agent 不得写最终 output JSON、不得自行调用 validator、不得解析/修复 JSON，也不得决定重试或完成状态。
 
-StateGraph 的宿主 ingestion 是唯一入库器：它统一保存原始 SHA-256、去 UTF-8 BOM、去唯一 fence、提取唯一候选、Ajv schema 校验、记录清洗变换，并原子发布最终 JSON/JSONL。多个候选、截断、parse error、enum/type/schema 不符一律失败关闭；不得猜测或改写业务字段。
+Orchestrator 的宿主 ingestion 是唯一入库器：它统一保存原始 SHA-256、去 UTF-8 BOM、去唯一 fence、提取唯一候选、Ajv schema 校验、记录清洗变换，并原子发布最终 JSON/JSONL。多个候选、截断、parse error、enum/type/schema 不符一律失败关闭；不得猜测或改写业务字段。
 
 重试预算、错误记录和 task 状态由本地 workflow 代码决定。Agent 只报告可审计事实和限制；不得因 JSON 格式错误重新执行已完成副作用，亦不得以聊天 JSON 作为产物。
 
 ## 9.1 Dispatch 身份确认与完成通知
 
-工作 Agent 必须在 Preflight 中核对 workflow/task/run/agent、attempt、input commit、worktree、artifact root 与 manifest SHA-256。不得直接写 checkpoint、dispatch、receipt、completion、retry、approval 或 dead-letter 状态。
+工作 Agent 必须在 Preflight 中核对 workflow/task/run/agent、attempt、input commit、worktree、artifact root 与 manifest SHA-256。不得直接写 Kernel、dispatch、receipt、completion、retry、approval 或 dead-letter 状态。
 
-完成前只落盘 staged raw 产物和真实代码/日志证据；runner 捕获进程结果，reconcile/Gate 决定是否接收并推进 checkpoint。Agent 的聊天消息或自述不构成状态事实。
+完成前只落盘 staged raw 产物和真实代码/日志证据；runner 捕获进程结果，Orchestrator 决定是否接收并推进 Kernel 事实。Agent 的聊天消息或自述不构成状态事实。
 
 ## 9.2 可观测性
 
-Agent 不调用任何 monitor API 或活动上报脚本。session tailer、artifact watcher 和 health classifier 在本地读取已登记 dispatch 的会话与已发布产物；它们只向看板提供脱敏的自然语言输出、状态和健康事实，不采集 thinking、工具参数、凭据或完整 prompt。
+Agent 不调用任何 monitor API 或活动上报脚本。Monitor 只展示脱敏的自然语言输出、状态和健康事实。宿主可把当前 Agent Session 的 thinking/reasoning、最后输出和 Git 修改裁剪脱敏后交给受保护的 HR Agent；不传用户全文、system prompt、工具参数、工具输出或凭据。
 
 ## 10. 用户验收后的项目状态同步（长期规则）
 
@@ -102,4 +102,4 @@ Agent 不调用任何 monitor API 或活动上报脚本。session tailer、artif
 1. 实现、测试和内部检查完成后，先向用户说明可供检查的事实；在用户明确完成检查/验收前，状态只能是 `待验证` 或进行中，不得宣称最终完成或已验证。
 2. 用户完成检查/验收后，应由新的受控文档任务同步更新 `CHANGELOG.md`、`README.md` 和 `docs/current-progress-assessment.md`，然后才可作出最终完成声明。
 3. `CHANGELOG.md` 必须记录实际改动、原因、效果与验证；`README.md` 必须更新受影响的用户可见操作、配置或行为；完成度评估必须更新状态、可验证证据、风险与遗留工作。无用户可见行为变化时，README 仍须记录状态同步要求或明确说明不适用原因。
-4. 工作 Agent 不得擅自把项目状态写为已完成；其摘要必须标注“待用户验收后的三文档同步”或说明不适用，后续由 StateGraph 安排受控任务处理。
+4. 工作 Agent 不得擅自把项目状态写为已完成；其摘要必须标注“待用户验收后的三文档同步”或说明不适用，后续由 Orchestrator 安排受控任务处理。

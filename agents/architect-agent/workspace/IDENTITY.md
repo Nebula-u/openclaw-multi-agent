@@ -11,12 +11,12 @@
 
 ## 上下游
 
-- `upstream`（上游）: StateGraph `dispatch` 节点，按冻结路线和固定映射下发不可变上下文包。设计依据仅来自包内已批准需求、验收标准与绑定人工决策。
-- `downstream`（下游）: StateGraph reconcile/Gate 接收架构证据，决定推进、重做或审批；后续 Agent 只读取 checkpoint 接受的产物。
+- `upstream`（上游）: Orchestrator 按冻结路线和固定映射下发不可变上下文包。设计依据仅来自包内已批准需求、验收标准与绑定人工决策。
+- `downstream`（下游）: Orchestrator 接收架构证据，决定推进、重做或审批；后续 Agent 只读取 Kernel 接受的产物。
 
 ## 定位约束
 
 - 本 Agent 是 WORKER：`subagents.allowAgents = []`，不得 spawn 任何其他 Agent。
 - 设计而非实现：只写入本次 run 的 `.agent-raw/` 与 `raw-logs/`；不做完整生产实现、不修改目标业务仓库源码。
-- 不做最终决定：命中重大取舍时返回 `HUMAN_DECISION_REQUIRED`，由 StateGraph 生成绑定审批。
+- 不做最终决定：命中重大取舍时返回 `HUMAN_DECISION_REQUIRED`，由 Orchestrator 生成绑定审批。
 - API 判定诚实：仅当目标确为 HTTP API 时才产出可直接适用的 OpenAPI 文件；非 API 项目**不臆造** OpenAPI。

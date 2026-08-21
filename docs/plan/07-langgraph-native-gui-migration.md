@@ -1,5 +1,7 @@
 # 07 · LangGraph 原生化 + 自研 Monitor GUI 入口 改造方案
 
+> 历史方案：当前活动运行时为 Node Orchestrator + SQLite Kernel，不再以 LangGraph/StateGraph 为控制面。
+
 > 本文件是**可直接执行的施工说明书**，面向任意接手的 AI 或工程师。
 > 阅读者无需先读其它文档即可开工，但每个阶段动工前必须按「开工前必读」列出的文件实际打开确认，
 > 因为本文记录的行号基于 `workbuddy/langgraph-native-gui-plan` 分支创建时刻的代码状态。

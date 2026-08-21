@@ -1,5 +1,7 @@
 # 03 · PostgreSQL 数据模型
 
+> 历史计划：当前实现使用单机 SQLite，不部署本文 PostgreSQL 模型，也不迁移其历史数据。
+
 > 目标：一个数据库实例、两个 schema。`kernel` 存事实，`langgraph` 存决策投影。
 
 ---

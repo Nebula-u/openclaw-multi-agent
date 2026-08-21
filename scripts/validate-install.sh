@@ -3,7 +3,18 @@
 set -uo pipefail
 
 SKIP_OPENCLAW=0
-[ "${1:-}" = "--skip-openclaw" ] && SKIP_OPENCLAW=1
+RUNTIME_ROOT="runtime"
+usage() {
+  printf '%s\n' '用法: validate-install.sh [--skip-openclaw] [--runtime-root <path>]'
+}
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --skip-openclaw) SKIP_OPENCLAW=1; shift ;;
+    --runtime-root) RUNTIME_ROOT="${2:?--runtime-root 需要参数}"; shift 2 ;;
+    -h|--help) usage; exit 0 ;;
+    *) echo "未知参数: $1" >&2; usage; exit 2 ;;
+  esac
+done
 
 SOURCE="${BASH_SOURCE[0]}"
 while [ -h "$SOURCE" ]; do
@@ -80,14 +91,20 @@ for f in "$PROJECT_ROOT"/templates/*.json; do [ -e "$f" ] || continue; jq empty 
 RUNTIME_GUARD="$PROJECT_ROOT/scripts/runtime-guard.mjs"
 RUNTIME_GUARD_TEST="$PROJECT_ROOT/tests/runtime-guard.test.mjs"
 if command -v node >/dev/null 2>&1; then
-  if [ -d "$PROJECT_ROOT/node_modules/ajv" ] && [ -d "$PROJECT_ROOT/node_modules/ajv-formats" ]; then
-    node "$(native_path "$RUNTIME_GUARD")" self-check --project-root "$(native_path "$PROJECT_ROOT")" >/dev/null 2>&1 && check "Runtime Guard contracts/templates 自检" PASS || check "Runtime Guard contracts/templates 自检" FAIL
-    node --test "$(native_path "$RUNTIME_GUARD_TEST")" >/dev/null 2>&1 && check "Runtime Guard 行为测试" PASS || check "Runtime Guard 行为测试" FAIL
+  NODE_VERSION="$(node -p 'process.versions.node' 2>/dev/null || true)"
+  if node -e 'const [a,b,c]=process.versions.node.split(".").map(Number); process.exit(a>22 || (a===22 && (b>13 || (b===13 && c>=0))) ? 0 : 1)' >/dev/null 2>&1; then
+    check "Node.js 22.13.0+（node:sqlite 必需）" PASS "$NODE_VERSION"
+    if [ -d "$PROJECT_ROOT/node_modules/ajv" ] && [ -d "$PROJECT_ROOT/node_modules/ajv-formats" ]; then
+      node "$(native_path "$RUNTIME_GUARD")" self-check --project-root "$(native_path "$PROJECT_ROOT")" >/dev/null 2>&1 && check "Runtime Guard contracts/templates 自检" PASS || check "Runtime Guard contracts/templates 自检" FAIL
+      node --test "$(native_path "$RUNTIME_GUARD_TEST")" >/dev/null 2>&1 && check "Runtime Guard 行为测试" PASS || check "Runtime Guard 行为测试" FAIL
+    else
+      check "Runtime Guard npm 依赖" FAIL "请先在项目根目录运行 npm install（需要 ajv 与 ajv-formats）"
+    fi
   else
-    check "Runtime Guard npm 依赖" FAIL "请先在项目根目录运行 npm install（需要 ajv 与 ajv-formats）"
+    check "Node.js 22.13.0+（node:sqlite 必需）" FAIL "当前版本：${NODE_VERSION:-unknown}"
   fi
 else
-  check "Node.js 可用（Runtime Guard 必需）" FAIL "OpenClaw 运行环境应提供 Node.js"
+  check "Node.js 22.13.0+（node:sqlite 必需）" FAIL "请安装 Node.js 22.13.0 或更高版本"
 fi
 
 INSTALL_SH="$SCRIPT_DIR/install.sh"
@@ -119,7 +136,7 @@ chmod 700 "$VALIDATION_OPENCLAW"
 # 不允许失败安装遗留的旧 manifest 参与后续断言。
 rm -f "$DRY_MANIFEST"
 INSTALL_DRYRUN_EXIT=0
-(cd "$NONPROJ" && PATH="$VALIDATION_OPENCLAW_BIN:$PATH" bash "$INSTALL_SH" --runtime-root runtime >/dev/null 2>&1) || INSTALL_DRYRUN_EXIT=$?
+(cd "$NONPROJ" && PATH="$VALIDATION_OPENCLAW_BIN:$PATH" bash "$INSTALL_SH" --runtime-root "$RUNTIME_ROOT" >/dev/null 2>&1) || INSTALL_DRYRUN_EXIT=$?
 if [ "$INSTALL_DRYRUN_EXIT" -eq 0 ]; then
   check "install.sh 非项目 cwd dry-run 可执行" PASS "$NONPROJ"
 else

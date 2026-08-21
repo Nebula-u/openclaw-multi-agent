@@ -12,11 +12,24 @@ function output(result, action) {
   return String(result.stdout ?? '').trim();
 }
 
+function changeSummary(nameStatus, stat) {
+  const summary = { added: [], modified: [], deleted: [], renamed: [], stat };
+  for (const line of String(nameStatus).split(/\r?\n/u).filter(Boolean)) {
+    const [status, first, second] = line.split('\t');
+    if (status === 'A') summary.added.push(first);
+    else if (status === 'D') summary.deleted.push(first);
+    else if (status?.startsWith('R')) summary.renamed.push({ from: first, to: second, similarity: status.slice(1) || null });
+    else summary.modified.push(first);
+  }
+  return summary;
+}
+
 export function createGitWorktreeManager({ projectRoot: projectRootInput, runGit = null } = {}) {
   const projectRoot = resolve(projectRootInput);
   const invoke = runGit ?? ((cwd, args) => spawnSync('git', ['-C', cwd, ...args], { shell: false, windowsHide: true, encoding: 'utf8', timeout: 30_000 }));
   const git = (cwd, args, action) => output(invoke(cwd, args), action);
   const worktreesRoot = join(projectRoot, 'runtime', 'worktrees');
+  const restoresRoot = join(projectRoot, 'runtime', 'restores');
   function inspectTarget(targetInput) {
     if (!isAbsolute(targetInput ?? '') || !existsSync(targetInput)) fail('TARGET_REPOSITORY_MISSING', 'project_path_abs must be an existing absolute path');
     const target = realpathSync.native(resolve(targetInput));
@@ -38,5 +51,72 @@ export function createGitWorktreeManager({ projectRoot: projectRootInput, runGit
     if (head !== task.inputCommit) fail('TASK_WORKTREE_HEAD_MISMATCH', 'isolated worktree is not at input commit');
     return { worktreePathAbs: canonical, inputCommit: head };
   }
-  return { inspectTarget, prepare, pathFor, worktreesRoot };
+  function summarize(cwd, inputCommit, outputCommit) {
+    const names = git(cwd, ['diff', '--name-status', '--find-renames', inputCommit, outputCommit], 'summarize snapshot files');
+    const stat = git(cwd, ['diff', '--stat', inputCommit, outputCommit], 'summarize snapshot diff');
+    return changeSummary(names, stat);
+  }
+  function verifyCompletion({ inputCommit, outputCommit, worktreePathAbs }) {
+    if (!FULL_SHA.test(inputCommit ?? '') || !FULL_SHA.test(outputCommit ?? '')) fail('TASK_OUTPUT_COMMIT_INVALID', 'input and output commits must be full SHA values');
+    const cwd = realpathSync.native(resolve(worktreePathAbs));
+    const type = git(cwd, ['cat-file', '-t', outputCommit], 'verify output commit');
+    if (type !== 'commit') fail('TASK_OUTPUT_COMMIT_INVALID', 'output_commit is not a Git commit');
+    const ancestry = invoke(cwd, ['merge-base', '--is-ancestor', inputCommit, outputCommit]);
+    if (ancestry.error || ancestry.status !== 0) fail('TASK_OUTPUT_COMMIT_NOT_DESCENDANT', 'output_commit is not descended from input_commit');
+    const head = git(cwd, ['rev-parse', '--verify', 'HEAD^{commit}'], 'verify worktree HEAD');
+    if (head !== outputCommit) fail('TASK_OUTPUT_COMMIT_HEAD_MISMATCH', 'output_commit does not equal worktree HEAD', { head, outputCommit });
+    const status = git(cwd, ['status', '--porcelain=v1', '--untracked-files=all'], 'verify clean worktree');
+    if (status) fail('TASK_WORKTREE_DIRTY', 'successful Agent worktree contains uncommitted changes', { status });
+    return { inputCommit, outputCommit, head, changeSummary: summarize(cwd, inputCommit, outputCommit) };
+  }
+  function pinSnapshot({ targetProjectRootAbs, snapshotId, outputCommit }) {
+    const ref = `refs/openclaw/snapshots/${snapshotId}`;
+    git(targetProjectRootAbs, ['update-ref', ref, outputCommit], 'pin snapshot commit');
+    return ref;
+  }
+  function captureRecovery({ inputCommit, worktreePathAbs, snapshotId }) {
+    const cwd = realpathSync.native(resolve(worktreePathAbs));
+    const status = git(cwd, ['status', '--porcelain=v1', '--untracked-files=all'], 'inspect failed worktree');
+    if (!status) {
+      const head = git(cwd, ['rev-parse', '--verify', 'HEAD^{commit}'], 'resolve failed worktree HEAD');
+      return { inputCommit, outputCommit: head, snapshotKind: head === inputCommit ? 'NO_CHANGE' : 'FAILED_RECOVERY', changeSummary: summarize(cwd, inputCommit, head) };
+    }
+    git(cwd, ['add', '-A'], 'stage recovery snapshot');
+    git(cwd, ['-c', 'user.name=OpenClaw Snapshot', '-c', 'user.email=openclaw-snapshot@invalid', 'commit', '-m', `openclaw: recovery snapshot ${snapshotId}`], 'commit recovery snapshot');
+    const outputCommit = git(cwd, ['rev-parse', '--verify', 'HEAD^{commit}'], 'resolve recovery commit');
+    return { inputCommit, outputCommit, snapshotKind: 'FAILED_RECOVERY', changeSummary: summarize(cwd, inputCommit, outputCommit) };
+  }
+  function diffCommits({ worktreePathAbs, inputCommit, outputCommit, binary = true }) {
+    const args = ['diff', '--no-ext-diff']; if (binary) args.push('--binary'); args.push(inputCommit, outputCommit);
+    return git(worktreePathAbs, args, 'read snapshot diff');
+  }
+  function restoreSnapshot({ targetProjectRootAbs, snapshotId, outputCommit }) {
+    if (!FULL_SHA.test(outputCommit ?? '')) fail('SNAPSHOT_COMMIT_INVALID', 'snapshot output commit must be a full SHA');
+    const branch = `openclaw/restore/${String(snapshotId).toLowerCase()}`;
+    const expected = join(restoresRoot, key('s', snapshotId), 'repo');
+    if (existsSync(expected)) fail('SNAPSHOT_RESTORE_EXISTS', 'snapshot restore worktree already exists', { expected });
+    mkdirSync(dirname(expected), { recursive: true });
+    const existing = invoke(targetProjectRootAbs, ['show-ref', '--verify', '--quiet', `refs/heads/${branch}`]);
+    if (existing.status === 0) fail('SNAPSHOT_RESTORE_BRANCH_EXISTS', 'snapshot restore branch already exists', { branch });
+    git(targetProjectRootAbs, ['branch', branch, outputCommit], 'create snapshot restore branch');
+    try { git(targetProjectRootAbs, ['worktree', 'add', expected, branch], 'create snapshot restore worktree'); }
+    catch (error) { invoke(targetProjectRootAbs, ['branch', '-D', branch]); throw error; }
+    return { branch, worktreePathAbs: realpathSync.native(expected), inputCommit: outputCommit, outputCommit,
+      changeSummary: summarize(expected, outputCommit, outputCommit) };
+  }
+  function revertSnapshot({ targetProjectRootAbs, outputCommit }) {
+    const cwd = realpathSync.native(resolve(targetProjectRootAbs));
+    const status = git(cwd, ['status', '--porcelain=v1', '--untracked-files=all'], 'verify clean revert target');
+    if (status) fail('SNAPSHOT_REVERT_TARGET_DIRTY', 'revert target contains uncommitted changes', { status });
+    const inputCommit = git(cwd, ['rev-parse', '--verify', 'HEAD^{commit}'], 'resolve revert input');
+    const result = invoke(cwd, ['-c', 'user.name=OpenClaw Snapshot', '-c', 'user.email=openclaw-snapshot@invalid', 'revert', '--no-edit', outputCommit]);
+    if (result.error || result.status !== 0) {
+      invoke(cwd, ['revert', '--abort']);
+      fail('SNAPSHOT_REVERT_CONFLICT', 'git revert could not be applied cleanly', { stderr: String(result.stderr ?? '').trim() });
+    }
+    const revertedCommit = git(cwd, ['rev-parse', '--verify', 'HEAD^{commit}'], 'resolve revert output');
+    return { inputCommit, outputCommit: revertedCommit, worktreePathAbs: cwd, changeSummary: summarize(cwd, inputCommit, revertedCommit) };
+  }
+  return { inspectTarget, prepare, pathFor, worktreesRoot, restoresRoot, verifyCompletion, pinSnapshot, captureRecovery,
+    diffCommits, restoreSnapshot, revertSnapshot };
 }

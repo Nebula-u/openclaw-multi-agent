@@ -1,181 +1,65 @@
-/**
- * Control Kernel — 执行租约与心跳
- *
- * 单个任务同一时刻最多一个活跃执行（LEASED/RUNNING）。
- * 仲裁通过部分唯一索引 executions_active_lease 上的 INSERT .. ON CONFLICT DO NOTHING
- * 实现，天然原子，无需 Redis、无需应用层互斥。
- *
- * 租约语义：
- *  - acquireLease：抢到 → 返回 execution；没抢到（冲突）→ 抛 { code:'LEASE_HELD', ... }。
- *  - activeExecution：只读探测某任务当前的活跃执行（非并发闸门，仅供调度器预检/重启认领）。
- *  - heartbeat：刷新租约到期时间；返回 0 行 = 租约已被回收，调用方（Harness）必须自杀。
- *  - releaseLease：正常结束并落终态。
- *  - reapExpiredLeases：回收过期未续约的执行 → state='LEASE_EXPIRED'。
- */
-
-const EXEC_RETURN = `execution_id, task_id, run_id, attempt, cycle, worker_id,
-  state, phase, agent_id, session_id, pid, worktree_path_abs,
-  artifact_root_abs, lease_expires_at, heartbeat_at, started_at, finished_at,
-  exit_code, error, sandbox_attestation`;
+function encode(value) { return value === null || value === undefined ? null : JSON.stringify(value); }
+function decode(value) { return value === null || value === undefined ? undefined : typeof value === 'string' ? JSON.parse(value) : value; }
+function iso(value) { return (value instanceof Date ? value : new Date(value)).toISOString(); }
 
 function mapExecution(row) {
-  return {
-    executionId: row.execution_id,
-    taskId: row.task_id,
-    runId: row.run_id,
-    attempt: row.attempt,
-    cycle: row.cycle,
-    workerId: row.worker_id,
-    state: row.state,
-    phase: row.phase,
-    agentId: row.agent_id,
-    sessionId: row.session_id,
-    pid: row.pid,
-    worktreePathAbs: row.worktree_path_abs,
-    artifactRootAbs: row.artifact_root_abs,
-    leaseExpiresAt: row.lease_expires_at,
-    heartbeatAt: row.heartbeat_at,
-    startedAt: row.started_at,
-    finishedAt: row.finished_at,
-    exitCode: row.exit_code,
-    error: row.error === null ? undefined : row.error,
-    sandboxAttestation: row.sandbox_attestation === null ? undefined : row.sandbox_attestation,
-  };
+  if (!row) return null;
+  return { executionId: row.execution_id, taskId: row.task_id, runId: row.run_id, attempt: row.attempt,
+    cycle: row.cycle, workerId: row.worker_id, state: row.state, phase: row.phase, agentId: row.agent_id,
+    sessionId: row.session_id, pid: row.pid, worktreePathAbs: row.worktree_path_abs,
+    artifactRootAbs: row.artifact_root_abs, leaseExpiresAt: row.lease_expires_at,
+    heartbeatAt: row.heartbeat_at, startedAt: row.started_at, finishedAt: row.finished_at,
+    exitCode: row.exit_code, error: decode(row.error), sandboxAttestation: decode(row.sandbox_attestation) };
 }
 
-export function createLease({ pool, scheduleSeconds = 120 }) {
-  // schema：与 pool.mjs 一致，表位于 kernel schema（经 search_path）。
-  // 以下 SQL 不加 schema 前缀，依赖 pool 连接上设好的 search_path。
-  if (!scheduleSeconds || typeof scheduleSeconds !== 'number' || scheduleSeconds <= 0) {
-    throw new Error(`lease.createLease: invalid scheduleSeconds ${scheduleSeconds}`);
-  }
-
-  /** 读某任务当前的活跃执行（LEASED/RUNNING），无则 null。 */
-  async function readActiveExecution(taskId) {
-    const { rows } = await pool.query(
-      `SELECT ${EXEC_RETURN}
-         FROM executions
-        WHERE task_id = $1 AND state IN ('LEASED','RUNNING')
-        ORDER BY started_at ASC
-        LIMIT 1`,
-      [taskId],
-    );
-    return rows.length === 0 ? null : mapExecution(rows[0]);
-  }
+export function createLease({ database, scheduleSeconds = 120, clock = () => new Date() }) {
+  if (!database) throw new TypeError('database is required');
+  if (!Number.isFinite(scheduleSeconds) || scheduleSeconds <= 0) throw new Error(`lease.createLease: invalid scheduleSeconds ${scheduleSeconds}`);
+  const now = () => iso(clock());
+  const expires = (seconds = scheduleSeconds) => new Date(new Date(now()).valueOf() + seconds * 1000).toISOString();
+  const read = (executionId) => mapExecution(database.get('SELECT * FROM executions WHERE execution_id=?', [executionId]));
+  const active = (taskId) => mapExecution(database.get("SELECT * FROM executions WHERE task_id=? AND state IN ('LEASED','RUNNING') ORDER BY started_at ASC LIMIT 1", [taskId]));
 
   return {
-    id: 'kernel-lease',
-    scheduleSeconds,
-
-    /**
-     * 尝试为 taskId 抢租约。
-     * 成功 → 返回 execution（含新的 lease_expires_at）。
-     * 冲突（task 已有 LEASED/RUNNING 活跃执行）→ 抛 LEASE_HELD。
-     */
-    async acquireLease(executionFields) {
-      const {
-        executionId, taskId, runId, attempt, cycle,
-        workerId, sessionId, pid, worktreePathAbs, artifactRootAbs,
-        phase = null, agentId = 'unknown-agent',
-      } = executionFields;
-      const sql = `
-        INSERT INTO executions (
-          execution_id, task_id, run_id, attempt, cycle, worker_id,
-          state, phase, agent_id, session_id, pid,
-          worktree_path_abs, artifact_root_abs, lease_expires_at, heartbeat_at, started_at
-        )
-        VALUES ($1,$2,$3,$4,$5,$6,'LEASED',$7,$8,$9,$10,$11,$12, now() + make_interval(secs => ${scheduleSeconds}), now(), now())
-        ON CONFLICT DO NOTHING
-        RETURNING ${EXEC_RETURN}
-      `;
-      const { rows } = await pool.query(sql, [
-        executionId, taskId, runId, attempt, cycle, workerId,
-        phase, agentId, sessionId, pid, worktreePathAbs, artifactRootAbs,
-      ]);
-      if (rows.length === 0) {
-        // 该任务已有一个活跃执行。取现有者信息抛出 LEASE_HELD。
-        const holder = await readActiveExecution(taskId);
-        throw {
-          code: 'LEASE_HELD',
-          details: {
-            active_execution_id: holder ? holder.executionId : null,
-            worker_id: holder ? holder.workerId : null,
-          },
-        };
+    id: 'kernel-lease', scheduleSeconds,
+    async acquireLease(fields) {
+      const timestamp = now();
+      const result = database.run(`INSERT OR IGNORE INTO executions (execution_id,task_id,run_id,attempt,cycle,worker_id,state,phase,agent_id,
+        session_id,pid,worktree_path_abs,artifact_root_abs,lease_expires_at,heartbeat_at,started_at) VALUES (?,?,?,?,?,?,'LEASED',?,?,?,?,?,?,?,?,?)`,
+      [fields.executionId, fields.taskId, fields.runId, fields.attempt, fields.cycle ?? 0, fields.workerId,
+        fields.phase ?? null, fields.agentId ?? 'unknown-agent', fields.sessionId ?? null, fields.pid ?? null,
+        fields.worktreePathAbs ?? null, fields.artifactRootAbs ?? null, expires(), timestamp, timestamp]);
+      if (!result.changes) {
+        const holder = active(fields.taskId);
+        throw Object.assign(new Error('task already has an active execution lease'), { code: 'LEASE_HELD', details: {
+          active_execution_id: holder?.executionId ?? null, worker_id: holder?.workerId ?? null,
+        } });
       }
-      return mapExecution(rows[0]);
+      return read(fields.executionId);
     },
-
-    /**
-     * 刷新租约。0 行 = 租约已被回收 → 返回 null，调用方必须自杀。
-     * 可选 phase 推进（COALESCE 语义：非 NULL 才覆盖）。
-     */
     async heartbeat({ executionId, phase = null, seconds = scheduleSeconds }) {
-      const { rows } = await pool.query(
-        `UPDATE executions
-            SET heartbeat_at = now(),
-                lease_expires_at = now() + make_interval(secs => $2),
-                state = 'RUNNING',
-                phase = COALESCE($3, phase)
-          WHERE execution_id = $1 AND state IN ('LEASED','RUNNING')
-          RETURNING ${EXEC_RETURN}`,
-        [executionId, seconds, phase],
-      );
-      return rows.length === 0 ? null : mapExecution(rows[0]);
+      const result = database.run(`UPDATE executions SET heartbeat_at=?,lease_expires_at=?,state='RUNNING',phase=COALESCE(?,phase)
+        WHERE execution_id=? AND state IN ('LEASED','RUNNING')`, [now(), expires(seconds), phase, executionId]);
+      return result.changes ? read(executionId) : null;
     },
-
-    /**
-     * 正常结束并落终态。执行已被回收（state 不在 LEASED/RUNNING）→ 返回 null。
-     */
     async releaseLease({ executionId, state = 'SUCCEEDED', exitCode = 0, error = null }) {
-      const { rows } = await pool.query(
-        `UPDATE executions
-            SET state = $2,
-                exit_code = $3,
-                error = $4,
-                finished_at = now(),
-                lease_expires_at = now()
-          WHERE execution_id = $1 AND state IN ('LEASED','RUNNING')
-          RETURNING ${EXEC_RETURN}`,
-        [executionId, state, exitCode, error === null ? null : JSON.stringify(error)],
-      );
-      return rows.length === 0 ? null : mapExecution(rows[0]);
+      const timestamp = now();
+      const result = database.run(`UPDATE executions SET state=?,exit_code=?,error=?,finished_at=?,lease_expires_at=?
+        WHERE execution_id=? AND state IN ('LEASED','RUNNING')`, [state, exitCode, encode(error), timestamp, timestamp, executionId]);
+      return result.changes ? read(executionId) : null;
     },
-
-    /**
-     * 查询某任务当前的活跃执行（LEASED/RUNNING），没有则返回 null。
-     *
-     * 与 acquireLease 的冲突分支查的是同一批行，但这里是只读探测：
-     * 调度器在派发前先问一次，可以避免"明知被占还去 INSERT 撞索引"的无谓写入，
-     * 也让 Harness 重启后能认领自己遗留的执行（比对 worker_id）。
-     *
-     * 注意：这不是并发闸门。真正的互斥永远由 executions_active_lease
-     * 部分唯一索引在 acquireLease 里保证；本方法读到的结果在返回瞬间就可能过期。
-     */
     async activeExecution(taskId) {
-      if (typeof taskId !== 'string' || taskId.length === 0) {
-        throw new TypeError(`lease.activeExecution: taskId must be a non-empty string, got ${String(taskId)}`);
-      }
-      return readActiveExecution(taskId);
+      if (typeof taskId !== 'string' || !taskId) throw new TypeError(`lease.activeExecution: taskId must be a non-empty string, got ${String(taskId)}`);
+      return active(taskId);
     },
-
-    /**
-     * 回收到期租约。返回被回收的执行数组（供上层载入错误详情）。
-     */
     async reapExpiredLeases() {
-      const { rows } = await pool.query(
-        `UPDATE executions
-            SET state = 'LEASE_EXPIRED',
-                finished_at = now(),
-                error = jsonb_build_object(
-                  'code','EXECUTION_LEASE_EXPIRED',
-                  'message','execution lease expired without heartbeat renewal',
-                  'last_heartbeat_at', to_jsonb(heartbeat_at)
-                )
-          WHERE state IN ('LEASED','RUNNING') AND lease_expires_at < now()
-          RETURNING ${EXEC_RETURN}`,
-      );
-      return rows.map(mapExecution);
+      const timestamp = now();
+      const rows = database.all("SELECT * FROM executions WHERE state IN ('LEASED','RUNNING') AND lease_expires_at < ?", [timestamp]);
+      for (const row of rows) database.run(`UPDATE executions SET state='LEASE_EXPIRED',finished_at=?,error=? WHERE execution_id=?`,
+        [timestamp, encode({ code: 'EXECUTION_LEASE_EXPIRED', message: 'execution lease expired without heartbeat renewal', last_heartbeat_at: row.heartbeat_at }), row.execution_id]);
+      return rows.map((row) => read(row.execution_id));
     },
   };
 }
+
+export { mapExecution };

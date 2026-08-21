@@ -1,6 +1,6 @@
 # manager-agent / templates
 
-本目录存放 manager-agent 运行时快速参考模板。最新 checkpoint 保存 workflow/route/task/approval/Gate 事实；Manager 只能按派发消息产出候选 `route-plan.json.raw`，不能准备或写入控制状态。
+本目录存放 manager-agent 运行时快速参考模板。SQLite Control Kernel 保存 workflow/route/task/approval 事实；Manager 只能按当前会话产出 schema-valid request，不能准备或写入控制状态。
 
 包含（安装后）：
 
@@ -15,4 +15,4 @@
 - 事实分级字段必须真实标注 OBSERVED/INFERRED/PROPOSED/UNKNOWN。
 - 不得留占位符进入正式产物；未知值填 `UNKNOWN` 并说明。
 
-workflow 状态、事件、dispatch、reconcile、approval 和 completion 不使用 workspace 模板；它们必须由 StateGraph/checkpointer 代码生成。
+workflow 状态、dispatch、approval 和 completion 不使用 workspace 模板；它们必须由 Orchestrator/Control Kernel 代码生成。

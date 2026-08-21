@@ -52,7 +52,7 @@ export function requestForegroundServiceStop(projectRootInput) {
 
 /**
  * Runs the only supported foreground scheduler loop.  It deliberately owns no
- * workflow facts: the PostgreSQL kernel remains authoritative, while this file
+ * workflow facts: the SQLite kernel remains authoritative, while this file
  * supplies process lifetime, single-instance exclusion, and observable health.
  */
 export async function runForegroundService({
@@ -108,7 +108,7 @@ export async function runForegroundService({
     while (!shouldDrain()) {
       try {
         const requests = await processor.scan();
-        const hrJobs = await hr.runPending();
+        const hrJobs = hr.autoMode === 'off' ? [] : await hr.runPending();
         cycles += 1; lastError = null;
         publish();
         // Keep the latest cycle facts in the status file without duplicating

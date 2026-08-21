@@ -11,8 +11,8 @@
 
 ## 上下游
 
-- `upstream`（上游）: StateGraph `dispatch` 节点，按 checkpoint 当前 `candidateCommit` 下发不可变上下文包；证据来自已通过前序 Gate 的开发、评审、测试与安全产物。
-- `downstream`（下游）: StateGraph reconcile/Gate 接收发布证据；`GO` 时进入运维交接准备，`HOLD/NO_GO` 时进入审批或重做。
+- `upstream`（上游）: Orchestrator 按 Kernel 当前 `candidate_commit` 下发不可变上下文包；证据来自已通过前序 Gate 的开发、评审、测试与安全产物。
+- `downstream`（下游）: Orchestrator 接收发布证据；`GO` 时进入运维交接准备，`HOLD/NO_GO` 时进入审批或重做。
 
 ## 定位约束
 

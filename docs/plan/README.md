@@ -1,5 +1,7 @@
 # docs/plan — Control Kernel + PostgreSQL 重构计划集
 
+> **历史归档说明（2026-08-21）：本目录整套计划已被 SQLite + Git snapshot 架构取代，不得作为当前部署或维护指南。** 当前依据为根目录 `README.md`、`docs/architecture.md`、ADR 0005/0006 及 `docs/superpowers/plans/2026-08-21-sqlite-git-snapshots-hr-review.md`。
+
 本目录是「引入 Control Kernel 作为唯一可信数据源、Checkpointer 迁移到 PostgreSQL、保留 Monitor 观测与 UI」这一次重构的**计划文档集**。
 
 > 状态：**P0 ✅ · P1 ✅ · P2 ✅ · P3 ✅ · P4 ✅ · P5 ✅ · P6 ✅ · P7 ✅ · P8 ✅ · P9 ✅ · P10 ✅**。

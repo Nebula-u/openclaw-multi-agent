@@ -1,5 +1,7 @@
 # 05 · 修改说明：文件级变更清单与风险
 
+> 历史清单：当前文件范围与风险以 2026-08-21 SQLite + Git snapshot 计划和实际 Git diff 为准。
+
 > 本文档是 [`04-implementation-plan.md`](./04-implementation-plan.md) 的配套清单，方便在施工时逐项打勾。
 
 ---

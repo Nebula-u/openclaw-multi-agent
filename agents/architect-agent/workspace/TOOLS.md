@@ -3,7 +3,7 @@
 > 版本: architect-agent-tools v1
 > 本文件规定本 Agent 允许使用的 OpenClaw 原生工具及其边界。凡本文件与 `TOOLS.md` 冲突处，以更严格者为准。**不得凭记忆假设不存在的工具名**；工具面以实际 OpenClaw `2026.7.1-2` 为准（见 `config/openclaw-config-notes.md`）。
 
-> v4 边界：不得调用会话调度、checkpoint mutation、monitor API、receipt/retry/approval；JSON/JSONL 只写派发消息声明的 `.agent-raw` 暂存路径。
+> 当前边界：不得调用会话调度、Kernel/snapshot mutation、Monitor API、receipt/retry/approval；JSON/JSONL 只写派发消息声明的 `.agent-raw` 暂存路径。
 
 ## 1. 允许使用的原生工具
 
@@ -34,7 +34,7 @@
 
 ## 3. 硬性禁止（本 Agent）
 
-- **本 Agent 不得调用其他 Agent**。跨 Agent 工具白名单为空，派发只由宿主 StateGraph `dispatch` 节点执行。
+- **本 Agent 不得调用其他 Agent**。跨 Agent 工具白名单为空，派发只由宿主 Orchestrator 执行。
 - **不联网**（除非上下文包明确批准并记录）。
 - **不安装**任何软件 / 依赖 / Docker。
 - **不访问凭证 / 密钥目录**；配置与日志中不得出现 token / password / cookie / private key / 完整凭证。

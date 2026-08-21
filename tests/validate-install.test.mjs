@@ -49,6 +49,24 @@ test('install validators provision the temporary OpenClaw config they report', (
   assert.match(bash, /VALIDATION_OPENCLAW_CONFIG="\$VALIDATION_OPENCLAW_BIN\/validation-openclaw-config\.json"/u);
 });
 
+test('install validators accept and forward the documented runtime-root parameter', () => {
+  const powershell = readFileSync(POWERSHELL_VALIDATOR, 'utf8');
+  const bash = readFileSync(VALIDATOR, 'utf8');
+  assert.match(powershell, /\[string\]\$RuntimeRoot = 'runtime'/u);
+  assert.match(powershell, /-RuntimeRoot \$RuntimeRoot/u);
+  assert.match(bash, /--runtime-root\) RUNTIME_ROOT=/u);
+  assert.match(bash, /--runtime-root "\$RUNTIME_ROOT"/u);
+});
+
+test('install validators require the Node version that provides stable node:sqlite', () => {
+  const powershell = readFileSync(POWERSHELL_VALIDATOR, 'utf8');
+  const bash = readFileSync(VALIDATOR, 'utf8');
+  assert.match(powershell, /22\.13\.0/u);
+  assert.match(powershell, /Node\.js 22\.13\.0\+/u);
+  assert.match(bash, /22\.13\.0/u);
+  assert.match(bash, /Node\.js 22\.13\.0\+/u);
+});
+
 test('installers synchronize model catalog limits and protect raw artifact storage', () => {
   const powershell = readFileSync(join(ROOT, 'scripts', 'install.ps1'), 'utf8');
   const componentLib = readFileSync(join(ROOT, 'scripts', 'component-lib.ps1'), 'utf8');

@@ -119,6 +119,6 @@ pwsh -File scripts/manage-components.ps1 -Command RemoveSkill `
 
 `install.sh` 与 `validate-install.sh` 已改为读取相同 package manifest，支持静态 package 的发现、同步与验证。审批式内容生成和破坏性删除以 PowerShell 实现为权威入口；Bash 不会绕过该边界自行删除组件。
 
-## 8. 后续 LangGraph 接入
+## 8. 与当前 Orchestrator 的集成
 
-后续可把 `List/Validate/NewAgent/SetAgentState/RemoveAgent` 封装成 LangGraph 节点或工具。package manifest 和审批协议保持不变，不需要再次迁移 Agent。
+`List/Validate/NewAgent/SetAgentState/RemoveAgent` 继续由现有 Node Orchestrator 和安装脚本调用。组件管理不引入第二套工作流框架，也不直接写 SQLite；package manifest 和审批协议仍是 Agent 注册与状态变更的边界。

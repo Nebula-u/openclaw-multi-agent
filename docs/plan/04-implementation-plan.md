@@ -1,5 +1,7 @@
 # 04 · 分阶段实施计划
 
+> 历史计划：本文步骤已失效；当前实施计划见 `docs/superpowers/plans/2026-08-21-sqlite-git-snapshots-hr-review.md`。
+
 > 原则：**每个阶段独立可验证、独立可提交、独立可回滚**。
 > 规约：按 `AGENTS.md` 第 6 条，每阶段完成后一次中文 `git commit`；整个重构在 `workbuddy/control-kernel-postgres` 分支上进行。
 > 文件级新增/修改/删除总清单与风险表见 [`05-change-manifest.md`](./05-change-manifest.md)。

@@ -18,7 +18,7 @@
       <aside class="workflow-rail" aria-label="工作流">
         <div class="rail-heading"><span>WORKFLOWS</span><b id="workflow-count">0</b></div>
         <nav id="workflow-list" class="workflow-list"><p class="empty-note">正在读取 Kernel...</p></nav>
-        <section class="rail-foot"><span>DATA SOURCE</span><strong>POSTGRESQL<br>CONTROL KERNEL</strong></section>
+        <section class="rail-foot"><span>DATA SOURCE</span><strong>SQLITE<br>CONTROL KERNEL</strong></section>
       </aside>
       <section class="operations" aria-live="polite">
         <header class="workflow-head">
@@ -36,9 +36,10 @@
       <aside class="watchtower" aria-label="监控状态">
         <section class="watch-section"><header><span>MANAGER DELIVERY</span></header><div id="notification-list" class="notice-list"><p class="empty-note">没有待转达信息</p></div></section>
         <section class="watch-section"><header><span>HUMAN APPROVAL</span></header><div id="approval-view" class="approval-view">没有待审批事项</div></section>
+        <section class="watch-section"><header><span>GIT SNAPSHOTS</span></header><div id="snapshot-list" class="review-list"><p class="empty-note">暂无代码快照</p></div></section>
         <section class="watch-section alert-section"><header><span>HR KEYWORD ALERTS</span><b id="alert-count">0</b></header><div id="alert-list" class="alert-list"><p class="empty-note">暂无即时预警</p></div></section>
         <section class="watch-section"><header><span>HR REVIEWS</span></header><div id="hr-review-list" class="review-list"><p class="empty-note">暂无 HR 复核</p></div></section>
-        <section class="watch-section"><header><span>TASK DAILY REPORTS</span></header><div id="daily-report-list" class="review-list"><p class="empty-note">任务结束后将显示日报</p></div></section>
+        <section class="watch-section"><header><span>DAILY HR REVIEWS</span></header><div id="daily-report-list" class="review-list"><p class="empty-note">自动审查默认关闭</p></div></section>
       </aside>
     </main>
   </div>

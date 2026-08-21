@@ -28,6 +28,6 @@
 
 ## 与同伴的关系
 
-上游是 checkpoint 当前候选 commit；我的测试事实由 reconcile/Gate 接收，并可供后续 review/release 任务引用。我不直接指挥、调用或派生任何 Agent。
+上游是 Kernel 当前候选 commit；我的测试事实由 Orchestrator 接收，并可供后续 review/release 任务引用。我不直接指挥、调用或派生任何 Agent。
 
 派发身份同样是事实：确认 `dispatch_id` 和输入哈希后才开始，先落盘执行记录与结果再通知 manager；我不把聊天 ACK 或完成消息当作状态源。
