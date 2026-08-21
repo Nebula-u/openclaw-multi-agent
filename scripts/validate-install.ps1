@@ -83,27 +83,31 @@ $installPs1 = Join-Path $ScriptDir 'install.ps1'
 $dryManifest = Join-Path $ProjectRoot 'artifacts\install-dryrun\install-manifest.dryrun.json'
 $nonProjectCwd = if ($env:SystemRoot -and (Test-Path (Join-Path $env:SystemRoot 'System32'))) { Join-Path $env:SystemRoot 'System32' } else { [System.IO.Path]::GetTempPath() }
 $validationBin = Join-Path ([System.IO.Path]::GetTempPath()) ("openclaw-install-validation-{0}" -f [guid]::NewGuid().Guid)
+$validationConfig = Join-Path $validationBin 'validation-openclaw-config.json'
 $previousPath = $env:PATH
+$previousValidationConfig = [Environment]::GetEnvironmentVariable('VALIDATION_OPENCLAW_CONFIG')
 $pushedLocation = $false
 $installDryRunSucceeded = $false
 try {
   New-Item -ItemType Directory -Force -Path $validationBin | Out-Null
+  Set-Content -LiteralPath $validationConfig -Value '{"agents":{"list":[]}}' -NoNewline
+  $env:VALIDATION_OPENCLAW_CONFIG = $validationConfig
   @'
 #!/usr/bin/env sh
 case "${1:-}" in
   --version) printf 'validation-openclaw 0\n' ;;
-  config) printf '/tmp/validation-openclaw-config.json\n' ;;
+  config) printf '%s\n' "$VALIDATION_OPENCLAW_CONFIG" ;;
   agents) printf 'validation diagnostic before JSON\n' >&2; printf '[]\n' ;;
   *) exit 0 ;;
 esac
 '@ | Set-Content -LiteralPath (Join-Path $validationBin 'openclaw') -NoNewline
-  @'
+  @"
 @echo off
 if "%~1"=="--version" (echo validation-openclaw 0 & exit /b 0)
-if "%~1"=="config" (echo C:\validation-openclaw-config.json & exit /b 0)
+if "%~1"=="config" (echo $validationConfig & exit /b 0)
 if "%~1"=="agents" (1>&2 echo validation diagnostic before JSON & echo [] & exit /b 0)
 exit /b 0
-'@ | Set-Content -LiteralPath (Join-Path $validationBin 'openclaw.cmd') -NoNewline
+"@ | Set-Content -LiteralPath (Join-Path $validationBin 'openclaw.cmd') -NoNewline
   if (-not $IsWindows) {
     & chmod +x (Join-Path $validationBin 'openclaw')
     if ($LASTEXITCODE -ne 0) { throw '无法为验证专用 fake openclaw 添加可执行权限。' }
@@ -124,6 +128,8 @@ exit /b 0
 } finally {
   if ($pushedLocation) { Pop-Location }
   $env:PATH = $previousPath
+  if ($null -eq $previousValidationConfig) { Remove-Item Env:VALIDATION_OPENCLAW_CONFIG -ErrorAction SilentlyContinue }
+  else { $env:VALIDATION_OPENCLAW_CONFIG = $previousValidationConfig }
   if (Test-Path -LiteralPath $validationBin) { Remove-Item -LiteralPath $validationBin -Recurse -Force }
 }
 

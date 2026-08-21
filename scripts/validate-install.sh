@@ -95,6 +95,7 @@ DRY_MANIFEST="$PROJECT_ROOT/artifacts/install-dryrun/install-manifest.dryrun.jso
 NONPROJ="$(mktemp -d)"
 VALIDATION_OPENCLAW_BIN="$(mktemp -d)"
 VALIDATION_OPENCLAW="$VALIDATION_OPENCLAW_BIN/openclaw"
+VALIDATION_OPENCLAW_CONFIG="$VALIDATION_OPENCLAW_BIN/validation-openclaw-config.json"
 cleanup_install_validation() {
   rm -rf "$NONPROJ" "$VALIDATION_OPENCLAW_BIN"
 }
@@ -102,11 +103,13 @@ trap cleanup_install_validation EXIT
 
 # 验证安装器的路径解析时不能读取宿主机 Agent 注册表：真实安装保留冲突保护，
 # 这里仅以受控、只读的 CLI 边界让 dry-run 的 agents list 返回空 catalog。
+printf '%s\n' '{"agents":{"list":[]}}' > "$VALIDATION_OPENCLAW_CONFIG"
+export VALIDATION_OPENCLAW_CONFIG
 cat > "$VALIDATION_OPENCLAW" <<'EOF'
 #!/usr/bin/env bash
 case "${1:-}" in
   --version) printf 'validation-openclaw 0\n' ;;
-  config) printf '/tmp/validation-openclaw-config.json\n' ;;
+  config) printf '%s\n' "$VALIDATION_OPENCLAW_CONFIG" ;;
   agents) printf '[]\n' ;;
   *) exit 0 ;;
 esac

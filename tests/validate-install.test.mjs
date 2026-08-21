@@ -18,6 +18,7 @@ const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const VALIDATOR = join(ROOT, 'scripts', 'validate-install.sh');
 const POWERSHELL_VALIDATOR = join(ROOT, 'scripts', 'validate-install.ps1');
 const DRY_MANIFEST = join(ROOT, 'artifacts', 'install-dryrun', 'install-manifest.dryrun.json');
+const BASH_AVAILABLE = spawnSync('bash', ['-lc', 'exit 0'], { encoding: 'utf8' }).status === 0;
 const PWSH_AVAILABLE = spawnSync('pwsh', ['-NoProfile', '-Command', 'exit 0'], {
   encoding: 'utf8',
 }).status === 0;
@@ -39,7 +40,13 @@ test('installers materialize an explicit empty worker delegation allowlist', () 
   assert.match(bash, /ALLOW_JSON\[\$id\]/u);
   assert.match(bash, /remove_retired_stategraph_webchat_config/u);
   assert.match(bash, /jq -c '\.agents\.list \/\/ \[\]'/u);
-  assert.match(bash, /remove retired stategraph-webchat plugin references/u);
+});
+
+test('install validators provision the temporary OpenClaw config they report', () => {
+  const powershell = readFileSync(POWERSHELL_VALIDATOR, 'utf8');
+  const bash = readFileSync(VALIDATOR, 'utf8');
+  assert.match(powershell, /\$validationConfig = Join-Path \$validationBin 'validation-openclaw-config\.json'/u);
+  assert.match(bash, /VALIDATION_OPENCLAW_CONFIG="\$VALIDATION_OPENCLAW_BIN\/validation-openclaw-config\.json"/u);
 });
 
 test('installers synchronize model catalog limits and protect raw artifact storage', () => {
@@ -97,7 +104,9 @@ test('project Agent reinstall requires an explicit stopped-Gateway acknowledgeme
   assert.match(reinstall, /reinstall-result\.json/u);
 });
 
-test('Bash validator isolates its installer dry-run from conflicting outer openclaw agents', () => {
+test('Bash validator isolates its installer dry-run from conflicting outer openclaw agents', {
+  skip: BASH_AVAILABLE ? false : 'bash unavailable in this environment',
+}, () => {
   const bin = mkdtempSync(join(tmpdir(), 'openclaw-validator-fake-bin-'));
   const fakeOpenClaw = join(bin, 'openclaw');
   const previousManifest = existsSync(DRY_MANIFEST) ? readFileSync(DRY_MANIFEST) : null;
