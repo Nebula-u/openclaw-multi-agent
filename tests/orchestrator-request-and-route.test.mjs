@@ -172,3 +172,56 @@ test('foreground service polls automatically and exits cleanly after a stop requ
   assert.equal(readForegroundServiceStatus(projectRoot).state, 'STOPPED');
   assert.throws(() => requestForegroundServiceStop(mkdtempSync(join(tmpdir(), 'orchestrator-not-running-'))), (error) => error.code === 'ORCHESTRATOR_NOT_RUNNING');
 });
+
+test('foreground status projects a missing active process as stale and refuses stop', () => {
+  const projectRoot = mkdtempSync(join(tmpdir(), 'orchestrator-stale-process-'));
+  const statusPath = join(projectRoot, 'runtime', 'orchestrator', 'service', 'foreground.status.json');
+  atomicWriteJson(statusPath, {
+    schema_version: 1,
+    service: 'foreground-orchestrator',
+    instance_id: 'instance-dead',
+    pid: 999999,
+    state: 'RUNNING',
+    started_at: '2026-08-22T00:00:00.000Z',
+    heartbeat_at: '2026-08-22T00:00:10.000Z',
+    stop_requested_at: null,
+    cycles: 10,
+    last_error: null,
+    poll_ms: 1000,
+  });
+  const options = { clock: () => new Date('2026-08-22T00:00:11.000Z'), isProcessAlive: () => false };
+
+  const status = readForegroundServiceStatus(projectRoot, options);
+  assert.equal(status.state, 'STALE');
+  assert.equal(status.recorded_state, 'RUNNING');
+  assert.equal(status.stale_reason, 'PROCESS_NOT_FOUND');
+  assert.throws(() => requestForegroundServiceStop(projectRoot, options), (error) => error.code === 'ORCHESTRATOR_NOT_RUNNING');
+});
+
+test('foreground status keeps a live fresh process active but expires an old heartbeat', () => {
+  const projectRoot = mkdtempSync(join(tmpdir(), 'orchestrator-stale-heartbeat-'));
+  const statusPath = join(projectRoot, 'runtime', 'orchestrator', 'service', 'foreground.status.json');
+  atomicWriteJson(statusPath, {
+    schema_version: 1,
+    service: 'foreground-orchestrator',
+    instance_id: 'instance-live',
+    pid: process.pid,
+    state: 'RUNNING',
+    started_at: '2026-08-22T00:00:00.000Z',
+    heartbeat_at: '2026-08-22T00:00:10.000Z',
+    stop_requested_at: null,
+    cycles: 10,
+    last_error: null,
+    poll_ms: 1000,
+  });
+  const live = readForegroundServiceStatus(projectRoot, {
+    clock: () => new Date('2026-08-22T00:00:11.000Z'), isProcessAlive: () => true,
+  });
+  assert.equal(live.state, 'RUNNING');
+
+  const stale = readForegroundServiceStatus(projectRoot, {
+    clock: () => new Date('2026-08-22T00:00:20.000Z'), isProcessAlive: () => true,
+  });
+  assert.equal(stale.state, 'STALE');
+  assert.equal(stale.stale_reason, 'HEARTBEAT_EXPIRED');
+});

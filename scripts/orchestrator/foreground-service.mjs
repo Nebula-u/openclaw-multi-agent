@@ -32,6 +32,35 @@ function removeIfPresent(path) {
   try { if (existsSync(path)) unlinkSync(path); } catch { /* a stale control file is harmless */ }
 }
 
+function processIsAlive(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return error?.code === 'EPERM';
+  }
+}
+
+function reconcileServiceStatus(status, {
+  clock = () => new Date(),
+  isProcessAlive = processIsAlive,
+  staleAfterMs = null,
+} = {}) {
+  if (!status || !['STARTING', 'RUNNING', 'DRAINING'].includes(status.state)) return status;
+  const recordedState = status.state;
+  let staleReason = null;
+  if (!isProcessAlive(Number(status.pid))) staleReason = 'PROCESS_NOT_FOUND';
+  const heartbeatMs = Date.parse(status.heartbeat_at);
+  const derivedStaleAfterMs = Number.isFinite(staleAfterMs) && staleAfterMs > 0
+    ? staleAfterMs
+    : Math.max(5000, Number(status.poll_ms) * 3 || 0);
+  if (!staleReason && (!Number.isFinite(heartbeatMs) || clock().getTime() - heartbeatMs > derivedStaleAfterMs)) {
+    staleReason = 'HEARTBEAT_EXPIRED';
+  }
+  return staleReason ? { ...status, state: 'STALE', recorded_state: recordedState, stale_reason: staleReason } : status;
+}
+
 function wait(milliseconds, signal) {
   return new Promise((resolveWait) => {
     if (signal?.aborted) return resolveWait();
@@ -40,15 +69,15 @@ function wait(milliseconds, signal) {
   });
 }
 
-export function readForegroundServiceStatus(projectRootInput) {
+export function readForegroundServiceStatus(projectRootInput, options = {}) {
   const projectRoot = resolve(projectRootInput);
-  return readJson(pathsFor(projectRoot).status);
+  return reconcileServiceStatus(readJson(pathsFor(projectRoot).status), options);
 }
 
-export function requestForegroundServiceStop(projectRootInput) {
+export function requestForegroundServiceStop(projectRootInput, options = {}) {
   const projectRoot = resolve(projectRootInput);
   const paths = pathsFor(projectRoot);
-  const status = readJson(paths.status);
+  const status = reconcileServiceStatus(readJson(paths.status), options);
   if (!status || !['STARTING', 'RUNNING', 'DRAINING'].includes(status.state)) {
     throw Object.assign(new Error('the foreground Orchestrator service is not running'), { code: 'ORCHESTRATOR_NOT_RUNNING' });
   }
