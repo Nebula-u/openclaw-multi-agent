@@ -9,6 +9,8 @@ import { assertManagerRequest } from '../scripts/orchestrator/request-validation
 import { compileRoutePlan, RoutePlanError } from '../scripts/orchestrator/route-policy.mjs';
 import { atomicWriteJson } from '../scripts/runtime-core/atomic-store.mjs';
 import { readForegroundServiceStatus, requestForegroundServiceStop, runForegroundService } from '../scripts/orchestrator/foreground-service.mjs';
+import { createOrchestrator } from '../scripts/orchestrator/service.mjs';
+import { openKernelDatabase } from '../scripts/control-kernel/database.mjs';
 
 const ROOT = resolve(process.cwd());
 
@@ -179,6 +181,28 @@ test('Manager CREATE request accepts a logical managed project reference', () =>
     user_authorized: { confirmed: true, actor: 'human:liuxu', message: 'Run the confirmed route.' },
   };
   assert.doesNotThrow(() => assertManagerRequest(ROOT, request));
+});
+
+test('Orchestrator binds a logical managed project reference to the request workflow', async (t) => {
+  const database = openKernelDatabase({ databasePath: ':memory:' });
+  t.after(() => database.close());
+  let resolvedWorkflow = null;
+  const orchestrator = createOrchestrator({
+    projectRoot: ROOT,
+    database,
+    projectControl: { resolveProject(projectRef, workflowId) {
+      assert.equal(projectRef, 'PRJ-managed-002'); resolvedWorkflow = workflowId;
+      throw Object.assign(new Error('project belongs to another workflow'), { code: 'MANAGER_PROJECT_WORKFLOW_MISMATCH' });
+    } },
+    worktrees: { inspectTarget() { throw new Error('must not inspect a mismatched project'); } },
+  });
+  const workflowId = 'WF-Route-004';
+  await assert.rejects(orchestrator.createRun({
+    workflow_id: workflowId, project_ref: 'PRJ-managed-002', original_request: 'Build safely', route_plan: routePlan(workflowId),
+    manager_session_id: 'manager-session', manager_session_key: 'agent:manager:source', user_authorized: { confirmed: true },
+  }), (error) => error.code === 'MANAGER_PROJECT_WORKFLOW_MISMATCH');
+  assert.equal(resolvedWorkflow, workflowId);
+  await orchestrator.close();
 });
 
 test('foreground status projects a missing active process as stale and refuses stop', () => {

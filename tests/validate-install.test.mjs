@@ -42,6 +42,15 @@ test('installers materialize an explicit empty worker delegation allowlist', () 
   assert.match(bash, /jq -c '\.agents\.list \/\/ \[\]'/u);
 });
 
+test('installers replace the complete Manager exec allowlist with the fixed control entrypoint', () => {
+  const powershell = readFileSync(join(ROOT, 'scripts', 'install.ps1'), 'utf8');
+  const bash = readFileSync(join(ROOT, 'scripts', 'install.sh'), 'utf8');
+  assert.match(powershell, /'approvals','get','--gateway','--json'/u);
+  assert.match(powershell, /autoAllowSkills = \$false/u);
+  assert.match(bash, /approvals get --gateway --json/u);
+  assert.match(bash, /autoAllowSkills: false/u);
+});
+
 test('install validators provision the temporary OpenClaw config they report', () => {
   const powershell = readFileSync(POWERSHELL_VALIDATOR, 'utf8');
   const bash = readFileSync(VALIDATOR, 'utf8');

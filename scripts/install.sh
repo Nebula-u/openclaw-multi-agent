@@ -672,16 +672,22 @@ MANAGER_EXEC_STATE="$RUNTIME_ROOT_ABS/control/manager-exec-allowlist.json"
 MANAGER_ENTRYPOINT="$RUNTIME_ROOT_ABS/manager-control/manager-control"
 chmod 755 "$MANAGER_ENTRYPOINT"
 [ -f "$MANAGER_ENTRYPOINT" ] || { restore_on_failure "缺少 Manager 受控执行入口"; exit 1; }
-if [ -f "$MANAGER_EXEC_STATE" ]; then
-  prior_entrypoint="$(jq -r '.entrypoint // empty' "$MANAGER_EXEC_STATE")"
-  if [ -n "$prior_entrypoint" ] && [ "$prior_entrypoint" != "$MANAGER_ENTRYPOINT" ]; then
-    openclaw approvals allowlist remove --agent "$MANAGER_ID" "$prior_entrypoint" --json >/dev/null 2>&1 || { restore_on_failure "移除旧 Manager exec allowlist 失败"; exit 1; }
-    CONFIG_CHANGES+=("remove $MANAGER_ID exec allowlist")
-  fi
+approval_snapshot="$(openclaw approvals get --gateway --json 2>/dev/null)" || { restore_on_failure "读取 Manager exec approvals 失败"; exit 1; }
+approval_tmp="$(mktemp)"
+if ! printf '%s' "$approval_snapshot" | jq --arg agent "$MANAGER_ID" --arg entry "$MANAGER_ENTRYPOINT" '
+  .file | .agents = (.agents // {}) | .agents[$agent] = {
+    security: "allowlist", ask: "off", askFallback: "deny", autoAllowSkills: false,
+    allowlist: [{ pattern: $entry }]
+  }
+' > "$approval_tmp"; then
+  rm -f "$approval_tmp"; restore_on_failure "生成 Manager exec approvals 失败"; exit 1
 fi
-openclaw approvals allowlist add --agent "$MANAGER_ID" "$MANAGER_ENTRYPOINT" --json >/dev/null 2>&1 || { restore_on_failure "配置 Manager exec allowlist 失败"; exit 1; }
+if ! openclaw approvals set --gateway --file "$approval_tmp" --json >/dev/null 2>&1; then
+  rm -f "$approval_tmp"; restore_on_failure "配置 Manager exec allowlist 失败"; exit 1
+fi
+rm -f "$approval_tmp"
 printf '{"schema_version":1,"agent_id":"%s","entrypoint":"%s"}\n' "$MANAGER_ID" "$MANAGER_ENTRYPOINT" > "$MANAGER_EXEC_STATE"
-CONFIG_CHANGES+=("allowlist $MANAGER_ID manager-control")
+CONFIG_CHANGES+=("replace $MANAGER_ID exec allowlist with manager-control")
 
 # 7.6 可选：默认 Agent / binding
 if [ "$SET_MANAGER_DEFAULT" -eq 1 ]; then

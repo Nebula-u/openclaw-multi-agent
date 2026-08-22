@@ -97,6 +97,9 @@ export function buildBundle(projectRootInput, runtimeRootInput, { agentIds = nul
     if (manifest.id === 'manager-agent') {
       addTree(entries, projectRoot, runtimeRoot, join(projectRoot, 'scripts', 'manager-control'), join(runtimeRoot, 'manager-control'), 'manager-control');
       addTree(entries, projectRoot, runtimeRoot, join(projectRoot, 'scripts', 'runtime-core'), join(runtimeRoot, 'runtime-core'), 'manager-control-runtime');
+      const policySource = join(projectRoot, 'config', 'manager-control-policy.json');
+      const policyTarget = join(runtimeRoot, 'manager-control', 'manager-control-policy.json');
+      entries.push({ kind: 'manager-control-policy', source_rel: safeRelative(projectRoot, policySource), target_rel: safeRelative(runtimeRoot, policyTarget), sha256: sha256File(policySource) });
     }
   }
   entries.sort((left, right) => left.target_rel.localeCompare(right.target_rel, 'en')

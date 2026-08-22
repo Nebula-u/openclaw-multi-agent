@@ -86,7 +86,7 @@ export function createOrchestrator({ projectRoot: projectRootInput, database = n
   const selectedKernel = kernel ?? createKernel({ database: selectedDatabase, workerId: config.workerId, leaseSeconds: config.leaseSeconds, clock });
   const selectedRepository = repository ?? createWorkflowRepository({ database: selectedDatabase, clock });
   const selectedWorktrees = worktrees ?? createGitWorktreeManager({ projectRoot });
-  const selectedProjectControl = projectControl ?? createManagerControl({ projectRoot, clock });
+  const selectedProjectControl = projectControl ?? createManagerControl({ projectRoot, runtimeRoot: join(projectRoot, 'runtime'), clock });
   const selectedSnapshots = snapshots ?? createSnapshotService({ repository: selectedRepository, worktrees: selectedWorktrees });
   const registry = loadActiveAgentRegistry(projectRoot);
   let hrService = hr;
@@ -134,7 +134,7 @@ export function createOrchestrator({ projectRoot: projectRootInput, database = n
     if (await selectedRepository.getRun(request.workflow_id)) throw Object.assign(new Error(`workflow already exists: ${request.workflow_id}`), { code: 'WORKFLOW_EXISTS' });
     const routePlan = compileRoutePlan(projectRoot, request.route_plan);
     if (routePlan.workflow_id !== request.workflow_id) throw Object.assign(new Error('route plan is not bound to request workflow'), { code: 'ROUTE_PLAN_WORKFLOW_MISMATCH' });
-    const projectRootAbs = request.project_ref ? selectedProjectControl.resolveProject(request.project_ref).projectRootAbs : request.project_path_abs;
+    const projectRootAbs = request.project_ref ? selectedProjectControl.resolveProject(request.project_ref, request.workflow_id).projectRootAbs : request.project_path_abs;
     const target = selectedWorktrees.inspectTarget(projectRootAbs);
     const run = await selectedRepository.createRun({ workflowId: request.workflow_id,
       request: { original_request: request.original_request, request_id: request.request_id, submitted_at: request.submitted_at, user_authorized: request.user_authorized },

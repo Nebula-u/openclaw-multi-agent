@@ -525,18 +525,28 @@ try {
   $managerEntrypoint = Join-Path $RuntimeRootAbs (if ($IsWindows) { 'manager-control\manager-control.cmd' } else { 'manager-control/manager-control' })
   if (-not $IsWindows) { & chmod 755 $managerEntrypoint }
   if (-not (Test-Path -LiteralPath $managerEntrypoint -PathType Leaf)) { throw "缺少 Manager 受控执行入口：$managerEntrypoint" }
-  if (Test-Path -LiteralPath $managerExecStatePath) {
-    $prior = Read-JsonFile $managerExecStatePath
-    if ($prior.entrypoint -and $prior.entrypoint -ne $managerEntrypoint) {
-      $removed = Invoke-OpenClaw @('approvals','allowlist','remove','--agent',$Manager.id,[string]$prior.entrypoint,'--json')
-      if ($removed.ExitCode -ne 0) { throw "移除旧 Manager exec allowlist 失败：$($removed.Output)" }
-      $changes.Add("remove $($Manager.id) exec allowlist")
-    }
+  $approvalSnapshot = Invoke-OpenClaw @('approvals','get','--gateway','--json')
+  if ($approvalSnapshot.ExitCode -ne 0) { throw "读取 Manager exec approvals 失败：$($approvalSnapshot.Output)" }
+  $approvalFile = (ConvertFrom-OpenClawJsonOutput -Output $approvalSnapshot.Output -Description 'Manager exec approvals').file
+  if (-not $approvalFile) { throw 'Manager exec approvals 返回中缺少 approvals 文件。' }
+  if (-not ($approvalFile.PSObject.Properties.Name -contains 'agents') -or -not $approvalFile.agents) {
+    $approvalFile | Add-Member -NotePropertyName agents -NotePropertyValue ([pscustomobject]@{}) -Force
   }
-  $approved = Invoke-OpenClaw @('approvals','allowlist','add','--agent',$Manager.id,$managerEntrypoint,'--json')
-  if ($approved.ExitCode -ne 0) { throw "配置 Manager exec allowlist 失败：$($approved.Output)" }
+  $managerApproval = [ordered]@{
+    security = 'allowlist'; ask = 'off'; askFallback = 'deny'; autoAllowSkills = $false
+    allowlist = @([ordered]@{ pattern = $managerEntrypoint })
+  }
+  $approvalFile.agents | Add-Member -NotePropertyName $Manager.id -NotePropertyValue $managerApproval -Force
+  $approvalTemp = Join-Path ([System.IO.Path]::GetTempPath()) ("openclaw-manager-approvals-" + [guid]::NewGuid().Guid + '.json')
+  try {
+    Write-JsonAtomic -Value $approvalFile -Path $approvalTemp -Depth 20
+    $approved = Invoke-OpenClaw @('approvals','set','--gateway','--file',$approvalTemp,'--json')
+    if ($approved.ExitCode -ne 0) { throw "配置 Manager exec allowlist 失败：$($approved.Output)" }
+  } finally {
+    if (Test-Path -LiteralPath $approvalTemp) { Remove-Item -LiteralPath $approvalTemp -Force }
+  }
   Write-JsonAtomic -Value ([ordered]@{ schema_version = 1; agent_id = $Manager.id; entrypoint = $managerEntrypoint }) -Path $managerExecStatePath -Depth 4
-  $changes.Add("allowlist $($Manager.id) manager-control")
+  $changes.Add("replace $($Manager.id) exec allowlist with manager-control")
 
   if ($SetManagerAsDefault) {
     $idx = Get-AgentIndex -List $listNow -Id $Manager.id

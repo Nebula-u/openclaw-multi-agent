@@ -22,14 +22,16 @@ function safeDetails(value) {
   return JSON.parse(JSON.stringify(value, (key, entry) => key.toLowerCase().includes('token') || key.toLowerCase().includes('password') ? '[redacted]' : entry));
 }
 
-export function createManagerControl({ projectRoot: projectRootInput, allowedGitHosts = null, runGit = null, clock = () => new Date() } = {}) {
-  if (!projectRootInput) throw new TypeError('projectRoot is required');
-  const projectRoot = resolve(projectRootInput);
-  const projectsRoot = join(projectRoot, 'runtime', 'projects');
-  const stateRoot = join(projectRoot, 'runtime', 'manager-control');
+export function createManagerControl({ projectRoot: projectRootInput = null, runtimeRoot: runtimeRootInput = null, allowedGitHosts = null, runGit = null, clock = () => new Date() } = {}) {
+  if (!projectRootInput && !runtimeRootInput) throw new TypeError('projectRoot or runtimeRoot is required');
+  const projectRoot = projectRootInput ? resolve(projectRootInput) : null;
+  const runtimeRoot = resolve(runtimeRootInput ?? join(projectRoot, 'runtime'));
+  const projectsRoot = join(runtimeRoot, 'projects');
+  const stateRoot = join(runtimeRoot, 'manager-control');
   const registryPath = join(stateRoot, 'projects.json');
   const auditPath = join(stateRoot, 'audit.jsonl');
-  const policyPath = join(projectRoot, 'config', 'manager-control-policy.json');
+  const deployedPolicyPath = join(stateRoot, 'manager-control-policy.json');
+  const policyPath = existsSync(deployedPolicyPath) ? deployedPolicyPath : projectRoot ? join(projectRoot, 'config', 'manager-control-policy.json') : deployedPolicyPath;
   const configuredHosts = allowedGitHosts ?? (existsSync(policyPath) ? JSON.parse(readFileSync(policyPath, 'utf8')).allowed_git_hosts ?? [] : []);
   if (!Array.isArray(configuredHosts)) fail('MANAGER_GIT_HOST_POLICY_INVALID', 'allowed_git_hosts must be an array');
   const allowedHosts = new Set(configuredHosts.map((item) => String(item).trim().toLowerCase()).filter(Boolean));
@@ -61,6 +63,17 @@ export function createManagerControl({ projectRoot: projectRootInput, allowedGit
     if (!SHA.test(headCommit)) fail('MANAGER_PROJECT_HEAD_INVALID', 'managed project HEAD is not a full commit SHA');
     return { projectRootAbs: canonical, headCommit };
   }
+  function assertProjectsRootSafe() {
+    mkdirSync(runtimeRoot, { recursive: true });
+    if (existsSync(projectsRoot) && lstatSync(projectsRoot).isSymbolicLink()) fail('MANAGER_PROJECT_PATH_UNSAFE', 'managed project directory must not be a symbolic link');
+    mkdirSync(projectsRoot, { recursive: true });
+    const canonicalRuntimeRoot = realpathSync.native(runtimeRoot);
+    const canonicalProjectsRoot = realpathSync.native(projectsRoot);
+    if (!inside(canonicalRuntimeRoot, canonicalProjectsRoot) || canonicalRuntimeRoot.toLowerCase() === canonicalProjectsRoot.toLowerCase()) {
+      fail('MANAGER_PROJECT_PATH_UNSAFE', 'managed project directory escapes the runtime root');
+    }
+    return canonicalProjectsRoot;
+  }
   function pathFor(workflowId, name) {
     if (!WORKFLOW.test(workflowId ?? '')) fail('MANAGER_WORKFLOW_ID_INVALID', 'workflow ID is invalid');
     const expected = join(projectsRoot, `${workflowId.toLowerCase()}-${slug(name)}`);
@@ -88,8 +101,8 @@ export function createManagerControl({ projectRoot: projectRootInput, allowedGit
   function ensureProject({ workflowId, project }) {
     const mode = project?.mode;
     const expected = pathFor(workflowId, project?.name);
+    const safeProjectsRoot = assertProjectsRootSafe();
     if (existsSync(expected)) fail('MANAGER_PROJECT_EXISTS', 'managed project path already exists', { project_name: project?.name });
-    mkdirSync(projectsRoot, { recursive: true });
     if (mode === 'new') {
       mkdirSync(expected, { recursive: false });
       git(expected, ['init', '--initial-branch=main'], 'initialize managed project');
@@ -100,22 +113,25 @@ export function createManagerControl({ projectRoot: projectRootInput, allowedGit
     }
     if (mode === 'remote') {
       const remote = validateRemote(project.remote_url);
-      git(projectsRoot, ['clone', '--no-recurse-submodules', remote.remoteUrl, expected], 'clone managed project');
+      git(safeProjectsRoot, ['clone', '--no-recurse-submodules', remote.remoteUrl, expected], 'clone managed project');
       const registered = register({ workflowId, name: project.name, mode, projectRootAbs: expected, remote: remote.remoteUrl });
       audit('project.ensure', 'SUCCEEDED', { workflow_id: workflowId, project_ref: registered.projectRef, mode, remote_host: remote.host, project_root_abs: registered.projectRootAbs });
       return registered;
     }
     fail('MANAGER_PROJECT_MODE_INVALID', 'project mode must be new or remote');
   }
-  function resolveProject(projectRef) {
+  function resolveProject(projectRef, expectedWorkflowId = null) {
     if (!PROJECT_REF.test(projectRef ?? '')) fail('MANAGER_PROJECT_REF_INVALID', 'project reference is invalid');
     const entry = readRegistry().projects[projectRef];
     if (!entry) fail('MANAGER_PROJECT_REF_UNKNOWN', 'project reference is not registered');
+    if (expectedWorkflowId !== null && entry.workflow_id !== expectedWorkflowId) {
+      fail('MANAGER_PROJECT_WORKFLOW_MISMATCH', 'managed project reference belongs to a different workflow');
+    }
     const inspected = inspect(entry.project_root_abs);
-    return { projectRef, ...inspected, remote: entry.remote ?? null };
+    return { projectRef, workflowId: entry.workflow_id, ...inspected, remote: entry.remote ?? null };
   }
-  function fetchProject(projectRef) {
-    const project = resolveProject(projectRef);
+  function fetchProject(projectRef, expectedWorkflowId = null) {
+    const project = resolveProject(projectRef, expectedWorkflowId);
     if (!project.remote) fail('MANAGER_REMOTE_NOT_CONFIGURED', 'managed project has no registered remote');
     validateRemote(project.remote);
     git(project.projectRootAbs, ['fetch', '--prune', 'origin'], 'fetch registered remote');
