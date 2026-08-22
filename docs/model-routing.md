@@ -4,7 +4,7 @@
 
 | Agent | 模型引用 | 协议 | 用途 |
 | --- | --- | --- | --- |
-| manager-agent | `deepseek/deepseek-v4-pro` | Chat Completions API | 调度、工具调用、多轮状态 |
+| manager-agent | `deepseek/deepseek-v4-pro` | Chat Completions API | 用户交互、路线确认、请求提交 |
 | requirement-agent | `deepseek/deepseek-v4-pro` | Chat Completions API | 需求理解与结构化输出 |
 | architect-agent | `deepseek/deepseek-v4-pro` | Chat Completions API | 架构设计与深度推理 |
 | developer-agent | `deepseek/deepseek-v4-pro` | Chat Completions API | 代码执行、工具链、多轮修改 |

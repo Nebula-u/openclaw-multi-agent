@@ -67,6 +67,28 @@ test('install validators require the Node version that provides stable node:sqli
   assert.match(bash, /Node\.js 22\.13\.0\+/u);
 });
 
+test('active architecture documents describe Orchestrator dispatch, SQLite, and the Docker test sandbox', () => {
+  const configNotes = readFileSync(join(ROOT, 'config', 'openclaw-config-notes.md'), 'utf8');
+  const nativeIntegration = readFileSync(join(ROOT, 'docs', 'native-openclaw-integration.md'), 'utf8');
+  const compatibility = readFileSync(join(ROOT, 'docs', 'compatibility-report.md'), 'utf8');
+  const jsonFlow = readFileSync(join(ROOT, 'docs', 'architect', 'JSON处理流程.md'), 'utf8');
+  const deliveryReport = readFileSync(join(ROOT, 'DELIVERY-REPORT.md'), 'utf8');
+  const modelRouting = readFileSync(join(ROOT, 'docs', 'model-routing.md'), 'utf8');
+  const resultContract = JSON.parse(readFileSync(join(ROOT, 'contracts', 'result.schema.json'), 'utf8'));
+
+  assert.match(configNotes, /Manager.*Node Orchestrator/su);
+  assert.match(configNotes, /test-agent.*sandbox\.mode.*all.*docker/isu);
+  assert.doesNotMatch(configNotes, /本项目 test-agent 用 "off"/u);
+  assert.match(nativeIntegration, /Manager.*不.*sessions_spawn/su);
+  assert.doesNotMatch(nativeIntegration, /manager-agent` 调度依赖的原生会话工具/u);
+  assert.match(compatibility, /当前架构.*Node Orchestrator.*SQLite/su);
+  assert.match(jsonFlow, /SQLite.*runs.*tasks.*executions/su);
+  assert.doesNotMatch(jsonFlow, /PostgreSQL 创建\/更新 workflow、task、event/u);
+  assert.match(deliveryReport, /历史交付快照.*不代表当前架构/su);
+  assert.match(modelRouting, /manager-agent.*用户交互.*路线确认/su);
+  assert.doesNotMatch(resultContract.properties.summary_for_manager.description, /Manager.*调度/u);
+});
+
 test('installers synchronize model catalog limits and protect raw artifact storage', () => {
   const powershell = readFileSync(join(ROOT, 'scripts', 'install.ps1'), 'utf8');
   const componentLib = readFileSync(join(ROOT, 'scripts', 'component-lib.ps1'), 'utf8');

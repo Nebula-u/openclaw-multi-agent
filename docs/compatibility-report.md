@@ -5,6 +5,8 @@
 > 散文用中文；命令、字段、枚举值、版本号用英文。
 > **有效期提示（2026-08-17 补注）**：本报告是 2026-07-23 单次探测的固定快照，不会随环境自动更新。若本机 Node/OpenClaw CLI 版本已变化（例如 2026-08-17 复核时发现本机 Node 版本已不满足 OpenClaw CLI 的最低要求，导致 `openclaw --version` 无法执行），本报告中的版本号和退出码不再代表当前真实环境，需重新运行 `scripts/preflight-probe.sh` 探测。
 
+> **当前架构说明（2026-08-22）**：当前架构是 Manager request queue → Node Orchestrator → SQLite Control Kernel。下文关于 CLI/schema 的 OBSERVED 结论仍是固定探测证据，但当时“Manager 原生派发、test-agent `sandbox.mode=off`”的项目目标已经被取代，不能作为当前配置指南。当前配置见 `config/openclaw-config-notes.md` 和 `docs/native-openclaw-integration.md`。
+
 ## 1. 探测环境与方法
 
 - 探测脚本：`scripts/preflight-probe.sh`。
@@ -69,7 +71,7 @@
   - 在 `agents.defaults.sandbox` 与 `agents.list[].sandbox` 两处均存在。
 - `agents.list[]` 条目含 `workspace`（string）与 `agentDir`（string）。
 
-与本项目设计一致：工作 Agent 设 `subagents.allowAgents = []`；test-agent 设 `sandbox.mode = "off"`；每个 Agent 配绝对 `workspace` / `agentDir`。
+这些字段在探测版本中存在。当前项目使用所有 Agent 的空 `subagents.allowAgents`，Manager 由 Node Orchestrator 间接派发；Manager 与 test-agent 均使用 package 定义的 Docker `sandbox.mode=all`。每个 Agent 继续使用绝对 `workspace` / `agentDir`。
 
 ## 5. `config validate` 与 `doctor --lint`
 
@@ -105,7 +107,7 @@
 
 - `openclaw agents add` 参数（`--workspace` / `--agent-dir` / `--model` / `--non-interactive` / `--json` / `--bind`）：**无差异**（第 3.1 节已核对存在）。
 - `openclaw config set` 的 dot / bracket 路径、`--strict-json` / `--dry-run` / `--merge` / `--replace`：**无差异**（第 3.2 节已核对存在）。
-- schema 字段 `subagents.{delegationMode, allowAgents, requireAgentId}`、`sandbox.mode`（`off` / `non-main` / `all`）、`workspace`、`agentDir`：**无差异**（第 4 节已核对存在）。
+- schema 字段 `subagents.{delegationMode, allowAgents, requireAgentId}`、`sandbox.mode`（`off` / `non-main` / `all`）、`workspace`、`agentDir`：探测时**无字段差异**（第 4 节已核对存在）；当前取值必须以 package manifest 和活动配置为准。
 
 结论：就**已探测**范围而言，本项目示例引用的工具名与字段与真实版本 `2026.7.1-2 (0790d9f)` **无差异**。
 
@@ -113,7 +115,7 @@
 
 以下项目**未在 preflight 中探测**，标记 `UNVERIFIED`，不得据此下结论；需要时应另行探测并补记原始文件：
 
-- 原生会话工具的确切名称与参数（如 `sessions_spawn` / yield / wait / 完成通知机制的真实 schema）：**UNVERIFIED**（preflight 未探测 `openclaw sessions --help` 之类命令）。manager-agent 须以真实工具 schema 为准，并在差异出现时补记。
+- 原生会话工具的确切名称与参数在本次快照中仍为 **UNVERIFIED**；当前 Manager 不依赖这些工具派发，因此不构成运行前置。
 - `openclaw secrets configure` / `secrets apply` / `secrets audit --check` 的接口：**UNVERIFIED**（仅出现在 doctor 提示文案中，未独立探测）。
 - `openclaw config get` / `config patch` / `config file` 的完整行为：仅探测了 `--help` 与（`config file`）单次调用退出码，**具体输出语义 UNVERIFIED**。
 - `openclaw agents add` / `agents list` 的实际执行效果：**UNVERIFIED**（仅探测 `--help`，未实际执行变更）。

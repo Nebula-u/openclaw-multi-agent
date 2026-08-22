@@ -27,7 +27,7 @@
       "description": "Agent 对本次运行的最终判定；只能使用列出的枚举值，不能自造状态。"
     },
     "summary_for_user": { "type": "string", "description": "面向用户的可审计简要结论，不得虚构执行事实。" },
-    "summary_for_manager": { "type": "string", "description": "供 Manager 复核与下一步调度使用的简要结论。" },
+    "summary_for_manager": { "type": "string", "description": "供 Manager 向用户说明已验证结果的简要结论。" },
     "input_commit": { "type": ["string", "null"] },
     "output_commit": { "type": ["string", "null"] },
     "branch": { "type": ["string", "null"] },

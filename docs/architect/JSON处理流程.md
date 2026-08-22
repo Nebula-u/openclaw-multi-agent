@@ -4,7 +4,7 @@ flowchart TD
   B --> C{JSON.parse + Manager Request Schema}
   C -- 不通过 --> CR[写入 REJECTED receipt.json]
   C -- 通过 --> D[校验授权、会话绑定、冻结 route_plan]
-  D --> E[PostgreSQL 创建/更新 workflow、task、event]
+  D --> E[SQLite Kernel 创建 runs、tasks、executions 事实]
 
   E --> F[Orchestrator 为当前步骤生成 context manifest]
   F --> G[input/task.json、context-manifest.json、规则快照]
@@ -21,7 +21,7 @@ flowchart TD
   O -- 否 --> LF
   O -- 是 --> P[原子发布 output/result.json]
   P --> Q[生成 ingestion receipt 与审计日志]
-  Q --> R[登记 artifact，更新 execution/task/run 与 Kernel event]
+  Q --> R[登记 artifact，直接更新 execution/task/run 事实]
   R --> S{result_status}
   S -- COMPLETED --> T[推进下一阶段或结束]
   S -- NEEDS_REWORK / BLOCKED / FAILED --> U[失败并按预算重试或 HOLD]

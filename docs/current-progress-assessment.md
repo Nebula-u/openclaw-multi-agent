@@ -12,6 +12,8 @@
 - HR 默认手动，保留 task/daily/both 自动接口；跨 trigger 按 snapshot + Session 去重，输出只接受三类结构化 findings；
 - Monitor 使用只读 Kernel 连接并展示 workflow、普通 Agent Session、校验后的 HR findings 和 Git snapshot；HR 原始 Session 不公开；
 - 所有 Kernel 写入口共用单写者锁；只读 CLI 不创建数据库；Git/SQLite 索引失败使用轻量补偿，不引入事件链或分布式事务框架。
+- Kernel schema 使用 `PRAGMA user_version`；已知的旧 `runs.langgraph_thread_id` 结构可事务迁移且保留事实，未知漂移失败关闭；只读状态会报告迁移需求。
+- Orchestrator 状态读取会校验 PID 与 heartbeat，死亡实例显示为 `STALE`，不会误报仍在运行。
 
 ## 部署边界
 

@@ -1,5 +1,7 @@
 # 交付报告 — openclaw-sdlc-multi-agent 原生架构重建
 
+> **历史交付快照（2026-07-23）：本文记录的原生 Manager 派发、无沙箱测试和早期文件控制面不代表当前架构。** 当前依据是 `README.md`、`docs/architecture.md`、`docs/native-openclaw-integration.md` 与最新测试结果；本文正文仅作为当时交付证据保留。
+
 > 本报告如实说明"做了什么、验证了什么、没验证什么、被什么挡住、还剩什么"。
 > 所有"已验证"条目均有 `artifacts/` 下的真实运行产物或本仓库文件为证；未执行的一律不声称已执行。
 > 证据分级沿用项目约定：**OBSERVED**（亲自运行并观察到）/ **INFERRED**（据已知事实推断）/ **PROPOSED**（设计意图）/ **UNKNOWN**（未知）。

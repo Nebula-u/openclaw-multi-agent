@@ -61,14 +61,14 @@ OPENCLAW_HR_AUTO_MODE=off
 
 相对数据库路径按项目根目录解析。服务器部署时应把 `runtime/` 放在本机持久化磁盘。
 
-### 3. 初始化空 Kernel
+### 3. 初始化或升级 Kernel
 
 ```text
 npm run kernel:schema
 npm run kernel:status
 ```
 
-初始化会幂等创建八张表，并启用 WAL、外键、5 秒 busy timeout 和 `synchronous=FULL`。
+命令会幂等创建八张表，并启用 WAL、外键、5 秒 busy timeout 和 `synchronous=FULL`。Kernel 使用 `PRAGMA user_version` 记录 schema 版本；已知的旧 SQLite 结构会在单写者锁内事务迁移并保留事实，未知结构漂移会失败关闭。生产升级前应先停止 Orchestrator 并备份 `runtime/control/kernel.db`。
 
 ### 4. 安装或更新 Agent
 
@@ -100,6 +100,8 @@ npm run orchestrator:start
 npm run orchestrator:status
 npm run orchestrator:stop
 ```
+
+`orchestrator:status` 会把进程已死亡或 heartbeat 过期的旧状态文件显示为 `STALE`，不会把遗留 `RUNNING` 文本当作真实存活服务。
 
 ### 6. 启动 Monitor
 

@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-08-22 - 旧 SQLite 迁移与 Orchestrator 存活状态修复
+
+- Kernel 增加 `PRAGMA user_version` 和版本化 schema 检查，事务移除已知旧列 `runs.langgraph_thread_id` 并保留既有事实；未知结构漂移失败关闭。
+- `kernel-status` 报告 schema 版本、迁移需求与结构问题，read-only 检查不修改数据库。
+- foreground Orchestrator 状态结合 PID 与 heartbeat，将死亡或过期实例显示为 `STALE`；停止命令不再接受失活实例。
+- 活动配置和架构文档统一为 Manager request queue → Node Orchestrator → SQLite，并记录 test-agent Docker sandbox 与空 delegation 白名单。
+
 ## 2026-08-21 - 单机 SQLite、Git 快照与 HR Session 审查
 
 ### 更新内容
