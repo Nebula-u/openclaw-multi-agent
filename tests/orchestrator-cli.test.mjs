@@ -32,7 +32,7 @@ test('read-only kernel status reports a legacy schema without mutating it', (t) 
   const databasePath = join(temp, 'kernel.db');
   const database = new DatabaseSync(databasePath);
   const schema = readFileSync(join(ROOT, 'scripts', 'control-kernel', 'schema.sql'), 'utf8');
-  database.exec(schema.replace('  run_id TEXT PRIMARY KEY,', '  run_id TEXT PRIMARY KEY,\n  langgraph_thread_id TEXT NOT NULL,'));
+  database.exec(schema.replace('  run_id TEXT PRIMARY KEY,', '  run_id TEXT PRIMARY KEY,\n  langgraph_thread_id TEXT NOT NULL UNIQUE,'));
   database.close();
 
   const result = invoke(['kernel-status', '--project-root', temp], { OPENCLAW_KERNEL_DB_PATH: databasePath });

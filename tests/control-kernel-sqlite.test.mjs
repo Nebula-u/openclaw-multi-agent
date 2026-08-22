@@ -28,7 +28,7 @@ test('SQLite kernel migrates the legacy LangGraph run column without losing fact
   const root = mkdtempSync(join(tmpdir(), 'kernel-legacy-'));
   const databasePath = join(root, 'kernel.db');
   const schema = readFileSync(new URL('../scripts/control-kernel/schema.sql', import.meta.url), 'utf8');
-  const legacySchema = schema.replace('  run_id TEXT PRIMARY KEY,', '  run_id TEXT PRIMARY KEY,\n  langgraph_thread_id TEXT NOT NULL,');
+  const legacySchema = schema.replace('  run_id TEXT PRIMARY KEY,', '  run_id TEXT PRIMARY KEY,\n  langgraph_thread_id TEXT NOT NULL UNIQUE,');
   const legacy = new DatabaseSync(databasePath);
   legacy.exec(legacySchema);
   legacy.prepare(`INSERT INTO runs (
@@ -38,6 +38,13 @@ test('SQLite kernel migrates the legacy LangGraph run column without losing fact
     'RUN-legacy', 'WF-legacy', 'WF-legacy', 'ACTIVE', '{}', 'a'.repeat(64),
     'F:/repo', '1'.repeat(40), '2026-08-21T00:00:00.000Z', '2026-08-21T00:00:00.000Z',
   );
+  legacy.prepare(`INSERT INTO tasks (
+    task_id, run_id, kind, step_id, title, agent_id, state, task_group_id, created_at, updated_at
+  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+    'TASK-legacy', 'RUN-legacy', 'REQUIREMENTS', 'requirements', 'Requirements',
+    'requirement-agent', 'READY', 'RUN-legacy:requirements',
+    '2026-08-21T00:00:00.000Z', '2026-08-21T00:00:00.000Z',
+  );
   legacy.close();
 
   const database = openKernelDatabase({ databasePath });
@@ -46,6 +53,7 @@ test('SQLite kernel migrates the legacy LangGraph run column without losing fact
   assert.equal(database.get('PRAGMA user_version').user_version, 1);
   assert.equal(database.all("PRAGMA table_info('runs')").some((column) => column.name === 'langgraph_thread_id'), false);
   assert.equal(database.get('SELECT workflow_id FROM runs WHERE run_id=?', ['RUN-legacy']).workflow_id, 'WF-legacy');
+  assert.equal(database.get('SELECT run_id FROM tasks WHERE task_id=?', ['TASK-legacy']).run_id, 'RUN-legacy');
   database.run(`INSERT INTO runs (
     run_id, workflow_id, state, request, request_sha256,
     target_project_root_abs, base_commit, created_at, updated_at

@@ -21,6 +21,16 @@ function expectedSchema(schemaSql) {
   } finally { expected.close(); }
 }
 
+function expectedTableSql(schemaSql, table, replacement) {
+  const expected = new DatabaseSync(':memory:');
+  try {
+    expected.exec(schemaSql);
+    const sql = expected.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name=?").get(table)?.sql;
+    if (!sql) throw new Error(`canonical schema does not define table ${table}`);
+    return sql.replace(new RegExp(`^CREATE TABLE ${table}\\b`, 'u'), `CREATE TABLE ${replacement}`);
+  } finally { expected.close(); }
+}
+
 function sameColumns(left, right) { return JSON.stringify(left) === JSON.stringify(right); }
 
 export function inspectKernelSchema(sqlite, schemaSql) {
@@ -70,14 +80,33 @@ export function migrateKernelSchema(sqlite, schemaSql) {
   }
   if (!before.migrationRequired) return before;
 
+  const foreignKeysEnabled = Number(sqlite.prepare('PRAGMA foreign_keys').get().foreign_keys) === 1;
+  if (before.knownLegacyRunColumn && foreignKeysEnabled) sqlite.exec('PRAGMA foreign_keys=OFF');
   sqlite.exec('BEGIN IMMEDIATE');
   try {
-    if (before.knownLegacyRunColumn) sqlite.exec(`ALTER TABLE runs DROP COLUMN ${LEGACY_RUN_COLUMN}`);
+    if (before.knownLegacyRunColumn) {
+      const replacement = 'runs_kernel_v1';
+      const runColumns = expectedSchema(schemaSql).runs.map((column) => column.name);
+      const columnList = runColumns.map((name) => `"${name}"`).join(', ');
+      sqlite.exec(expectedTableSql(schemaSql, 'runs', replacement));
+      sqlite.exec(`INSERT INTO ${replacement} (${columnList}) SELECT ${columnList} FROM runs`);
+      sqlite.exec('DROP TABLE runs');
+      sqlite.exec(`ALTER TABLE ${replacement} RENAME TO runs`);
+      sqlite.exec(schemaSql);
+      const violations = sqlite.prepare('PRAGMA foreign_key_check').all();
+      if (violations.length) {
+        throw Object.assign(new Error('Control Kernel migration would violate foreign keys'), {
+          code: 'KERNEL_SCHEMA_MIGRATION_FOREIGN_KEY_FAILED', details: { violations },
+        });
+      }
+    }
     sqlite.exec(`PRAGMA user_version=${CURRENT_KERNEL_SCHEMA_VERSION}`);
     sqlite.exec('COMMIT');
   } catch (error) {
     try { sqlite.exec('ROLLBACK'); } catch { /* transaction already closed */ }
     throw error;
+  } finally {
+    if (before.knownLegacyRunColumn && foreignKeysEnabled) sqlite.exec('PRAGMA foreign_keys=ON');
   }
   return inspectKernelSchema(sqlite, schemaSql);
 }
