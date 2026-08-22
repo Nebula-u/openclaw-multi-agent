@@ -117,6 +117,7 @@ export function createManagerControl({ projectRoot: projectRootInput, allowedGit
   function fetchProject(projectRef) {
     const project = resolveProject(projectRef);
     if (!project.remote) fail('MANAGER_REMOTE_NOT_CONFIGURED', 'managed project has no registered remote');
+    validateRemote(project.remote);
     git(project.projectRootAbs, ['fetch', '--prune', 'origin'], 'fetch registered remote');
     const resolved = resolveProject(projectRef); audit('project.fetch', 'SUCCEEDED', { project_ref: projectRef, project_root_abs: resolved.projectRootAbs });
     return resolved;

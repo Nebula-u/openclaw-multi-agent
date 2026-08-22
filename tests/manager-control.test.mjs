@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { existsSync, mkdtempSync, realpathSync, rmSync, mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, realpathSync, rmSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -44,6 +44,16 @@ test('manager control reads the deployment Git host policy', (t) => {
     () => control.ensureProject({ workflowId: 'WF-Remote-002', project: { mode: 'remote', name: 'allowed-host', remote_url: 'https://git.example.test/org/repo.git' } }),
     (error) => error.code === 'MANAGER_GIT_FAILED',
   );
+});
+
+test('manager control rechecks the host policy before fetching a registered remote', (t) => {
+  const { control } = fixture(t);
+  const project = control.ensureProject({ workflowId: 'WF-Fetch-001', project: { mode: 'new', name: 'fetch guard' } });
+  const registry = JSON.parse(readFileSync(control.registryPath, 'utf8'));
+  registry.projects[project.projectRef].remote = 'https://example.invalid/org/repo.git';
+  writeFileSync(control.registryPath, `${JSON.stringify(registry)}\n`);
+
+  assert.throws(() => control.fetchProject(project.projectRef), (error) => error.code === 'MANAGER_GIT_HOST_DENIED');
 });
 
 test('manager control CLI only exposes semantic project actions', (t) => {
