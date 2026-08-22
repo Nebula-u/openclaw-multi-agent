@@ -4,6 +4,7 @@ import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } f
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import test from 'node:test';
+import { buildBundle } from '../scripts/runtime-bundle.mjs';
 
 const ROOT = resolve(import.meta.dirname, '..');
 const SCRIPT = join(ROOT, 'scripts', 'runtime-bundle.mjs');
@@ -105,4 +106,13 @@ test('HR package is manual-first and limited to the three Session review categor
   assert.doesNotMatch(workspace, /Never.*read thinking/iu);
   assert.deepEqual(manifest.capabilities, ['observability.session-review', 'observability.git-review', 'automation.review-hook']);
   assert.equal(manifest.delegation.callable_by_manager, false);
+});
+
+test('Manager runtime bundle includes the fixed manager-control entrypoint', () => {
+  const runtime = mkdtempSync(join(tmpdir(), 'runtime-bundle-manager-'));
+  try {
+    const bundle = buildBundle(ROOT, runtime, { agentIds: ['manager-agent'] });
+    assert.equal(bundle.entries.some((entry) => entry.target_rel === 'manager-control/manager-control.cmd'), true);
+    assert.equal(bundle.entries.some((entry) => entry.target_rel === 'runtime-core/atomic-store.mjs'), true);
+  } finally { rmSync(runtime, { recursive: true, force: true }); }
 });

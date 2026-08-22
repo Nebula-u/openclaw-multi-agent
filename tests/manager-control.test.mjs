@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import { existsSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
 import test from 'node:test';
 import { createManagerControl } from '../scripts/manager-control/service.mjs';
@@ -29,4 +31,14 @@ test('manager control rejects a remote whose host is not configured', (t) => {
     () => control.ensureProject({ workflowId: 'WF-Remote-001', project: { mode: 'remote', name: 'blocked', remote_url: 'https://example.invalid/org/repo.git' } }),
     (error) => error.code === 'MANAGER_GIT_HOST_DENIED',
   );
+});
+
+test('manager control CLI only exposes semantic project actions', (t) => {
+  const projectRoot = mkdtempSync(join(tmpdir(), 'manager-control-cli-'));
+  t.after(() => rmSync(projectRoot, { recursive: true, force: true }));
+  const cli = fileURLToPath(new URL('../scripts/manager-control/cli.mjs', import.meta.url));
+  const result = spawnSync(process.execPath, [cli, 'ensure', '--project-root', projectRoot, '--workflow-id', 'WF-CLI-001', '--project-json', '{"mode":"new","name":"cli demo"}'], { encoding: 'utf8' });
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(JSON.parse(result.stdout).projectRef, /^PRJ-/u);
 });

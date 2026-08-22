@@ -86,14 +86,13 @@ test('webchat delivery uses the originating session channel', () => {
   assert.throws(() => deliveryArgs({ reply_channel: 'not-a-channel', reply_to: 'target' }), (error) => error.code === 'OPENCLAW_DELIVERY_CHANNEL_UNSUPPORTED');
 });
 
-test('Manager is isolated and cannot use direct development tools', () => {
+test('Manager uses gateway allowlist exec without a Docker sandbox', () => {
   const managerPackage = JSON.parse(readFileSync(join(ROOT, 'agents', 'packages', 'builtin', 'manager-agent.json'), 'utf8'));
-  assert.equal(managerPackage.sandbox_mode, 'all');
-  assert.equal(managerPackage.sandbox_config?.mode, 'all');
-  assert.equal(managerPackage.sandbox_config?.workspaceAccess, 'rw');
-  assert.equal(managerPackage.sandbox_config?.docker?.readOnlyRoot, true);
+  assert.equal(managerPackage.sandbox_mode, 'off');
+  assert.equal(managerPackage.sandbox_config, undefined);
   assert.equal(managerPackage.tools_config?.profile, 'minimal');
-  assert.equal(managerPackage.tools_config?.deny?.includes('exec'), true);
+  assert.equal(managerPackage.tools_config?.alsoAllow?.includes('exec'), true);
+  assert.deepEqual(managerPackage.tools_config?.exec, { host: 'gateway', security: 'allowlist', ask: 'off', strictInlineEval: true, timeoutSec: 120 });
   assert.equal(managerPackage.tools_config?.deny?.includes('apply_patch'), true);
   assert.equal(managerPackage.tools_config?.deny?.includes('browser'), true);
 });

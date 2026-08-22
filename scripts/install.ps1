@@ -426,6 +426,13 @@ try {
   $commonSource = Join-Path $ProjectRoot 'agents\common'
   $templatesSource = Join-Path $ProjectRoot 'templates'
   $systemSkillsSource = Join-Path $ProjectRoot 'agents\packages\system\skills'
+  $managerControlSource = Join-Path $ProjectRoot 'scripts\manager-control'
+  $runtimeCoreSource = Join-Path $ProjectRoot 'scripts\runtime-core'
+  $managerControlTarget = Join-Path $RuntimeRootAbs 'manager-control'
+  $runtimeCoreTarget = Join-Path $RuntimeRootAbs 'runtime-core'
+  New-Item -ItemType Directory -Force -Path $managerControlTarget, $runtimeCoreTarget | Out-Null
+  Copy-Item -Path (Join-Path $managerControlSource '*') -Destination $managerControlTarget -Recurse -Force
+  Copy-Item -Path (Join-Path $runtimeCoreSource '*') -Destination $runtimeCoreTarget -Recurse -Force
   foreach ($p in $RegisteredPackages) {
     New-Item -ItemType Directory -Force -Path $p.workspace, $p.agentDir | Out-Null
     Copy-Item -Path (Join-Path $p.workspace_source '*') -Destination $p.workspace -Recurse -Force
@@ -513,6 +520,23 @@ try {
       Set-OpenClawJson -Path "agents.list[$idx].tools" -Value $p.tools_config -Changes $changes
     }
   }
+
+  $managerExecStatePath = Join-Path $RuntimeRootAbs 'control\manager-exec-allowlist.json'
+  $managerEntrypoint = Join-Path $RuntimeRootAbs (if ($IsWindows) { 'manager-control\manager-control.cmd' } else { 'manager-control/manager-control' })
+  if (-not $IsWindows) { & chmod 755 $managerEntrypoint }
+  if (-not (Test-Path -LiteralPath $managerEntrypoint -PathType Leaf)) { throw "缺少 Manager 受控执行入口：$managerEntrypoint" }
+  if (Test-Path -LiteralPath $managerExecStatePath) {
+    $prior = Read-JsonFile $managerExecStatePath
+    if ($prior.entrypoint -and $prior.entrypoint -ne $managerEntrypoint) {
+      $removed = Invoke-OpenClaw @('approvals','allowlist','remove','--agent',$Manager.id,[string]$prior.entrypoint,'--json')
+      if ($removed.ExitCode -ne 0) { throw "移除旧 Manager exec allowlist 失败：$($removed.Output)" }
+      $changes.Add("remove $($Manager.id) exec allowlist")
+    }
+  }
+  $approved = Invoke-OpenClaw @('approvals','allowlist','add','--agent',$Manager.id,$managerEntrypoint,'--json')
+  if ($approved.ExitCode -ne 0) { throw "配置 Manager exec allowlist 失败：$($approved.Output)" }
+  Write-JsonAtomic -Value ([ordered]@{ schema_version = 1; agent_id = $Manager.id; entrypoint = $managerEntrypoint }) -Path $managerExecStatePath -Depth 4
+  $changes.Add("allowlist $($Manager.id) manager-control")
 
   if ($SetManagerAsDefault) {
     $idx = Get-AgentIndex -List $listNow -Id $Manager.id

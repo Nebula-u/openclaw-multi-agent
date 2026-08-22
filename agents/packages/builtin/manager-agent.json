@@ -13,29 +13,12 @@
   "capabilities": ["workflow.orchestration", "agent.lifecycle", "skill.lifecycle"],
   "model": "",
   "delegation": { "callable_by_manager": false, "allow_agents": [], "require_agent_id": true, "delegation_mode": "off" },
-  "sandbox_mode": "all",
-  "sandbox_config": {
-    "mode": "all",
-    "backend": "docker",
-    "scope": "session",
-    "workspaceAccess": "rw",
-    "docker": {
-      "image": "openclaw-test-node:22-slim",
-      "workdir": "/workspace",
-      "network": "none",
-      "readOnlyRoot": true,
-      "capDrop": ["ALL"],
-      "pidsLimit": 128,
-      "memory": "512m",
-      "cpus": 1,
-      "dangerouslyAllowExternalBindSources": true,
-      "dangerouslyAllowReservedContainerTargets": false
-    }
-  },
+  "sandbox_mode": "off",
   "tools_config": {
     "profile": "minimal",
-    "alsoAllow": ["read", "write", "edit"],
-    "deny": ["exec", "apply_patch", "browser", "web_search", "web_fetch", "image_generate", "message"]
+    "alsoAllow": ["read", "write", "edit", "exec"],
+    "deny": ["apply_patch", "browser", "web_search", "web_fetch", "image_generate", "message"],
+    "exec": { "host": "gateway", "security": "allowlist", "ask": "off", "strictInlineEval": true, "timeoutSec": 120 }
   },
   "assembly": { "include_common_rules": true, "include_templates": true },
   "skills": ["skill-creator", "agent-package-manager"],

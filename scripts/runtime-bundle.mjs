@@ -94,6 +94,10 @@ export function buildBundle(projectRootInput, runtimeRootInput, { agentIds = nul
         join(projectRoot, 'agents', 'packages', 'system', 'skills', skill),
         join(targetWorkspace, 'skills', skill), 'skill');
     }
+    if (manifest.id === 'manager-agent') {
+      addTree(entries, projectRoot, runtimeRoot, join(projectRoot, 'scripts', 'manager-control'), join(runtimeRoot, 'manager-control'), 'manager-control');
+      addTree(entries, projectRoot, runtimeRoot, join(projectRoot, 'scripts', 'runtime-core'), join(runtimeRoot, 'runtime-core'), 'manager-control-runtime');
+    }
   }
   entries.sort((left, right) => left.target_rel.localeCompare(right.target_rel, 'en')
     || left.source_rel.localeCompare(right.source_rel, 'en'));

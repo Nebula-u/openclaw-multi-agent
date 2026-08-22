@@ -541,6 +541,9 @@ fi
 SRC_COMMON="$PROJECT_ROOT/agents/common"
 SRC_TEMPLATES="$PROJECT_ROOT/templates"
 SRC_SYSTEM_SKILLS="$PROJECT_ROOT/agents/packages/system/skills"
+mkdir -p "$RUNTIME_ROOT_ABS/manager-control" "$RUNTIME_ROOT_ABS/runtime-core"
+cp -Rf "$PROJECT_ROOT/scripts/manager-control/." "$RUNTIME_ROOT_ABS/manager-control/"
+cp -Rf "$PROJECT_ROOT/scripts/runtime-core/." "$RUNTIME_ROOT_ABS/runtime-core/"
 for id in "${AGENT_IDS[@]}"; do
   src_ws="${SRC_WS[$id]}"
   dst_ws="${WS[$id]}"
@@ -664,6 +667,21 @@ for id in "${AGENT_IDS[@]}"; do
     set_json "agents.list[$idx].tools" "${TOOLS_JSON[$id]}"
   fi
 done
+
+MANAGER_EXEC_STATE="$RUNTIME_ROOT_ABS/control/manager-exec-allowlist.json"
+MANAGER_ENTRYPOINT="$RUNTIME_ROOT_ABS/manager-control/manager-control"
+chmod 755 "$MANAGER_ENTRYPOINT"
+[ -f "$MANAGER_ENTRYPOINT" ] || { restore_on_failure "缺少 Manager 受控执行入口"; exit 1; }
+if [ -f "$MANAGER_EXEC_STATE" ]; then
+  prior_entrypoint="$(jq -r '.entrypoint // empty' "$MANAGER_EXEC_STATE")"
+  if [ -n "$prior_entrypoint" ] && [ "$prior_entrypoint" != "$MANAGER_ENTRYPOINT" ]; then
+    openclaw approvals allowlist remove --agent "$MANAGER_ID" "$prior_entrypoint" --json >/dev/null 2>&1 || { restore_on_failure "移除旧 Manager exec allowlist 失败"; exit 1; }
+    CONFIG_CHANGES+=("remove $MANAGER_ID exec allowlist")
+  fi
+fi
+openclaw approvals allowlist add --agent "$MANAGER_ID" "$MANAGER_ENTRYPOINT" --json >/dev/null 2>&1 || { restore_on_failure "配置 Manager exec allowlist 失败"; exit 1; }
+printf '{"schema_version":1,"agent_id":"%s","entrypoint":"%s"}\n' "$MANAGER_ID" "$MANAGER_ENTRYPOINT" > "$MANAGER_EXEC_STATE"
+CONFIG_CHANGES+=("allowlist $MANAGER_ID manager-control")
 
 # 7.6 可选：默认 Agent / binding
 if [ "$SET_MANAGER_DEFAULT" -eq 1 ]; then
