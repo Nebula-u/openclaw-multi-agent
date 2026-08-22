@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict';
-import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { DatabaseSync } from 'node:sqlite';
 import test from 'node:test';
 import { acquireWorkflowLock } from '../scripts/runtime-core/workflow-lock.mjs';
 
@@ -21,8 +22,26 @@ test('CLI initializes an empty SQLite kernel and manual HR remains available in 
   assert.equal(initialized.status, 0, initialized.stderr); assert.equal(initialized.json.runtime, 'orchestrator-sqlite');
   const status = invoke(['kernel-status', '--project-root', temp], environment);
   assert.equal(status.status, 0, status.stderr); assert.equal(status.json.journal_mode, 'wal'); assert.equal(status.json.tables.length, 8);
+  assert.equal(status.json.schema_version, 1); assert.equal(status.json.migration_required, false); assert.deepEqual(status.json.schema_issues, []);
   const manual = invoke(['hr-review', '--project-root', temp, '--date', '2026-08-21'], environment);
   assert.equal(manual.status, 0, manual.stderr); assert.deepEqual(manual.json.queued, []); assert.deepEqual(manual.json.jobs, []);
+});
+
+test('read-only kernel status reports a legacy schema without mutating it', (t) => {
+  const temp = mkdtempSync(join(tmpdir(), 'orchestrator-cli-legacy-'));
+  const databasePath = join(temp, 'kernel.db');
+  const database = new DatabaseSync(databasePath);
+  const schema = readFileSync(join(ROOT, 'scripts', 'control-kernel', 'schema.sql'), 'utf8');
+  database.exec(schema.replace('  run_id TEXT PRIMARY KEY,', '  run_id TEXT PRIMARY KEY,\n  langgraph_thread_id TEXT NOT NULL,'));
+  database.close();
+
+  const result = invoke(['kernel-status', '--project-root', temp], { OPENCLAW_KERNEL_DB_PATH: databasePath });
+  assert.equal(result.status, 1);
+  assert.equal(result.json.error.code, 'KERNEL_SCHEMA_MIGRATION_REQUIRED');
+  const unchanged = new DatabaseSync(databasePath, { readOnly: true });
+  assert.equal(unchanged.prepare("PRAGMA table_info('runs')").all().some((column) => column.name === 'langgraph_thread_id'), true);
+  unchanged.close();
+  t.after(() => rmSync(temp, { recursive: true, force: true }));
 });
 
 test('CLI snapshot revert requires exact confirmation before snapshot lookup', (t) => {

@@ -2,8 +2,10 @@ import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
+import { inspectKernelSchema, migrateKernelSchema } from './migrations.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
+const schemaSql = readFileSync(join(here, 'schema.sql'), 'utf8');
 
 function readEnvironmentFile(path) {
   if (!existsSync(path)) return {};
@@ -79,9 +81,16 @@ export function openKernelDatabase({ databasePath, readonly = false, busyTimeout
   if (!readonly) {
     if (resolvedPath !== ':memory:') sqlite.exec('PRAGMA journal_mode=WAL;');
     sqlite.exec('PRAGMA synchronous=FULL;');
-    if (initialize) sqlite.exec(readFileSync(join(here, 'schema.sql'), 'utf8'));
+    if (initialize) {
+      sqlite.exec(schemaSql);
+      migrateKernelSchema(sqlite, schemaSql);
+    }
   } else {
     sqlite.exec('PRAGMA query_only=ON;');
   }
   return createFacade(sqlite, resolvedPath);
+}
+
+export function inspectKernelDatabaseSchema(database) {
+  return inspectKernelSchema(database.raw, schemaSql);
 }

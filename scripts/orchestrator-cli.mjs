@@ -6,7 +6,7 @@ import { createManagerRequestProcessor } from './orchestrator/manager-request-qu
 import { validateManagerRequestFile } from './orchestrator/request-validation.mjs';
 import { createOrchestrator } from './orchestrator/service.mjs';
 import { createHrService } from './hr/service.mjs';
-import { openKernelDatabase, resolveKernelConfig } from './control-kernel/database.mjs';
+import { inspectKernelDatabaseSchema, openKernelDatabase, resolveKernelConfig } from './control-kernel/database.mjs';
 import { createWorkflowRepository } from './control-kernel/workflow-repository.mjs';
 import { createGitWorktreeManager } from './orchestrator/git-worktree.mjs';
 import { createSnapshotService } from './orchestrator/snapshot-service.mjs';
@@ -38,6 +38,17 @@ export async function main(argv = process.argv.slice(2)) {
     const database = openKernelDatabase({ ...config, readonly: true, initialize: false });
     try {
       if (command === 'kernel-status') {
+        const schema = inspectKernelDatabaseSchema(database);
+        if (schema.migrationRequired) {
+          throw Object.assign(new Error('Control Kernel schema migration is required'), {
+            code: 'KERNEL_SCHEMA_MIGRATION_REQUIRED', details: schema,
+          });
+        }
+        if (schema.issues.length) {
+          throw Object.assign(new Error('Control Kernel schema is unsupported'), {
+            code: 'KERNEL_SCHEMA_UNSUPPORTED', details: schema,
+          });
+        }
         const tables = database.all("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").map((row) => row.name);
         const required = ['runs', 'tasks', 'executions', 'artifacts', 'approvals', 'notifications', 'hr_jobs', 'snapshots'];
         const missing = required.filter((name) => !tables.includes(name));
@@ -45,6 +56,8 @@ export async function main(argv = process.argv.slice(2)) {
           throw Object.assign(new Error(`Control Kernel schema is incomplete: ${missing.join(', ')}`), { code: 'KERNEL_SCHEMA_INCOMPLETE', details: { missing } });
         }
         return emit({ ok: true, command, database_path: config.databasePath, tables,
+          schema_version: schema.currentVersion, target_schema_version: schema.targetVersion,
+          migration_required: schema.migrationRequired, schema_issues: schema.issues,
           journal_mode: database.get('PRAGMA journal_mode').journal_mode, foreign_keys: database.get('PRAGMA foreign_keys').foreign_keys === 1 });
       }
       const repository = createWorkflowRepository({ database });

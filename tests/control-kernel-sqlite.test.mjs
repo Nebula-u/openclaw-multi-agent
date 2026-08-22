@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import test from 'node:test';
 import { openKernelDatabase, resolveKernelConfig } from '../scripts/control-kernel/database.mjs';
 
@@ -20,6 +21,39 @@ test('SQLite kernel initializes eight fact tables with durable local pragmas', (
   const runColumns = database.all("PRAGMA table_info('runs')").map((row) => row.name);
   assert.equal(runColumns.includes('workflow_id'), true);
   assert.equal(runColumns.includes('langgraph_thread_id'), false);
+  assert.equal(database.get('PRAGMA user_version').user_version, 1);
+});
+
+test('SQLite kernel migrates the legacy LangGraph run column without losing facts', (t) => {
+  const root = mkdtempSync(join(tmpdir(), 'kernel-legacy-'));
+  const databasePath = join(root, 'kernel.db');
+  const schema = readFileSync(new URL('../scripts/control-kernel/schema.sql', import.meta.url), 'utf8');
+  const legacySchema = schema.replace('  run_id TEXT PRIMARY KEY,', '  run_id TEXT PRIMARY KEY,\n  langgraph_thread_id TEXT NOT NULL,');
+  const legacy = new DatabaseSync(databasePath);
+  legacy.exec(legacySchema);
+  legacy.prepare(`INSERT INTO runs (
+    run_id, langgraph_thread_id, workflow_id, state, request, request_sha256,
+    target_project_root_abs, base_commit, created_at, updated_at
+  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+    'RUN-legacy', 'WF-legacy', 'WF-legacy', 'ACTIVE', '{}', 'a'.repeat(64),
+    'F:/repo', '1'.repeat(40), '2026-08-21T00:00:00.000Z', '2026-08-21T00:00:00.000Z',
+  );
+  legacy.close();
+
+  const database = openKernelDatabase({ databasePath });
+  t.after(() => { database.close(); rmSync(root, { recursive: true, force: true }); });
+
+  assert.equal(database.get('PRAGMA user_version').user_version, 1);
+  assert.equal(database.all("PRAGMA table_info('runs')").some((column) => column.name === 'langgraph_thread_id'), false);
+  assert.equal(database.get('SELECT workflow_id FROM runs WHERE run_id=?', ['RUN-legacy']).workflow_id, 'WF-legacy');
+  database.run(`INSERT INTO runs (
+    run_id, workflow_id, state, request, request_sha256,
+    target_project_root_abs, base_commit, created_at, updated_at
+  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, [
+    'RUN-current', 'WF-current', 'ACTIVE', '{}', 'b'.repeat(64),
+    'F:/repo', '2'.repeat(40), '2026-08-22T00:00:00.000Z', '2026-08-22T00:00:00.000Z',
+  ]);
+  assert.equal(database.get('SELECT COUNT(*) AS count FROM runs').count, 2);
 });
 
 test('SQLite kernel config defaults below runtime/control and has no PostgreSQL fields', (t) => {
