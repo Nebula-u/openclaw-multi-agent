@@ -22,14 +22,17 @@ function safeDetails(value) {
   return JSON.parse(JSON.stringify(value, (key, entry) => key.toLowerCase().includes('token') || key.toLowerCase().includes('password') ? '[redacted]' : entry));
 }
 
-export function createManagerControl({ projectRoot: projectRootInput, allowedGitHosts = [], runGit = null, clock = () => new Date() } = {}) {
+export function createManagerControl({ projectRoot: projectRootInput, allowedGitHosts = null, runGit = null, clock = () => new Date() } = {}) {
   if (!projectRootInput) throw new TypeError('projectRoot is required');
   const projectRoot = resolve(projectRootInput);
   const projectsRoot = join(projectRoot, 'runtime', 'projects');
   const stateRoot = join(projectRoot, 'runtime', 'manager-control');
   const registryPath = join(stateRoot, 'projects.json');
   const auditPath = join(stateRoot, 'audit.jsonl');
-  const allowedHosts = new Set(allowedGitHosts.map((item) => String(item).trim().toLowerCase()).filter(Boolean));
+  const policyPath = join(projectRoot, 'config', 'manager-control-policy.json');
+  const configuredHosts = allowedGitHosts ?? (existsSync(policyPath) ? JSON.parse(readFileSync(policyPath, 'utf8')).allowed_git_hosts ?? [] : []);
+  if (!Array.isArray(configuredHosts)) fail('MANAGER_GIT_HOST_POLICY_INVALID', 'allowed_git_hosts must be an array');
+  const allowedHosts = new Set(configuredHosts.map((item) => String(item).trim().toLowerCase()).filter(Boolean));
   const invoke = runGit ?? ((cwd, args) => spawnSync('git', ['-C', cwd, ...args], { shell: false, windowsHide: true, encoding: 'utf8', timeout: 30_000 }));
 
   function git(cwd, args, action) {

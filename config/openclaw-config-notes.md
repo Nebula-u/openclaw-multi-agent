@@ -44,7 +44,7 @@ package manifest 用 `delegation_mode=off` 表达 Manager 不承担派发职责�
 
 ## 4. sandbox 与工具
 
-- `manager-agent`：`sandbox.mode=all`，Docker backend，workspace 可写；只允许读取和写入受控请求文件所需的最小文件工具，拒绝 shell、跨 Agent message 和外部访问。
+- `manager-agent`：`sandbox.mode=off`。它的 `exec` 固定为 gateway host、`security=allowlist`、`ask=off`、`strictInlineEval=true`；安装器仅为该 Agent 放行 runtime bundle 中的 `manager-control` 入口，不放行 PowerShell、cmd、git、node 或其它解释器。该入口用逻辑 `project_ref` 创建受管理项目、初始化 Git，并只允许对配置白名单中的 Git 主机 clone/fetch；默认白名单为空，禁止远程写入。
 - `test-agent`：`sandbox.mode=all`，Docker backend，`workspaceAccess=none`，`exec.host=sandbox`，network none、只读 rootfs、drop ALL capabilities、非 root 和资源限制。
 - 其他 Worker：按 package manifest 配置；所有 Worker 的 Agent 派生白名单为空。
 

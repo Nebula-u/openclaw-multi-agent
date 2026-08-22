@@ -177,7 +177,7 @@ HR 必须返回结构化 JSON findings，category 只能是上述三类，且每
 
 ## 状态、请求和审批
 
-Manager 请求必须符合 `contracts/manager-request.schema.json`，并绑定原始 `manager_session_id` 和 `manager_session_key`。Orchestrator 校验并冻结路线，Worker 不能写 Kernel、派发其他 Agent 或修改审批。
+Manager 请求必须符合 `contracts/manager-request.schema.json`，并绑定原始 `manager_session_id` 和 `manager_session_key`。新项目由受控 `manager-control` 自动创建并以 `project_ref` 传递，用户无需预先创建目录、初始化 Git 或提供绝对路径；Orchestrator 校验并冻结路线，Worker 不能写 Kernel、派发其他 Agent 或修改审批。
 
 常用只读命令：
 

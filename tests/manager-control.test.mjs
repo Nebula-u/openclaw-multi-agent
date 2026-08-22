@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { existsSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, realpathSync, rmSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -30,6 +30,19 @@ test('manager control rejects a remote whose host is not configured', (t) => {
   assert.throws(
     () => control.ensureProject({ workflowId: 'WF-Remote-001', project: { mode: 'remote', name: 'blocked', remote_url: 'https://example.invalid/org/repo.git' } }),
     (error) => error.code === 'MANAGER_GIT_HOST_DENIED',
+  );
+});
+
+test('manager control reads the deployment Git host policy', (t) => {
+  const projectRoot = mkdtempSync(join(tmpdir(), 'manager-control-policy-'));
+  t.after(() => rmSync(projectRoot, { recursive: true, force: true }));
+  mkdirSync(join(projectRoot, 'config'), { recursive: true });
+  writeFileSync(join(projectRoot, 'config', 'manager-control-policy.json'), '{"schema_version":1,"allowed_git_hosts":["git.example.test"]}\n');
+  const control = createManagerControl({ projectRoot });
+
+  assert.throws(
+    () => control.ensureProject({ workflowId: 'WF-Remote-002', project: { mode: 'remote', name: 'allowed-host', remote_url: 'https://git.example.test/org/repo.git' } }),
+    (error) => error.code === 'MANAGER_GIT_FAILED',
   );
 });
 
