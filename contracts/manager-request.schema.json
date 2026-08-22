@@ -23,6 +23,7 @@
       }
     },
     "source_session_key": { "type": "string" },
+    "project_ref": { "type": ["string", "null"], "pattern": "^PRJ-[A-Za-z0-9][A-Za-z0-9-]*$" },
     "project_path_abs": { "type": "string", "minLength": 1 },
     "original_request": { "type": "string", "minLength": 1 },
     "route_plan": { "type": "object" },
@@ -43,6 +44,6 @@
   "allOf": [
     { "if": { "properties": { "request_type": { "const": "DECISION" } } }, "then": { "required": ["decision_id", "choice"], "properties": { "decision_id": {}, "choice": {} } } },
     { "if": { "properties": { "request_type": { "enum": ["CREATE", "CHANGE"] } } }, "then": { "required": ["route_plan"], "properties": { "route_plan": {} } } },
-    { "if": { "properties": { "request_type": { "const": "CREATE" } } }, "then": { "required": ["project_path_abs", "original_request"], "properties": { "project_path_abs": {}, "original_request": {} } } }
+    { "if": { "properties": { "request_type": { "const": "CREATE" } } }, "then": { "required": ["original_request"], "anyOf": [{ "required": ["project_ref"], "properties": { "project_ref": { "type": "string" } } }, { "required": ["project_path_abs"], "properties": { "project_path_abs": {} } }], "properties": { "project_ref": {}, "project_path_abs": {}, "original_request": {} } } }
   ]
 }

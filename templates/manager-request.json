@@ -8,7 +8,7 @@
   "manager_session_id": "<current-openclaw-session-id>",
   "manager_session_key": "<current-openclaw-session-key>",
   "manager_delivery": null,
-  "project_path_abs": "<用户目标项目绝对路径>",
+  "project_ref": null,
   "original_request": "<用户首次需求原文>",
   "route_plan": {
     "schema_version": 1,

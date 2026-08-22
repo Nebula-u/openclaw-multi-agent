@@ -173,6 +173,15 @@ test('foreground service polls automatically and exits cleanly after a stop requ
   assert.throws(() => requestForegroundServiceStop(mkdtempSync(join(tmpdir(), 'orchestrator-not-running-'))), (error) => error.code === 'ORCHESTRATOR_NOT_RUNNING');
 });
 
+test('Manager CREATE request accepts a logical managed project reference', () => {
+  const request = {
+    schema_version: 1, request_id: 'REQ-003', request_type: 'CREATE', workflow_id: 'WF-Route-003', submitted_by: 'manager-agent',
+    manager_session_id: 'manager-session', manager_session_key: 'agent:manager:source', project_ref: 'PRJ-managed-001', original_request: 'Build a new project', route_plan: routePlan('WF-Route-003'),
+    user_authorized: { confirmed: true, actor: 'human:liuxu', message: 'Run the confirmed route.' },
+  };
+  assert.doesNotThrow(() => assertManagerRequest(ROOT, request));
+});
+
 test('foreground status projects a missing active process as stale and refuses stop', () => {
   const projectRoot = mkdtempSync(join(tmpdir(), 'orchestrator-stale-process-'));
   const statusPath = join(projectRoot, 'runtime', 'orchestrator', 'service', 'foreground.status.json');

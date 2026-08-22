@@ -8,6 +8,7 @@ import { createWorkflowRepository } from '../control-kernel/workflow-repository.
 import { assertOrchestratorWorker, loadActiveAgentRegistry } from './agent-registry.mjs';
 import { createContextManifest } from './context-manifest.mjs';
 import { createGitWorktreeManager } from './git-worktree.mjs';
+import { createManagerControl } from '../manager-control/service.mjs';
 import { createSnapshotService } from './snapshot-service.mjs';
 import { ingestTaskOutput, writeFailureReceipt } from './output-ingestion.mjs';
 import { runOpenClawAgent } from './openclaw-runner.mjs';
@@ -77,7 +78,7 @@ export async function runWithLeaseHeartbeat({ lease, executionId, run, signal = 
 }
 
 export function createOrchestrator({ projectRoot: projectRootInput, database = null, kernel = null, repository = null, worktrees = null, snapshots = null,
-  runner = runOpenClawAgent, notificationRunner = runOpenClawAgent, hr = null, clock = () => new Date(), maxAttempts = 3, timeoutSeconds = 900, signal = null } = {}) {
+  projectControl = null, runner = runOpenClawAgent, notificationRunner = runOpenClawAgent, hr = null, clock = () => new Date(), maxAttempts = 3, timeoutSeconds = 900, signal = null } = {}) {
   const projectRoot = resolve(projectRootInput ?? process.cwd());
   const ownedDatabase = !database && !kernel && !repository;
   const config = resolveKernelConfig({ projectRoot });
@@ -85,6 +86,7 @@ export function createOrchestrator({ projectRoot: projectRootInput, database = n
   const selectedKernel = kernel ?? createKernel({ database: selectedDatabase, workerId: config.workerId, leaseSeconds: config.leaseSeconds, clock });
   const selectedRepository = repository ?? createWorkflowRepository({ database: selectedDatabase, clock });
   const selectedWorktrees = worktrees ?? createGitWorktreeManager({ projectRoot });
+  const selectedProjectControl = projectControl ?? createManagerControl({ projectRoot, clock });
   const selectedSnapshots = snapshots ?? createSnapshotService({ repository: selectedRepository, worktrees: selectedWorktrees });
   const registry = loadActiveAgentRegistry(projectRoot);
   let hrService = hr;
@@ -132,7 +134,8 @@ export function createOrchestrator({ projectRoot: projectRootInput, database = n
     if (await selectedRepository.getRun(request.workflow_id)) throw Object.assign(new Error(`workflow already exists: ${request.workflow_id}`), { code: 'WORKFLOW_EXISTS' });
     const routePlan = compileRoutePlan(projectRoot, request.route_plan);
     if (routePlan.workflow_id !== request.workflow_id) throw Object.assign(new Error('route plan is not bound to request workflow'), { code: 'ROUTE_PLAN_WORKFLOW_MISMATCH' });
-    const target = selectedWorktrees.inspectTarget(request.project_path_abs);
+    const projectRootAbs = request.project_ref ? selectedProjectControl.resolveProject(request.project_ref).projectRootAbs : request.project_path_abs;
+    const target = selectedWorktrees.inspectTarget(projectRootAbs);
     const run = await selectedRepository.createRun({ workflowId: request.workflow_id,
       request: { original_request: request.original_request, request_id: request.request_id, submitted_at: request.submitted_at, user_authorized: request.user_authorized },
       routePlan, targetProjectRootAbs: target.targetProjectRootAbs, baseCommit: target.headCommit,
