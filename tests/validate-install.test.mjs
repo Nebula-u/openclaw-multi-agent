@@ -5,6 +5,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   rmSync,
   writeFileSync,
 } from 'node:fs';
@@ -45,11 +46,36 @@ test('installers materialize an explicit empty worker delegation allowlist', () 
 test('installers replace the complete Manager exec allowlist with the fixed control entrypoint', () => {
   const powershell = readFileSync(join(ROOT, 'scripts', 'install.ps1'), 'utf8');
   const bash = readFileSync(join(ROOT, 'scripts', 'install.sh'), 'utf8');
-  assert.match(powershell, /'approvals','get','--gateway','--json'/u);
+  assert.match(powershell, /'approvals','get','--json'/u);
+  assert.doesNotMatch(powershell, /'approvals','get','--gateway','--json'/u);
   assert.match(powershell, /autoAllowSkills = \$false/u);
-  assert.match(bash, /approvals get --gateway --json/u);
+  assert.match(bash, /approvals get --json/u);
+  assert.doesNotMatch(bash, /approvals get --gateway --json/u);
   assert.match(bash, /autoAllowSkills: false/u);
 });
+
+test(
+  'PowerShell installer resolves the Manager control entrypoint on Windows',
+  { skip: PWSH_AVAILABLE ? false : 'pwsh unavailable in this environment' },
+  () => {
+    const powershell = readFileSync(join(ROOT, 'scripts', 'install.ps1'), 'utf8');
+    const assignment = powershell.match(/^\s*\$managerEntrypoint\s*=.*$/mu)?.[0];
+    assert.ok(assignment, 'Manager entrypoint assignment is present');
+
+    const result = spawnSync(
+      'pwsh',
+      [
+        '-NoProfile',
+        '-Command',
+        `$IsWindows = $true; $RuntimeRootAbs = 'C:\\runtime'; ${assignment}; $managerEntrypoint`,
+      ],
+      { encoding: 'utf8' },
+    );
+
+    assert.equal(result.status, 0, result.stdout + result.stderr);
+    assert.equal(result.stdout.trim(), 'C:\\runtime\\manager-control\\manager-control.cmd');
+  },
+);
 
 test('install validators provision the temporary OpenClaw config they report', () => {
   const powershell = readFileSync(POWERSHELL_VALIDATOR, 'utf8');
@@ -252,6 +278,74 @@ exit /b 0
         writeFileSync(DRY_MANIFEST, previousManifest);
       }
       rmSync(bin, { recursive: true, force: true });
+    }
+  },
+);
+
+test(
+  'PowerShell installer deploys the Manager control policy required by the runtime bundle',
+  { skip: PWSH_AVAILABLE ? false : 'pwsh unavailable in this environment' },
+  () => {
+    const root = mkdtempSync(join(tmpdir(), 'openclaw-install-apply-'));
+    const bin = join(root, 'bin');
+    const runtime = join(root, 'runtime');
+    const config = join(root, 'openclaw.json');
+    const agents = join(root, 'agents.json');
+    const calls = join(root, 'openclaw-calls.txt');
+    const fakeOpenClaw = join(bin, 'openclaw.cmd');
+
+    try {
+      mkdirSync(bin, { recursive: true });
+      const packages = readdirSync(join(ROOT, 'agents', 'packages', 'builtin'))
+        .filter((name) => name.endsWith('.json'))
+        .map((name) => JSON.parse(readFileSync(join(ROOT, 'agents', 'packages', 'builtin', name), 'utf8')))
+        .filter((value) => value.lifecycle?.register !== false)
+        .map((value) => ({
+          id: value.id,
+          workspace: join(runtime, value.runtime_subdir, 'workspace'),
+          agentDir: join(runtime, value.runtime_subdir, 'state'),
+        }));
+      writeFileSync(config, '{"agents":{"list":[]}}\n');
+      writeFileSync(agents, JSON.stringify(packages));
+      writeFileSync(fakeOpenClaw, [
+        '@echo off',
+        'echo %*>> "%FAKE_OPENCLAW_CALLS%"',
+        'if "%~1"=="--version" (echo fake-openclaw 0 & exit /b 0)',
+        'if "%~1"=="agents" if "%~2"=="list" (type "%FAKE_OPENCLAW_AGENTS%" & exit /b 0)',
+        'if "%~1"=="config" if "%~2"=="file" (echo %FAKE_OPENCLAW_CONFIG% & exit /b 0)',
+        'if "%~1"=="config" if "%~2"=="get" (type "%FAKE_OPENCLAW_AGENTS%" & exit /b 0)',
+        'if "%~1"=="config" if "%~2"=="set" exit /b 0',
+        'if "%~1"=="config" if "%~2"=="validate" (echo {"valid":true} & exit /b 0)',
+        'if "%~1"=="approvals" if "%~2"=="get" (echo {"file":{"version":1,"agents":{}}} & exit /b 0)',
+        'if "%~1"=="approvals" if "%~2"=="set" exit /b 0',
+        'exit /b 0',
+      ].join('\n'), 'utf8');
+
+      const result = spawnSync(
+        'pwsh',
+        ['-NoProfile', '-File', join(ROOT, 'scripts', 'install.ps1'), '-Apply', '-Yes', '-RuntimeRoot', runtime],
+        {
+          cwd: ROOT,
+          encoding: 'utf8',
+          env: {
+            ...process.env,
+            PATH: bin + delimiter + process.env.PATH,
+            FAKE_OPENCLAW_CONFIG: config,
+            FAKE_OPENCLAW_AGENTS: agents,
+            FAKE_OPENCLAW_CALLS: calls,
+          },
+        },
+      );
+
+      assert.equal(result.status, 0, result.stdout + result.stderr);
+      assert.equal(existsSync(join(runtime, 'manager-control', 'manager-control-policy.json')), true);
+      assert.equal(existsSync(join(runtime, 'control', 'runtime-bundle.json')), true);
+      const callsText = readFileSync(calls, 'utf8');
+      assert.match(callsText, /^approvals get --json$/mu);
+      assert.match(callsText, /^approvals set --file /mu);
+      assert.doesNotMatch(callsText, /^approvals (get|set) --gateway/mu);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
     }
   },
 );

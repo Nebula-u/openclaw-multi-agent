@@ -543,6 +543,7 @@ SRC_TEMPLATES="$PROJECT_ROOT/templates"
 SRC_SYSTEM_SKILLS="$PROJECT_ROOT/agents/packages/system/skills"
 mkdir -p "$RUNTIME_ROOT_ABS/manager-control" "$RUNTIME_ROOT_ABS/runtime-core"
 cp -Rf "$PROJECT_ROOT/scripts/manager-control/." "$RUNTIME_ROOT_ABS/manager-control/"
+cp -f "$PROJECT_ROOT/config/manager-control-policy.json" "$RUNTIME_ROOT_ABS/manager-control/manager-control-policy.json"
 cp -Rf "$PROJECT_ROOT/scripts/runtime-core/." "$RUNTIME_ROOT_ABS/runtime-core/"
 for id in "${AGENT_IDS[@]}"; do
   src_ws="${SRC_WS[$id]}"
@@ -672,7 +673,7 @@ MANAGER_EXEC_STATE="$RUNTIME_ROOT_ABS/control/manager-exec-allowlist.json"
 MANAGER_ENTRYPOINT="$RUNTIME_ROOT_ABS/manager-control/manager-control"
 chmod 755 "$MANAGER_ENTRYPOINT"
 [ -f "$MANAGER_ENTRYPOINT" ] || { restore_on_failure "缺少 Manager 受控执行入口"; exit 1; }
-approval_snapshot="$(openclaw approvals get --gateway --json 2>/dev/null)" || { restore_on_failure "读取 Manager exec approvals 失败"; exit 1; }
+approval_snapshot="$(openclaw approvals get --json 2>/dev/null)" || { restore_on_failure "读取 Manager exec approvals 失败"; exit 1; }
 approval_tmp="$(mktemp)"
 if ! printf '%s' "$approval_snapshot" | jq --arg agent "$MANAGER_ID" --arg entry "$MANAGER_ENTRYPOINT" '
   .file | .agents = (.agents // {}) | .agents[$agent] = {
@@ -682,7 +683,7 @@ if ! printf '%s' "$approval_snapshot" | jq --arg agent "$MANAGER_ID" --arg entry
 ' > "$approval_tmp"; then
   rm -f "$approval_tmp"; restore_on_failure "生成 Manager exec approvals 失败"; exit 1
 fi
-if ! openclaw approvals set --gateway --file "$approval_tmp" --json >/dev/null 2>&1; then
+if ! openclaw approvals set --file "$approval_tmp" --json >/dev/null 2>&1; then
   rm -f "$approval_tmp"; restore_on_failure "配置 Manager exec allowlist 失败"; exit 1
 fi
 rm -f "$approval_tmp"

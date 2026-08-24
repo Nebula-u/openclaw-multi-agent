@@ -427,11 +427,13 @@ try {
   $templatesSource = Join-Path $ProjectRoot 'templates'
   $systemSkillsSource = Join-Path $ProjectRoot 'agents\packages\system\skills'
   $managerControlSource = Join-Path $ProjectRoot 'scripts\manager-control'
+  $managerControlPolicySource = Join-Path $ProjectRoot 'config\manager-control-policy.json'
   $runtimeCoreSource = Join-Path $ProjectRoot 'scripts\runtime-core'
   $managerControlTarget = Join-Path $RuntimeRootAbs 'manager-control'
   $runtimeCoreTarget = Join-Path $RuntimeRootAbs 'runtime-core'
   New-Item -ItemType Directory -Force -Path $managerControlTarget, $runtimeCoreTarget | Out-Null
   Copy-Item -Path (Join-Path $managerControlSource '*') -Destination $managerControlTarget -Recurse -Force
+  Copy-Item -LiteralPath $managerControlPolicySource -Destination (Join-Path $managerControlTarget 'manager-control-policy.json') -Force
   Copy-Item -Path (Join-Path $runtimeCoreSource '*') -Destination $runtimeCoreTarget -Recurse -Force
   foreach ($p in $RegisteredPackages) {
     New-Item -ItemType Directory -Force -Path $p.workspace, $p.agentDir | Out-Null
@@ -522,10 +524,10 @@ try {
   }
 
   $managerExecStatePath = Join-Path $RuntimeRootAbs 'control\manager-exec-allowlist.json'
-  $managerEntrypoint = Join-Path $RuntimeRootAbs (if ($IsWindows) { 'manager-control\manager-control.cmd' } else { 'manager-control/manager-control' })
+  $managerEntrypoint = Join-Path $RuntimeRootAbs $(if ($IsWindows) { 'manager-control\manager-control.cmd' } else { 'manager-control/manager-control' })
   if (-not $IsWindows) { & chmod 755 $managerEntrypoint }
   if (-not (Test-Path -LiteralPath $managerEntrypoint -PathType Leaf)) { throw "缺少 Manager 受控执行入口：$managerEntrypoint" }
-  $approvalSnapshot = Invoke-OpenClaw @('approvals','get','--gateway','--json')
+  $approvalSnapshot = Invoke-OpenClaw @('approvals','get','--json')
   if ($approvalSnapshot.ExitCode -ne 0) { throw "读取 Manager exec approvals 失败：$($approvalSnapshot.Output)" }
   $approvalFile = (ConvertFrom-OpenClawJsonOutput -Output $approvalSnapshot.Output -Description 'Manager exec approvals').file
   if (-not $approvalFile) { throw 'Manager exec approvals 返回中缺少 approvals 文件。' }
@@ -540,7 +542,7 @@ try {
   $approvalTemp = Join-Path ([System.IO.Path]::GetTempPath()) ("openclaw-manager-approvals-" + [guid]::NewGuid().Guid + '.json')
   try {
     Write-JsonAtomic -Value $approvalFile -Path $approvalTemp -Depth 20
-    $approved = Invoke-OpenClaw @('approvals','set','--gateway','--file',$approvalTemp,'--json')
+    $approved = Invoke-OpenClaw @('approvals','set','--file',$approvalTemp,'--json')
     if ($approved.ExitCode -ne 0) { throw "配置 Manager exec allowlist 失败：$($approved.Output)" }
   } finally {
     if (Test-Path -LiteralPath $approvalTemp) { Remove-Item -LiteralPath $approvalTemp -Force }
