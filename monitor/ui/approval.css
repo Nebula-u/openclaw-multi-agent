@@ -1,0 +1,218 @@
+.approval-section > header span {
+  color: var(--yellow);
+}
+
+.approval-card {
+  position: relative;
+  overflow: hidden;
+  margin: -9px;
+  padding: 14px;
+  border: 1px solid rgba(229, 198, 120, 0.3);
+  border-left: 3px solid var(--yellow);
+  border-radius: 8px;
+  background: linear-gradient(145deg, rgba(229, 198, 120, 0.11), rgba(23, 28, 32, 0.94) 48%);
+  box-shadow: 0 12px 34px rgba(0, 0, 0, 0.18);
+}
+
+.approval-card::after {
+  position: absolute;
+  top: -46px;
+  right: -38px;
+  width: 112px;
+  height: 112px;
+  border: 1px solid rgba(229, 198, 120, 0.12);
+  border-radius: 50%;
+  content: "";
+  pointer-events: none;
+}
+
+.approval-card-head {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.approval-kicker {
+  color: var(--yellow);
+  font: 700 10px var(--mono);
+  letter-spacing: 0.12em;
+}
+
+.approval-card-head code {
+  max-width: 145px;
+  overflow: hidden;
+  color: #89969a;
+  font: 9px var(--mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.approval-summary {
+  position: relative;
+  z-index: 1;
+  margin: 9px 0 13px;
+  color: #e3e7e8;
+  font-size: 12px;
+  line-height: 1.65;
+}
+
+.approval-primary-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.approval-action {
+  display: grid;
+  gap: 2px;
+  width: 100%;
+  min-height: 53px;
+  padding: 9px 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  text-align: left;
+  color: var(--ink);
+  background: var(--panel-2);
+  cursor: pointer;
+  transition: transform 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+}
+
+.approval-action span {
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.approval-action small {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 9px;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+}
+
+.approval-action.confirm {
+  border-color: rgba(138, 197, 155, 0.48);
+  background: linear-gradient(145deg, rgba(138, 197, 155, 0.18), rgba(32, 39, 43, 0.92));
+}
+
+.approval-action.confirm span {
+  color: #b9e2c4;
+}
+
+.approval-action.reject {
+  border-color: rgba(237, 138, 130, 0.45);
+  background: linear-gradient(145deg, rgba(237, 138, 130, 0.15), rgba(32, 39, 43, 0.92));
+}
+
+.approval-action.reject span {
+  color: #f3aaa4;
+}
+
+.approval-action.other {
+  min-height: 46px;
+  margin-top: 7px;
+}
+
+.approval-action:hover:not(:disabled) {
+  transform: translateY(-1px);
+  border-color: var(--cyan);
+}
+
+.approval-action:focus-visible,
+.approval-other-actions summary:focus-visible {
+  outline: 2px solid var(--cyan);
+  outline-offset: 2px;
+}
+
+.approval-action:disabled {
+  cursor: not-allowed;
+  filter: saturate(0.45);
+  opacity: 0.55;
+}
+
+.approval-other-actions {
+  margin-top: 9px;
+  border-top: 1px solid rgba(229, 198, 120, 0.16);
+}
+
+.approval-other-actions summary {
+  padding: 9px 2px 3px;
+  color: #b8c1c3;
+  font: 700 10px var(--mono);
+  cursor: pointer;
+  list-style: none;
+}
+
+.approval-other-actions summary::before {
+  display: inline-block;
+  margin-right: 7px;
+  color: var(--yellow);
+  content: "＋";
+}
+
+.approval-other-actions[open] summary::before {
+  content: "－";
+}
+
+.approval-other-actions summary::-webkit-details-marker {
+  display: none;
+}
+
+.approval-other-actions > div {
+  display: grid;
+  gap: 2px;
+}
+
+.approval-empty {
+  margin: 6px 0 2px;
+  color: #778488;
+  font-size: 10px;
+}
+
+.approval-manager-note {
+  margin: 12px 0 0;
+  padding-top: 9px;
+  border-top: 1px solid rgba(49, 59, 64, 0.65);
+  color: #839094;
+  font-size: 9px;
+  line-height: 1.5;
+}
+
+.approval-status {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  margin: -3px 0 11px;
+  padding: 7px 8px;
+  border: 1px solid rgba(137, 201, 208, 0.25);
+  border-radius: 5px;
+  color: #b8dce0;
+  background: rgba(137, 201, 208, 0.07);
+  font-size: 9px;
+  overflow-wrap: anywhere;
+}
+
+.approval-status i {
+  flex: 0 0 auto;
+  width: 6px;
+  height: 6px;
+  margin-top: 4px;
+  border-radius: 50%;
+  background: var(--cyan);
+  box-shadow: 0 0 0 3px rgba(137, 201, 208, 0.1);
+}
+
+@media (max-width: 420px) {
+  .approval-primary-actions {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .approval-action {
+    transition: none;
+  }
+}

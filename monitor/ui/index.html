@@ -7,6 +7,7 @@
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src 'self' http://127.0.0.1:*; script-src 'self'; style-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'; form-action 'none'">
   <title>OpenClaw Monitor</title>
   <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="approval.css">
 </head>
 <body>
   <div class="shell">
@@ -35,7 +36,7 @@
       </section>
       <aside class="watchtower" aria-label="监控状态">
         <section class="watch-section"><header><span>MANAGER DELIVERY</span></header><div id="notification-list" class="notice-list"><p class="empty-note">没有待转达信息</p></div></section>
-        <section class="watch-section"><header><span>HUMAN APPROVAL</span></header><div id="approval-view" class="approval-view">没有待审批事项</div></section>
+        <section class="watch-section approval-section"><header><span>HUMAN APPROVAL · 人工审批</span></header><div id="approval-view" class="approval-view">没有待审批事项</div></section>
         <section class="watch-section"><header><span>GIT SNAPSHOTS</span></header><div id="snapshot-list" class="review-list"><p class="empty-note">暂无代码快照</p></div></section>
         <section class="watch-section alert-section"><header><span>HR KEYWORD ALERTS</span><b id="alert-count">0</b></header><div id="alert-list" class="alert-list"><p class="empty-note">暂无即时预警</p></div></section>
         <section class="watch-section"><header><span>HR REVIEWS</span></header><div id="hr-review-list" class="review-list"><p class="empty-note">暂无 HR 复核</p></div></section>

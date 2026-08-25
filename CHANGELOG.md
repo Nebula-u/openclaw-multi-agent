@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026-08-25 - 同 Session JSON 修复与可操作的重试耗尽审批
+
+- result JSON 的解析、必填字段、类型、枚举、格式和身份字段错误改为在原 OpenClaw Session 内最多修复两次；固定代码模板会明确列出缺失字段或错误路径，宿主从 JSON stdout 提取最终回复并原子写回，不重新执行任务。
+- 失败 raw、诊断和提示按 task attempt 隔离保留；首次摄取与归档都拒绝符号链接、硬链接或非普通文件，不可信 actual 值不进入修复 prompt，修复期间继续验证 execution lease 与 worktree 指纹。
+- 完整任务重试耗尽后自动创建 `TASK_RETRY_EXHAUSTED` 审批；用户可在 Monitor 或原 Manager Session 中确认 `RETRY_SAME_AGENT`，也可终止或携带说明返工。Manager 只转交明确用户授权，不能直接派发或重置重试次数。
+- Monitor 人工审批改为高对比度卡片，保留“确认”“拒绝”“其他”三个可见操作区，继续只写本地审批命令队列并显示 Orchestrator 回执。
+- 所有 Worker 规则补充 `artifact_manifest_hash = context_manifest_sha256` 与 JSON 重生成协议。
+
 ## 2026-08-22 - 旧 SQLite 迁移与 Orchestrator 存活状态修复
 
 - Kernel 增加 `PRAGMA user_version` 和版本化 schema 检查，事务移除已知旧列 `runs.langgraph_thread_id` 并保留既有事实；未知结构漂移失败关闭。

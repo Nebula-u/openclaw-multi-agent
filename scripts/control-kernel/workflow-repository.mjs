@@ -28,7 +28,8 @@ function taskOut(row) {
   if (!row) return null;
   return { taskId: row.task_id, runId: row.run_id, kind: row.kind, stepId: row.step_id,
     title: row.title, agentId: row.agent_id, state: row.state, status: row.state,
-    attempt: row.attempt, maxAttempts: row.max_attempts, inputCommit: row.input_commit,
+    attempt: row.attempt, maxAttempts: row.max_attempts, jsonRegenerations: row.json_regenerations,
+    executionRound: row.execution_round, inputCommit: row.input_commit,
     routeHash: row.route_hash, lastError: decode(row.last_error), payload: decode(row.task_payload, {}),
     contextManifest: decode(row.context_manifest), createdAt: row.created_at, updatedAt: row.updated_at };
 }
@@ -71,7 +72,8 @@ export function createWorkflowRepository({ database, clock = () => new Date() })
     if (patch.state && !RUN_STATES.has(patch.state)) throw Object.assign(new Error(`invalid run state: ${patch.state}`), { code: 'RUN_STATE_INVALID' });
     const columns = { state: ['state', false], outcome: ['outcome', false], statusReason: ['status_reason', false], currentStepIndex: ['current_step_index', false],
       candidateCommit: ['candidate_commit', false], routePlan: ['route_plan', true], routeHash: ['route_hash', false], completedAt: ['completed_at', false] };
-    const sets = ['updated_at=?']; const values = [now()];
+    const timestamp = now();
+    const sets = ['updated_at=?']; const values = [timestamp];
     for (const [key, [column, json]] of Object.entries(columns)) if (patch[key] !== undefined) { sets.push(`${column}=?`); values.push(json ? encode(patch[key]) : patch[key]); }
     values.push(runId); const result = database.run(`UPDATE runs SET ${sets.join(',')} WHERE run_id=?`, values);
     if (!result.changes) throw Object.assign(new Error(`run not found: ${runId}`), { code: 'RUN_NOT_FOUND' });
@@ -95,14 +97,64 @@ export function createWorkflowRepository({ database, clock = () => new Date() })
   }
   async function updateTask(taskId, patch) {
     if (patch.state && !TASK_STATES.has(patch.state)) throw Object.assign(new Error(`invalid task state: ${patch.state}`), { code: 'TASK_STATE_INVALID' });
-    const columns = { state: ['state', false], attempt: ['attempt', false], lastError: ['last_error', true], payload: ['task_payload', true], contextManifest: ['context_manifest', true] };
-    const sets = ['updated_at=?']; const values = [now()];
+    for (const key of ['jsonRegenerations', 'executionRound']) if (patch[key] !== undefined && (!Number.isInteger(patch[key]) || patch[key] < 0)) {
+      throw Object.assign(new Error(`${key} must be a non-negative integer`), { code: 'TASK_COUNTER_INVALID' });
+    }
+    const columns = { state: ['state', false], attempt: ['attempt', false], maxAttempts: ['max_attempts', false], jsonRegenerations: ['json_regenerations', false],
+      executionRound: ['execution_round', false], lastError: ['last_error', true], payload: ['task_payload', true], contextManifest: ['context_manifest', true] };
+    const timestamp = now();
+    const sets = ['updated_at=?']; const values = [timestamp];
     for (const [key, [column, json]] of Object.entries(columns)) if (patch[key] !== undefined) { sets.push(`${column}=?`); values.push(json ? encode(patch[key]) : patch[key]); }
     values.push(taskId); const result = database.run(`UPDATE tasks SET ${sets.join(',')} WHERE task_id=?`, values);
     if (!result.changes) throw Object.assign(new Error(`task not found: ${taskId}`), { code: 'TASK_NOT_FOUND' });
     return getTask(taskId);
   }
+  async function updateTaskForExecution(taskId, patch, { executionId, attempt }) {
+    if (!executionId || !Number.isInteger(attempt) || attempt < 1) throw new TypeError('executionId and a positive attempt are required');
+    if (patch.state && !TASK_STATES.has(patch.state)) throw Object.assign(new Error(`invalid task state: ${patch.state}`), { code: 'TASK_STATE_INVALID' });
+    for (const key of ['jsonRegenerations', 'executionRound']) if (patch[key] !== undefined && (!Number.isInteger(patch[key]) || patch[key] < 0)) {
+      throw Object.assign(new Error(`${key} must be a non-negative integer`), { code: 'TASK_COUNTER_INVALID' });
+    }
+    const columns = { state: ['state', false], attempt: ['attempt', false], maxAttempts: ['max_attempts', false], jsonRegenerations: ['json_regenerations', false],
+      executionRound: ['execution_round', false], lastError: ['last_error', true], payload: ['task_payload', true], contextManifest: ['context_manifest', true] };
+    const timestamp = now();
+    const sets = ['updated_at=?']; const values = [timestamp];
+    for (const [key, [column, json]] of Object.entries(columns)) if (patch[key] !== undefined) { sets.push(`${column}=?`); values.push(json ? encode(patch[key]) : patch[key]); }
+    values.push(taskId, attempt, executionId, attempt, timestamp);
+    const result = database.run(`UPDATE tasks SET ${sets.join(',')} WHERE task_id=? AND state='RUNNING' AND attempt=?
+      AND EXISTS (SELECT 1 FROM executions WHERE execution_id=? AND task_id=tasks.task_id AND attempt=?
+        AND state IN ('LEASED','RUNNING') AND lease_expires_at>=?)`, values);
+    if (!result.changes) throw Object.assign(new Error('task execution no longer owns the active task attempt'), { code: 'EXECUTION_TASK_CAS_FAILED', details: {
+      task_id: taskId, execution_id: executionId, attempt,
+    } });
+    return getTask(taskId);
+  }
   async function createApproval({ runId, taskId = null, stepId = null, trigger, request }) {
+    if (trigger === 'TASK_RETRY_EXHAUSTED') {
+      return database.transaction(() => {
+        const task = taskOut(database.get('SELECT * FROM tasks WHERE task_id=? AND run_id=?', [taskId, runId]));
+        if (!task) throw Object.assign(new Error('retry-exhausted approval task was not found'), { code: 'APPROVAL_TASK_NOT_FOUND' });
+        const taskAttempt = request?.task_attempt; const boundMaxAttempts = request?.max_attempts;
+        if (!Number.isInteger(taskAttempt) || !Number.isInteger(boundMaxAttempts)) {
+          throw Object.assign(new Error('retry-exhausted approval must bind task_attempt and max_attempts'), { code: 'APPROVAL_TASK_BINDING_REQUIRED' });
+        }
+        const existing = database.all("SELECT * FROM approvals WHERE task_id=? AND trigger='TASK_RETRY_EXHAUSTED' AND status='PENDING' ORDER BY created_at ASC", [taskId])
+          .map(approvalOut).find((item) => item.request?.task_attempt === taskAttempt);
+        if (existing) return existing;
+        if (task.state !== 'FAILED' || task.attempt !== taskAttempt || task.maxAttempts !== boundMaxAttempts) {
+          throw Object.assign(new Error('retry-exhausted approval no longer matches the failed task attempt'), { code: 'APPROVAL_TASK_BINDING_STALE' });
+        }
+        const timestamp = now();
+        database.run('INSERT INTO approvals (decision_id,run_id,task_id,step_id,trigger,request,created_at) VALUES (?,?,?,?,?,?,?)',
+          [request.decision_id, runId, taskId, stepId, trigger, encode(request), timestamp]);
+        const taskResult = database.run("UPDATE tasks SET state='WAITING_HUMAN',updated_at=? WHERE task_id=? AND state='FAILED' AND attempt=? AND max_attempts=?",
+          [timestamp, taskId, taskAttempt, boundMaxAttempts]);
+        const runResult = database.run("UPDATE runs SET state='WAITING_HUMAN',status_reason=?,updated_at=? WHERE run_id=? AND state='ACTIVE'",
+          [request.summary, timestamp, runId]);
+        if (!taskResult.changes || !runResult.changes) throw Object.assign(new Error('retry-exhausted approval lost its task or run binding'), { code: 'APPROVAL_TASK_BINDING_STALE' });
+        return approvalOut(database.get('SELECT * FROM approvals WHERE decision_id=?', [request.decision_id]));
+      });
+    }
     database.run('INSERT INTO approvals (decision_id,run_id,task_id,step_id,trigger,request,created_at) VALUES (?,?,?,?,?,?,?)',
       [request.decision_id, runId, taskId, stepId, trigger, encode(request), now()]);
     await updateRun(runId, { state: 'WAITING_HUMAN', statusReason: request.summary });
@@ -116,6 +168,46 @@ export function createWorkflowRepository({ database, clock = () => new Date() })
     await updateRun(approval.runId, { state: 'ACTIVE', statusReason: 'human decision resolved' });
     if (approval.taskId && response.outcome !== 'REJECTED') await updateTask(approval.taskId, { state: 'SUCCEEDED' });
     return approval;
+  }
+  async function resolveRetryExhaustedApproval({ decisionId, response }) {
+    return database.transaction(() => {
+      const approval = approvalOut(database.get("SELECT * FROM approvals WHERE decision_id=? AND status='PENDING'", [decisionId]));
+      if (!approval) throw Object.assign(new Error('approval not found or already resolved'), { code: 'APPROVAL_NOT_PENDING' });
+      if (approval.trigger !== 'TASK_RETRY_EXHAUSTED' || !approval.taskId) {
+        throw Object.assign(new Error('approval is not a task retry exhaustion decision'), { code: 'APPROVAL_TRIGGER_INVALID' });
+      }
+      const allowed = approval.request?.options?.map((option) => option.option_id).filter(Boolean) ?? [];
+      if (!allowed.includes(response.outcome)) throw Object.assign(new Error('approval choice is not allowed'), { code: 'APPROVAL_OPTION_INVALID' });
+      const task = taskOut(database.get('SELECT * FROM tasks WHERE task_id=? AND run_id=?', [approval.taskId, approval.runId]));
+      const taskAttempt = approval.request?.task_attempt; const boundMaxAttempts = approval.request?.max_attempts;
+      if (!task || task.state !== 'WAITING_HUMAN' || task.attempt !== taskAttempt || task.maxAttempts !== boundMaxAttempts) {
+        throw Object.assign(new Error('pending approval no longer matches the waiting task attempt'), { code: 'APPROVAL_TASK_BINDING_STALE' });
+      }
+      const run = runOut(database.get('SELECT * FROM runs WHERE run_id=?', [approval.runId]));
+      if (!run || run.state !== 'WAITING_HUMAN') throw Object.assign(new Error('pending approval no longer matches the waiting run'), { code: 'APPROVAL_RUN_BINDING_STALE' });
+      const timestamp = now();
+      const resolved = database.run("UPDATE approvals SET status='RESOLVED',response=?,resolved_at=? WHERE decision_id=? AND status='PENDING'",
+        [encode(response), timestamp, decisionId]);
+      const abort = ['ABORT', 'CANCEL', 'REJECTED'].includes(response.outcome);
+      const payload = { ...(task.payload ?? {}), retry_authorization: { decision_id: decisionId, choice: response.outcome,
+        notes: response.notes ?? '', actor: response.actor, exhausted: true } };
+      const taskResult = database.run(`UPDATE tasks SET state=?,attempt=?,max_attempts=?,json_regenerations=0,execution_round=?,
+        context_manifest=?,task_payload=?,updated_at=? WHERE task_id=? AND state='WAITING_HUMAN' AND attempt=? AND max_attempts=?`,
+      [abort ? 'CANCELLED' : 'READY', abort ? task.attempt : task.attempt + 1, abort ? task.maxAttempts : task.maxAttempts + 3,
+        abort ? task.executionRound : task.executionRound + 1, encode(abort ? task.contextManifest : {}), encode(payload), timestamp,
+        task.taskId, taskAttempt, boundMaxAttempts]);
+      const runResult = abort
+        ? database.run("UPDATE runs SET state='TERMINAL',outcome='CANCELLED',status_reason='user declined an exhausted retry approval',completed_at=?,updated_at=? WHERE run_id=? AND state='WAITING_HUMAN'",
+          [timestamp, timestamp, run.runId])
+        : database.run("UPDATE runs SET state='ACTIVE',status_reason='user approved a new retry batch',updated_at=? WHERE run_id=? AND state='WAITING_HUMAN'",
+          [timestamp, run.runId]);
+      if (!resolved.changes || !taskResult.changes || !runResult.changes) {
+        throw Object.assign(new Error('retry approval transaction lost its task or run binding'), { code: 'APPROVAL_TASK_BINDING_STALE' });
+      }
+      return { approval: approvalOut(database.get('SELECT * FROM approvals WHERE decision_id=?', [decisionId])),
+        task: taskOut(database.get('SELECT * FROM tasks WHERE task_id=?', [task.taskId])),
+        run: runOut(database.get('SELECT * FROM runs WHERE run_id=?', [run.runId])) };
+    });
   }
   async function listApprovals({ runId = null, status = null } = {}) {
     const where = []; const values = []; if (runId) { where.push('run_id=?'); values.push(runId); } if (status) { where.push('status=?'); values.push(status); }
@@ -179,8 +271,8 @@ export function createWorkflowRepository({ database, clock = () => new Date() })
     const where = []; const values = []; for (const [column, value] of [['run_id',runId],['task_id',taskId],['agent_id',agentId],['session_id',sessionId]]) if (value) { where.push(`${column}=?`); values.push(value); }
     values.push(limit); return database.all(`SELECT * FROM snapshots ${where.length ? `WHERE ${where.join(' AND ')}` : ''} ORDER BY created_at DESC LIMIT ?`, values).map(snapshotOut);
   }
-  return { createRun, getRun, getRunById, listRuns, updateRun, createTask, getTask, listTasks, updateTask,
-    createApproval, resolveApproval, listApprovals, queueNotification, listNotifications, updateNotification,
+  return { createRun, getRun, getRunById, listRuns, updateRun, createTask, getTask, listTasks, updateTask, updateTaskForExecution,
+    createApproval, resolveApproval, resolveRetryExhaustedApproval, listApprovals, queueNotification, listNotifications, updateNotification,
     queueHrJob, listHrJobs, updateHrJob, registerArtifact, createSnapshot, getSnapshot, listSnapshots,
     executionIdFor, now };
 }

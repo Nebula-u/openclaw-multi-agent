@@ -10,8 +10,10 @@ test('local dashboard opens without a build step and contains no external runtim
   const script = readFileSync(join(ROOT, 'monitor', 'ui', 'app.js'), 'utf8');
   const config = readFileSync(join(ROOT, 'monitor', 'ui', 'config.js'), 'utf8');
   const css = readFileSync(join(ROOT, 'monitor', 'ui', 'styles.css'), 'utf8');
+  const approvalCss = readFileSync(join(ROOT, 'monitor', 'ui', 'approval.css'), 'utf8');
   assert.match(html, /<script src="app\.js"><\/script>/u);
   assert.match(html, /<link rel="stylesheet" href="styles\.css">/u);
+  assert.match(html, /<link rel="stylesheet" href="approval\.css">/u);
   assert.doesNotMatch(html, /https?:\/\/(?!127\.0\.0\.1)/u);
   assert.doesNotMatch(`${html}${script}`, /React|Vite|node_modules/u);
   assert.match(script, /EventSource/u);
@@ -29,6 +31,17 @@ test('local dashboard opens without a build step and contains no external runtim
   assert.match(html, /id="session-window"/u);
   assert.match(html, /id="alert-list"/u);
   assert.match(html, /id="approval-view"/u);
+  assert.match(script, /approval-card/u);
+  assert.match(script, /approval-primary-actions/u);
+  assert.match(script, /approval-other-actions/u);
+  assert.match(script, /确认/u);
+  assert.match(script, /拒绝/u);
+  assert.match(script, /其他/u);
+  assert.match(script, /RETRY_SAME_AGENT/u);
+  assert.match(script, /由 Manager 转交相同审批/u);
+  assert.match(approvalCss, /\.approval-action\.confirm/u);
+  assert.match(approvalCss, /\.approval-action\.reject/u);
+  assert.match(approvalCss, /focus-visible/u);
   assert.doesNotMatch(`${html}${script}`, /api-token|human-approval\.capability|runtime\.capability/u);
   assert.match(css, /prefers-reduced-motion/u);
   assert.match(css, /prefers-reduced-motion/u);

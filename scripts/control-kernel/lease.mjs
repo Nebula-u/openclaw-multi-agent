@@ -38,8 +38,11 @@ export function createLease({ database, scheduleSeconds = 120, clock = () => new
       return read(fields.executionId);
     },
     async heartbeat({ executionId, phase = null, seconds = scheduleSeconds }) {
+      const timestamp = now();
+      const deadline = new Date(new Date(timestamp).valueOf() + seconds * 1000).toISOString();
       const result = database.run(`UPDATE executions SET heartbeat_at=?,lease_expires_at=?,state='RUNNING',phase=COALESCE(?,phase)
-        WHERE execution_id=? AND state IN ('LEASED','RUNNING')`, [now(), expires(seconds), phase, executionId]);
+        WHERE execution_id=? AND state IN ('LEASED','RUNNING') AND lease_expires_at>=?`,
+      [timestamp, deadline, phase, executionId, timestamp]);
       return result.changes ? read(executionId) : null;
     },
     async releaseLease({ executionId, state = 'SUCCEEDED', exitCode = 0, error = null }) {

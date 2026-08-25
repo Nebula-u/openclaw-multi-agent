@@ -17,7 +17,16 @@
 常见 choice：
 
 - `APPROVE`：接受当前已验证结果并继续；
+- `RETRY_SAME_AGENT`：仅在 `TASK_RETRY_EXHAUSTED` 审批中使用；用户确认后为同一 Agent 增加一个新的三次完整任务重试批次，并使用新 attempt、Session 和 worktree；
 - `REWORK`/`REVISE`：同一角色开始新 attempt；
 - `CANCEL`/`ABORT`/`REJECTED`：终止或取消。
 
 用户沉默、Manager 推荐、Agent 自报、HR finding 或 Monitor 页面状态均不构成批准。审批不会把未验证代码变成 accepted snapshot；非完成现场仍只是 recovery snapshot。
+
+## JSON 修复与完整任务重试
+
+结构化 result 的 JSON 解析、必填字段、类型、枚举、格式或身份字段校验失败时，Orchestrator 先在原 Session 内最多发起两次固定模板的 JSON 重生成。提示会列出确切字段错误；Agent 只返回完整 JSON，宿主从 OpenClaw JSON stdout 提取并原子写回 result。该过程复用同一 task attempt、Session、worktree 和 execution lease，不重新执行任务，也不消耗完整任务重试次数。
+
+每份被拒绝的 raw、诊断和修复提示按 task attempt 分目录保留。两次 JSON 重生成仍失败，或失败不属于 JSON 契约问题时，才进入下一次完整任务 attempt；完整 attempt 使用新 Session 和新 worktree。
+
+完整任务重试耗尽后，系统不再留下 `pending_approval = null` 的裸 `HOLD`，而是创建 `TASK_RETRY_EXHAUSTED` 绑定审批。用户可在 Monitor 的“确认／拒绝／其他”卡片中选择，也可在原 Manager 对话中明确授权后由 Manager 提交相同 `decision_id` 和 choice。Manager 不能直接派发 Agent 或重置次数。

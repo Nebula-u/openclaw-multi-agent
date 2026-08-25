@@ -5,6 +5,7 @@ import addFormats from 'ajv-formats';
 import { atomicWriteFile, atomicWriteJson, sha256File } from '../runtime-core/atomic-store.mjs';
 import { ingestJsonText } from '../runtime-core/json-ingestion.mjs';
 import { rawOutputPath, publishedOutputPath } from './context-manifest.mjs';
+import { readRegularFileNoFollow } from './json-regeneration.mjs';
 
 export class OutputBoundaryError extends Error {
   constructor(code, message, details = {}) { super(message); this.name = 'OutputBoundaryError'; this.code = code; this.details = details; }
@@ -43,8 +44,9 @@ function assertIdentity(task, value) {
   }
 }
 export function ingestTaskOutput({ projectRoot, task, occurredAt = new Date().toISOString() }) {
-  const rawPath = rawOutputPath(task); regular(rawPath, 'AGENT_OUTPUT_MISSING');
-  const raw = readFileSync(rawPath, 'utf8');
+  const rawPath = rawOutputPath(task); const rawResult = readRegularFileNoFollow(rawPath);
+  if (!rawResult.available) throw new OutputBoundaryError('AGENT_OUTPUT_MISSING', `required file must be a single-link regular file: ${rawPath}`);
+  const raw = rawResult.text;
   let ingestion;
   try { ingestion = ingestJsonText(raw); }
   catch (error) { throw new OutputBoundaryError('AGENT_OUTPUT_JSON_INVALID', error.message, { diagnostic: error.diagnostic ?? 'JSON_PARSE_ERROR' }); }

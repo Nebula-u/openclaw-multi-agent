@@ -110,6 +110,9 @@ test('Manager workspace documents the current request queue protocol', () => {
   assert.match(managerRules, /orchestrator-status/u);
   assert.match(managerRules, /\.orchestrator\/receipts/u);
   assert.match(managerRules, /requirement-agent/u);
+  assert.match(managerRules, /RETRY_SAME_AGENT/u);
+  assert.match(managerRules, /用户明确确认/u);
+  assert.match(managerRules, /不能自行重置重试次数/u);
   assert.doesNotMatch(managerTools, /\.agent-raw\/route-plan\.json\.raw/u);
   assert.doesNotMatch(managerTools, /validate-request/u);
   assert.match(managerTools, /orchestrator-approve/u);

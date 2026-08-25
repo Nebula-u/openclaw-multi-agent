@@ -3,14 +3,26 @@
 
   const sameOrigin = window.location.protocol !== 'file:';
   const defaultApi = window.MONITOR_CONFIG?.apiUrl || (sameOrigin ? window.location.origin : 'http://127.0.0.1:4319');
-  const state = { apiUrl: defaultApi.replace(/\/$/u, ''), workflows: [], snapshot: null, selectedWorkflowId: localStorage.getItem('openclaw.monitor.workflow') || null, selectedSessionKey: localStorage.getItem('openclaw.monitor.session') || null, source: null, renderedSessionKey: null, queuedApprovals: new Map() };
+  const state = { apiUrl: defaultApi.replace(/\/$/u, ''), workflows: [], snapshot: null, selectedWorkflowId: localStorage.getItem('openclaw.monitor.workflow') || null, selectedSessionKey: localStorage.getItem('openclaw.monitor.session') || null, source: null, sessionCache: new Map(), dirtySessionKeys: new Set(), visibleSessionKey: null, sessionRequestVersion: 0, sessionLoadingKey: null, queuedApprovals: new Map() };
   const $ = (id) => document.getElementById(id);
   const escapeHtml = (value) => String(value ?? '').replace(/[&<'"]/gu, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[char]));
   const selected = () => state.workflows.find((item) => item.workflow_id === state.selectedWorkflowId) || null;
   const time = (value) => value ? new Date(value).toLocaleString('zh-CN', { hour12: false }) : '--';
   const request = async (path) => { const response = await fetch(`${state.apiUrl}${path}`); const body = await response.json(); if (!response.ok) throw new Error(body.message || body.error || `HTTP ${response.status}`); return body; };
   const post = async (path, value) => { const response = await fetch(`${state.apiUrl}${path}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(value) }); const body = await response.json(); if (!response.ok) throw new Error(body.message || body.error || `HTTP ${response.status}`); return body; };
+  const sessionKey = (session) => `${session.agent_id}:${session.session_id}`;
+  const messageFingerprint = (message) => JSON.stringify([message.role ?? '', message.timestamp ?? '', message.text ?? '']);
+  const messageHtml = (message, agentId) => `<article class="session-message ${escapeHtml(message.role)}"><header><span>${message.role === 'assistant' ? escapeHtml(agentId) : 'USER'}</span><time>${escapeHtml(time(message.timestamp))}</time></header><p>${escapeHtml(message.text)}</p></article>`;
   function setConnection(online, label) { $('connection-dot').classList.toggle('online', online); $('connection-state').textContent = label; }
+  function renderCachedSession(key, agentId) {
+    const cached = state.sessionCache.get(key); if (!cached) return false;
+    const root = $('session-window'); root.innerHTML = cached.messages.length ? cached.messages.map((message) => messageHtml(message, agentId)).join('') : '<p class="empty-note">会话中暂无可显示的 user/assistant 文本</p>';
+    root.scrollTop = cached.scrollTop ?? 0; state.visibleSessionKey = key; return true;
+  }
+  function saveVisibleSessionScroll() {
+    if (!state.visibleSessionKey) return;
+    const cached = state.sessionCache.get(state.visibleSessionKey); if (cached) cached.scrollTop = $('session-window').scrollTop;
+  }
   function taskClass(task) { return String(task.status || 'unknown').toLowerCase(); }
   function renderWorkflows() {
     $('workflow-count').textContent = state.workflows.filter((item) => item.state !== 'TERMINAL').length;
@@ -33,19 +45,31 @@
   }
   async function renderSession(workflow) {
     const sessions = activeSessions(workflow); const tabs = $('agent-tabs');
-    if (!sessions.length) { tabs.innerHTML = ''; $('session-meta').textContent = workflow ? '当前 workflow 尚未记录 Agent session。' : '暂无未绑定到 workflow 的 Agent session。'; $('session-window').innerHTML = '<p class="empty-note">没有可显示的会话文本</p>'; return; }
-    if (!sessions.some((item) => `${item.agent_id}:${item.session_id}` === state.selectedSessionKey)) state.selectedSessionKey = `${sessions[0].agent_id}:${sessions[0].session_id}`;
-    tabs.innerHTML = sessions.map((item) => { const key = `${item.agent_id}:${item.session_id}`; return `<button type="button" role="tab" aria-selected="${key === state.selectedSessionKey}" class="agent-tab ${key === state.selectedSessionKey ? 'active' : ''}" data-session-key="${escapeHtml(key)}">${escapeHtml(item.label)}</button>`; }).join('');
-    tabs.querySelectorAll('[data-session-key]').forEach((button) => button.addEventListener('click', () => { state.selectedSessionKey = button.dataset.sessionKey; localStorage.setItem('openclaw.monitor.session', state.selectedSessionKey); state.renderedSessionKey = null; void renderSession(workflow); }));
-    const current = sessions.find((item) => `${item.agent_id}:${item.session_id}` === state.selectedSessionKey) || sessions[0]; const key = `${current.agent_id}:${current.session_id}`;
+    if (!sessions.length) { state.sessionRequestVersion += 1; state.sessionLoadingKey = null; tabs.innerHTML = ''; $('session-meta').textContent = workflow ? '当前 workflow 尚未记录 Agent session。' : '暂无未绑定到 workflow 的 Agent session。'; $('session-window').innerHTML = '<p class="empty-note">没有可显示的会话文本</p>'; $('session-status').textContent = '等待 session'; return; }
+    if (!sessions.some((item) => sessionKey(item) === state.selectedSessionKey)) state.selectedSessionKey = sessionKey(sessions[0]);
+    tabs.innerHTML = sessions.map((item) => { const key = sessionKey(item); return `<button type="button" role="tab" aria-selected="${key === state.selectedSessionKey}" class="agent-tab ${key === state.selectedSessionKey ? 'active' : ''}" data-session-key="${escapeHtml(key)}">${escapeHtml(item.label)}</button>`; }).join('');
+    tabs.querySelectorAll('[data-session-key]').forEach((button) => button.addEventListener('click', () => { saveVisibleSessionScroll(); state.selectedSessionKey = button.dataset.sessionKey; localStorage.setItem('openclaw.monitor.session', state.selectedSessionKey); state.dirtySessionKeys.add(state.selectedSessionKey); void renderSession(workflow); }));
+    const current = sessions.find((item) => sessionKey(item) === state.selectedSessionKey) || sessions[0]; const key = sessionKey(current);
     $('session-meta').textContent = `${current.agent_id} · ${current.session_id}`;
-    if (state.renderedSessionKey === key) return; state.renderedSessionKey = key; $('session-window').innerHTML = '<p class="empty-note">正在读取会话...</p>';
+    $('session-status').textContent = '自动更新';
+    if (state.visibleSessionKey !== key) renderCachedSession(key, current.agent_id);
+    if ((state.sessionCache.has(key) && !state.dirtySessionKeys.has(key)) || state.sessionLoadingKey === key) return;
+    const requestVersion = ++state.sessionRequestVersion; state.sessionLoadingKey = key;
+    if (!state.sessionCache.has(key)) $('session-window').innerHTML = '<p class="empty-note">正在读取会话...</p>';
     try {
       const response = await request(`/api/agents/${encodeURIComponent(current.agent_id)}/sessions/${encodeURIComponent(current.session_id)}/messages?limit=300`);
       const messages = response.messages || [];
-      $('session-window').innerHTML = messages.length ? messages.map((message) => `<article class="session-message ${escapeHtml(message.role)}"><header><span>${message.role === 'assistant' ? escapeHtml(current.agent_id) : 'USER'}</span><time>${escapeHtml(time(message.timestamp))}</time></header><p>${escapeHtml(message.text)}</p></article>`).join('') : '<p class="empty-note">会话中暂无可显示的 user/assistant 文本</p>';
-      $('session-window').scrollTop = $('session-window').scrollHeight;
-    } catch (error) { $('session-window').innerHTML = `<p class="empty-note">无法读取会话：${escapeHtml(error.message)}</p>`; }
+      if (requestVersion !== state.sessionRequestVersion || state.selectedSessionKey !== key) return;
+      const fingerprints = messages.map(messageFingerprint); const previous = state.sessionCache.get(key); const isAppend = previous && previous.fingerprints.length <= fingerprints.length && previous.fingerprints.every((value, index) => value === fingerprints[index]);
+      const root = $('session-window');
+      if (!previous) { root.innerHTML = messages.length ? messages.map((message) => messageHtml(message, current.agent_id)).join('') : '<p class="empty-note">会话中暂无可显示的 user/assistant 文本</p>'; state.visibleSessionKey = key; }
+      else if (isAppend && fingerprints.length > previous.fingerprints.length) {
+        const additions = messages.slice(previous.fingerprints.length); root.insertAdjacentHTML('beforeend', additions.map((message) => messageHtml(message, current.agent_id)).join(''));
+      } else if (!isAppend) {
+        const scrollTop = root.scrollTop; root.innerHTML = messages.length ? messages.map((message) => messageHtml(message, current.agent_id)).join('') : '<p class="empty-note">会话中暂无可显示的 user/assistant 文本</p>'; root.scrollTop = scrollTop;
+      }
+      state.sessionCache.set(key, { fingerprints, messages, scrollTop: root.scrollTop }); state.dirtySessionKeys.delete(key);
+    } catch (error) { if (requestVersion === state.sessionRequestVersion && state.selectedSessionKey === key && !state.sessionCache.has(key)) $('session-window').innerHTML = `<p class="empty-note">无法读取会话：${escapeHtml(error.message)}</p>`; } finally { if (requestVersion === state.sessionRequestVersion) state.sessionLoadingKey = null; }
   }
   const approvalKey = (workflow, approval) => `${workflow.workflow_id}:${approval.decisionId ?? approval.decision_id}`;
   async function waitForApprovalReceipt(commandId, key, attempts = 0) {
@@ -70,6 +94,21 @@
       void waitForApprovalReceipt(result.command_id, key);
     } catch (error) { state.queuedApprovals.delete(key); root.innerHTML = `<p>无法提交审批：${escapeHtml(error.message)}</p>`; }
   }
+  const CONFIRM_CHOICES = new Set(['APPROVE', 'ACCEPT', 'CONTINUE', 'RETRY_SAME_AGENT']);
+  const REJECT_CHOICES = new Set(['REJECT', 'REJECTED', 'CANCEL', 'ABORT']);
+  function approvalAction(option, label, tone, queued) {
+    if (!option) return `<button type="button" class="approval-action ${tone}" disabled><span>${label}</span><small>当前审批未提供此操作</small></button>`;
+    return `<button type="button" class="approval-action ${tone}" data-approval-choice="${escapeHtml(option.option_id)}"${queued ? ' disabled' : ''}><span>${label}</span><small>${escapeHtml(option.description || option.option_id)}</small></button>`;
+  }
+  function approvalCard(approval, requestValue, options, queued) {
+    const confirm = options.find((item) => CONFIRM_CHOICES.has(item.option_id));
+    const reject = options.find((item) => REJECT_CHOICES.has(item.option_id));
+    const other = options.filter((item) => item !== confirm && item !== reject);
+    const decisionId = approval.decisionId ?? approval.decision_id;
+    const queueStatus = queued ? `<div class="approval-status" role="status"><i></i><span>${queued.commandId ? `审批命令已提交：${escapeHtml(queued.commandId)}` : '正在安全提交审批…'}</span></div>` : '';
+    const otherActions = other.length ? other.map((item) => approvalAction(item, item.option_id === 'REWORK' ? '返工后重试' : item.description || item.option_id, 'other', queued)).join('') : '<p class="approval-empty">当前审批没有其他可选操作</p>';
+    return `<article class="approval-card"><div class="approval-card-head"><span class="approval-kicker">需要你的决定</span><code>${escapeHtml(decisionId)}</code></div><p class="approval-summary">${escapeHtml(requestValue.summary || approval.trigger || '需要人工决定')}</p>${queueStatus}<div class="approval-primary-actions" role="group" aria-label="主要审批操作">${approvalAction(confirm, '确认', 'confirm', queued)}${approvalAction(reject, '拒绝', 'reject', queued)}</div><details class="approval-other-actions"><summary>其他</summary><div>${otherActions}</div></details><p class="approval-manager-note">也可在与 Manager 的对话中明确授权，由 Manager 转交相同审批。</p></article>`;
+  }
   function renderNotices(workflow) {
     const notices = (state.snapshot?.notifications || []).filter((item) => item.runId === workflow?.run_id).slice(0, 8); const root = $('notification-list');
     root.innerHTML = notices.length ? notices.map((item) => `<article class="notice ${escapeHtml(String(item.status).toLowerCase())}"><b>${escapeHtml(item.status)}</b><span>${escapeHtml(item.type)}</span><small>${escapeHtml(time(item.createdAt))}</small></article>`).join('') : '<p class="empty-note">没有待转达信息</p>';
@@ -77,7 +116,7 @@
     if (!approval) { for (const key of state.queuedApprovals.keys()) if (key.startsWith(`${workflow?.workflow_id}:`)) state.queuedApprovals.delete(key); approvalRoot.textContent = '没有待审批事项'; return; }
     const requestValue = approval.request || {}; const options = Array.isArray(requestValue.options) ? requestValue.options : [];
     const queued = state.queuedApprovals.get(approvalKey(workflow, approval));
-    approvalRoot.innerHTML = `<p>${escapeHtml(requestValue.summary || approval.trigger || '需要人工决定')}</p>${queued ? `<p>审批命令${queued.commandId ? `已提交：${escapeHtml(queued.commandId)}` : '正在提交'}。</p>` : ''}${options.length ? `<div class="approval-actions">${options.map((option) => `<button type="button" data-approval-choice="${escapeHtml(option.option_id)}"${queued ? ' disabled' : ''}>${escapeHtml(option.description || option.option_id)}</button>`).join('')}</div>` : '<p>审批选项不可用。</p>'}`;
+    approvalRoot.innerHTML = approvalCard(approval, requestValue, options, queued);
     approvalRoot.querySelectorAll('[data-approval-choice]').forEach((button) => button.addEventListener('click', () => { void submitApproval(workflow, approval, button.dataset.approvalChoice); }));
   }
   function renderHr(workflow) {
@@ -95,11 +134,11 @@
   function render() {
     const workflow = selected(); renderWorkflows(); $('workflow-title').textContent = workflow?.title || '等待工作流'; $('workflow-summary').textContent = workflow?.status_reason || workflow?.route_plan?.summary || '选择工作流以查看任务、会话和审查记录。'; $('workflow-state').textContent = workflow?.state || 'UNKNOWN'; $('workflow-state').className = `state-pill ${String(workflow?.state || 'unknown').toLowerCase()}`; $('workflow-step').textContent = workflow ? `STEP ${(workflow.current_step_index ?? 0) + 1}/${workflow.route_plan?.steps?.length ?? 0}` : 'STEP --'; renderTaskList(workflow); renderNotices(workflow); renderSnapshots(workflow); renderHr(workflow); void renderSession(workflow);
   }
-  function applySnapshot(snapshot) { state.snapshot = snapshot; state.workflows = snapshot.workflows || []; if (!state.workflows.some((item) => item.workflow_id === state.selectedWorkflowId)) state.selectedWorkflowId = state.workflows[0]?.workflow_id || null; state.renderedSessionKey = null; render(); $('sync-state').textContent = time(snapshot.generated_at); setConnection(true, snapshot.kernel_reachable ? 'KERNEL CONNECTED' : 'KERNEL DEGRADED'); }
+  function applySnapshot(snapshot) { state.snapshot = snapshot; state.workflows = snapshot.workflows || []; if (!state.workflows.some((item) => item.workflow_id === state.selectedWorkflowId)) state.selectedWorkflowId = state.workflows[0]?.workflow_id || null; render(); $('sync-state').textContent = time(snapshot.generated_at); setConnection(true, snapshot.kernel_reachable ? 'KERNEL CONNECTED' : 'KERNEL DEGRADED'); }
   function stream() {
     if (state.source) state.source.close(); const source = new EventSource(`${state.apiUrl}/api/workflows/stream`); state.source = source;
     source.addEventListener('snapshot', (event) => { const value = JSON.parse(event.data).payload; if (value) applySnapshot(value); });
-    source.addEventListener('activity', () => { state.renderedSessionKey = null; void renderSession(selected()); }); source.addEventListener('hr-alert', () => { void reload(); }); source.onerror = () => setConnection(false, 'RECONNECTING');
+    source.addEventListener('activity', (event) => { const activity = JSON.parse(event.data).payload; const key = activity?.payload?.agent_id && activity?.session_id ? `${activity.payload.agent_id}:${activity.session_id}` : null; if (key) state.dirtySessionKeys.add(key); if (key === state.selectedSessionKey) void renderSession(selected()); }); source.addEventListener('hr-alert', () => { void reload(); }); source.onerror = () => setConnection(false, 'RECONNECTING');
   }
   async function reload() { try { const result = await request('/api/workflows'); applySnapshot(result); stream(); } catch (error) { setConnection(false, `OFFLINE: ${error.message}`); } }
   window.addEventListener('beforeunload', () => state.source?.close()); void reload();

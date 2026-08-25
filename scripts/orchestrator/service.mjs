@@ -12,7 +12,8 @@ import { createManagerControl } from '../manager-control/service.mjs';
 import { createSnapshotService } from './snapshot-service.mjs';
 import { createApprovalCommandQueue } from './approval-command-queue.mjs';
 import { ingestTaskOutput, writeFailureReceipt } from './output-ingestion.mjs';
-import { runOpenClawAgent } from './openclaw-runner.mjs';
+import { archiveJsonRegeneration, archiveOutputBoundaryFailure, isJsonRegenerable, isOutputBoundaryFailure, MAX_JSON_REGENERATIONS } from './json-regeneration.mjs';
+import { extractFinalAssistantText, runOpenClawAgent } from './openclaw-runner.mjs';
 import { compileRoutePlan, GATE_CHECKS_BY_KIND } from './route-policy.mjs';
 
 function now(clock) { const value = clock(); return value instanceof Date ? value.toISOString() : value; }
@@ -35,6 +36,24 @@ function approvalRequest(task, result = null, step = null) {
 
 export function taskMessage(task) {
   return `# Orchestrator task\n\n- workflow_id: ${task.workflowId}\n- task_id: ${task.taskId}\n- run_id: ${task.runId}\n- step_id: ${task.stepId}\n- assigned_agent: ${task.agentId}\n- attempt: ${task.attempt}\n- worktree_path_abs: ${task.worktreePathAbs}\n- context_manifest_path_abs: ${task.contextManifestPathAbs}\n- context_manifest_sha256: ${task.contextManifestSha256}\n\nComplete only this assigned step. Read the immutable context manifest. Do not communicate with other Agents, alter route or approval records, write to the Control Kernel, or call Monitor controls. Write exactly one result.schema.json object only to:\n\n${task.rawOutputPath}\n\nThe Orchestrator will validate and publish it. Do not write final outputs directly.\n`;
+}
+
+function retryExhaustedApprovalRequest(task) {
+  return {
+    decision_id: `DEC-${task.taskId.slice(5)}-${randomUUID().slice(0, 8)}`,
+    workflow_id: task.workflowId,
+    task_id: task.taskId,
+    run_id: task.runId,
+    task_attempt: task.attempt,
+    max_attempts: task.maxAttempts,
+    summary: `任务 ${task.taskId} 已用完 ${task.maxAttempts} 次完整执行机会，需要用户决定是否开启新的重试批次。`,
+    trigger: 'TASK_RETRY_EXHAUSTED',
+    options: [
+      { option_id: 'RETRY_SAME_AGENT', description: '确认：由同一 Agent 开启新的三次重试批次' },
+      { option_id: 'ABORT', description: '拒绝：终止当前工作流' },
+      { option_id: 'REWORK', description: '其他：携带用户补充说明后返工并开启新的重试批次' },
+    ],
+  };
 }
 
 export async function runWithLeaseHeartbeat({ lease, executionId, run, signal = null, intervalMs = null }) {
@@ -218,11 +237,16 @@ export function createOrchestrator({ projectRoot: projectRootInput, database = n
     if (current.state === 'WAITING_HUMAN') return { state: 'WAITING_HUMAN', task: current };
     if (current.state === 'FAILED') {
       if (current.attempt >= current.maxAttempts) {
-        const held = await selectedRepository.updateRun(run.runId, { state: 'HOLD', statusReason: `task ${current.taskId} exhausted retries` }, { eventType: 'TASK_RETRY_EXHAUSTED', eventPayload: { task_id: current.taskId } });
-        await announce(held, 'TASK_RETRY_EXHAUSTED', { task_id: current.taskId, error: current.lastError }, current.taskId);
-        return { state: 'HOLD', run: held };
+        const request = retryExhaustedApprovalRequest({ ...current, workflowId: run.workflowId });
+        const approval = await selectedRepository.createApproval({ runId: run.runId, taskId: current.taskId, stepId: current.stepId,
+          trigger: request.trigger, request });
+        const waiting = await selectedRepository.getRunById(run.runId);
+        await announce(waiting, 'TASK_RETRY_EXHAUSTED', { task_id: current.taskId, error: current.lastError, approval: approval.request }, current.taskId);
+        return { state: 'WAITING_HUMAN', run: waiting };
       }
-      const retry = await selectedRepository.updateTask(current.taskId, { state: 'READY', attempt: current.attempt + 1, lastError: current.lastError, contextManifest: {} }, { eventType: 'TASK_RETRY_READY', eventPayload: { next_attempt: current.attempt + 1 } });
+      const retry = await selectedRepository.updateTask(current.taskId, { state: 'READY', attempt: current.attempt + 1,
+        jsonRegenerations: 0, executionRound: current.executionRound + 1, lastError: current.lastError, contextManifest: {} },
+      { eventType: 'TASK_RETRY_READY', eventPayload: { next_attempt: current.attempt + 1 } });
       await announce(run, 'TASK_RETRY_READY', { task_id: retry.taskId, attempt: retry.attempt }, retry.taskId);
       return { state: 'READY', task: retry };
     }
@@ -239,17 +263,85 @@ export function createOrchestrator({ projectRoot: projectRootInput, database = n
       throw error;
     }
     await selectedRepository.updateTask(task.taskId, { state: 'RUNNING' }, { eventType: 'TASK_STARTED', eventPayload: { execution_id: execution.executionId, session_id: sessionId } });
+    const executionMutation = (patch) => selectedRepository.updateTaskForExecution(task.taskId, patch, {
+      executionId: execution.executionId, attempt: task.attempt,
+    });
+    const assertExecutionLease = async (phase) => {
+      const held = await selectedKernel.lease.heartbeat({ executionId: execution.executionId, phase });
+      if (!held) throw Object.assign(new Error(`execution lease was lost: ${execution.executionId}`), {
+        code: 'EXECUTION_LEASE_LOST', details: { execution_id: execution.executionId },
+      });
+      return held;
+    };
+    const abandonExecution = async (error) => {
+      await selectedKernel.lease.reapExpiredLeases();
+      await selectedKernel.lease.releaseLease({ executionId: execution.executionId, state: 'FAILED', exitCode: 1,
+        error: { code: error.code ?? 'TASK_EXECUTION_FAILED', message: error.message } });
+      return selectedRepository.getTask(task.taskId);
+    };
     await announce(run, 'TASK_STARTED', { task_id: task.taskId, agent_id: task.agentId, step_id: task.stepId }, task.taskId);
+    await assertExecutionLease('DISPATCHING');
     const dispatchRoot = join(task.artifactRootAbs, '.orchestrator'); mkdirSync(dispatchRoot, { recursive: true });
     const messagePath = join(dispatchRoot, `attempt-${task.attempt}.message.md`); atomicWriteFile(messagePath, taskMessage(task));
     atomicWriteJson(join(dispatchRoot, `attempt-${task.attempt}.dispatch.json`), { schema_version: 1, execution_id: execution.executionId, session_id: sessionId, message_path_abs: messagePath, started_at: now(clock) });
     let taskSnapshot = null;
     try {
-      const result = await runWithLeaseHeartbeat({ lease: selectedKernel.lease, executionId: execution.executionId, signal,
-        run: (heartbeatSignal) => runner({ agentId: task.agentId, sessionId, messagePath, timeoutSeconds, signal: heartbeatSignal }) });
-      processLog(task, `attempt-${task.attempt}.stdout.log`, result.stdout); processLog(task, `attempt-${task.attempt}.stderr.log`, result.stderr);
-      if (result.exitCode !== 0) throw Object.assign(new Error(`OpenClaw Agent exited with ${result.exitCode}`), { code: 'OPENCLAW_AGENT_EXIT_NONZERO', details: { stderr: String(result.stderr ?? '').slice(-4000) } });
-      const ingested = ingestTaskOutput({ projectRoot, task, occurredAt: now(clock) });
+      const executionOutcome = await runWithLeaseHeartbeat({ lease: selectedKernel.lease, executionId: execution.executionId, signal,
+        run: async (heartbeatSignal) => {
+          let activeMessagePath = messagePath;
+          let regeneration = current.jsonRegenerations ?? 0;
+          let repairWorktreeFingerprint = null;
+          while (true) {
+            if (regeneration) await assertExecutionLease('JSON_REGENERATION_DISPATCH');
+            const result = await runner({ agentId: task.agentId, sessionId, messagePath: activeMessagePath, timeoutSeconds, signal: heartbeatSignal });
+            const logSuffix = regeneration ? `.json-regeneration-${regeneration}` : '';
+            processLog(task, `attempt-${task.attempt}${logSuffix}.stdout.log`, result.stdout);
+            processLog(task, `attempt-${task.attempt}${logSuffix}.stderr.log`, result.stderr);
+            if (result.exitCode !== 0) throw Object.assign(new Error(`OpenClaw Agent exited with ${result.exitCode}`), { code: 'OPENCLAW_AGENT_EXIT_NONZERO', details: { stderr: String(result.stderr ?? '').slice(-4000) } });
+            if (regeneration) {
+              if (heartbeatSignal.aborted) throw Object.assign(new Error('execution lease was lost before JSON repair could be accepted'), { code: 'EXECUTION_LEASE_LOST' });
+              const held = await selectedKernel.lease.heartbeat({ executionId: execution.executionId, phase: 'JSON_REGENERATION_VALIDATION' });
+              if (!held) throw Object.assign(new Error('execution lease was lost before JSON repair could be accepted'), { code: 'EXECUTION_LEASE_LOST' });
+              if (repairWorktreeFingerprint && selectedWorktrees.fingerprint) {
+                const after = selectedWorktrees.fingerprint(task.worktreePathAbs);
+                if (JSON.stringify(after) !== JSON.stringify(repairWorktreeFingerprint)) {
+                  throw Object.assign(new Error('JSON repair turn changed the task worktree'), { code: 'JSON_REPAIR_WORKTREE_CHANGED', details: { before: repairWorktreeFingerprint, after } });
+                }
+              }
+              atomicWriteFile(task.rawOutputPath, `${extractFinalAssistantText(result.stdout).trim()}\n`);
+            }
+            try {
+              return { result, ingested: ingestTaskOutput({ projectRoot, task, occurredAt: now(clock) }) };
+            } catch (error) {
+              if (!isJsonRegenerable(error)) {
+                if (isOutputBoundaryFailure(error)) {
+                  archiveOutputBoundaryFailure({ task, error, sessionId, occurredAt: now(clock) });
+                  await assertExecutionLease('OUTPUT_BOUNDARY_ARCHIVED');
+                }
+                throw error;
+              }
+              if (regeneration >= MAX_JSON_REGENERATIONS) {
+                archiveJsonRegeneration({ task, error, regeneration, sessionId, occurredAt: now(clock), exhausted: true });
+                throw error;
+              }
+              if (heartbeatSignal.aborted) throw Object.assign(new Error('execution lease was lost before JSON regeneration dispatch'), { code: 'EXECUTION_LEASE_LOST' });
+              const held = await selectedKernel.lease.heartbeat({ executionId: execution.executionId, phase: 'JSON_REGENERATION_PREPARE' });
+              if (!held) throw Object.assign(new Error('execution lease was lost before JSON regeneration dispatch'), { code: 'EXECUTION_LEASE_LOST' });
+              regeneration += 1;
+              repairWorktreeFingerprint ??= selectedWorktrees.fingerprint?.(task.worktreePathAbs) ?? null;
+              const archived = archiveJsonRegeneration({ task, error, regeneration, sessionId, occurredAt: now(clock) });
+              await assertExecutionLease('JSON_REGENERATION_ARCHIVED');
+              await executionMutation({ jsonRegenerations: regeneration });
+              await assertExecutionLease('JSON_REGENERATION_RECORDED');
+              await announce(run, 'TASK_JSON_REGENERATION_REQUESTED', { task_id: task.taskId, attempt: task.attempt,
+                regeneration, max_regenerations: MAX_JSON_REGENERATIONS, session_id: sessionId, code: error.code,
+                errors: error.details?.errors ?? [{ message: error.message }] }, task.taskId);
+              await assertExecutionLease('JSON_REGENERATION_ANNOUNCED');
+              activeMessagePath = archived.messagePath;
+            }
+          }
+        } });
+      const { result, ingested } = executionOutcome;
       const snapshotInput = { runId: run.runId, taskId: task.taskId, executionId: execution.executionId,
         attempt: task.attempt, agentId: task.agentId, sessionId, inputCommit: task.inputCommit,
         worktreePathAbs: task.worktreePathAbs, targetProjectRootAbs: task.targetProjectRootAbs };
@@ -257,12 +349,17 @@ export function createOrchestrator({ projectRoot: projectRootInput, database = n
         ? await selectedSnapshots.accept({ ...snapshotInput, outputCommit: ingested.value.output_commit ?? task.inputCommit })
         : await selectedSnapshots.recover(snapshotInput);
       taskSnapshot = snapshot;
-      const released = await selectedKernel.lease.releaseLease({ executionId: execution.executionId, state: 'SUCCEEDED', exitCode: result.exitCode });
-      if (!released) throw Object.assign(new Error(`execution lease was lost before completion: ${execution.executionId}`), {
+      await assertExecutionLease('TASK_RESULT_COMMIT');
+      const payload = { ...(current.payload ?? {}), result: ingested.value, snapshot, published_output_path_abs: ingested.outputPath, ingestion_receipt_path_abs: ingested.receiptPath, session_id: sessionId };
+      const failedResult = ['NEEDS_REWORK', 'BLOCKED', 'FAILED'].includes(ingested.value.result_status);
+      const completed = await executionMutation(failedResult
+        ? { state: 'FAILED', payload, lastError: { code: `AGENT_${ingested.value.result_status}`, summary: ingested.value.summary_for_manager } }
+        : { state: 'SUCCEEDED', payload });
+      const released = await selectedKernel.lease.releaseLease({ executionId: execution.executionId,
+        state: failedResult ? 'FAILED' : 'SUCCEEDED', exitCode: result.exitCode });
+      if (!released) throw Object.assign(new Error(`execution lease was lost after task result commit: ${execution.executionId}`), {
         code: 'EXECUTION_LEASE_LOST', details: { execution_id: execution.executionId },
       });
-      const payload = { ...(current.payload ?? {}), result: ingested.value, snapshot, published_output_path_abs: ingested.outputPath, ingestion_receipt_path_abs: ingested.receiptPath, session_id: sessionId };
-      const completed = await selectedRepository.updateTask(task.taskId, { state: 'SUCCEEDED', payload }, { eventType: 'TASK_SUCCEEDED', eventPayload: { result_status: ingested.value.result_status, output_path_abs: ingested.outputPath } });
       await selectedRepository.registerArtifact({ runId: run.runId, taskId: task.taskId, executionId: execution.executionId, kind: 'RESULT', uri: ingested.outputPath, sha256: sha256File(ingested.outputPath), sizeBytes: 0, mediaType: 'application/json' });
       await selectedRepository.registerArtifact({ runId: run.runId, taskId: task.taskId, executionId: execution.executionId, kind: 'INGESTION_RECEIPT', uri: ingested.receiptPath, sha256: sha256File(ingested.receiptPath), sizeBytes: 0, mediaType: 'application/json' });
       if (ingested.value.result_status === 'HUMAN_DECISION_REQUIRED') {
@@ -271,14 +368,18 @@ export function createOrchestrator({ projectRoot: projectRootInput, database = n
         await announce(run, 'HUMAN_APPROVAL_REQUIRED', { approval: request, result_summary: ingested.value.summary_for_user }, task.taskId);
         return { state: 'WAITING_HUMAN', task: completed };
       }
-      if (['NEEDS_REWORK', 'BLOCKED', 'FAILED'].includes(ingested.value.result_status)) {
-        const failed = await selectedRepository.updateTask(task.taskId, { state: 'FAILED', lastError: { code: `AGENT_${ingested.value.result_status}`, summary: ingested.value.summary_for_manager } }, { eventType: 'TASK_REWORK_OR_FAILURE', eventPayload: { result_status: ingested.value.result_status } });
+      if (failedResult) {
+        const failed = completed;
         await announce(run, ingested.value.result_status === 'NEEDS_REWORK' ? 'TASK_REWORK_REQUESTED' : 'TASK_FAILED', { task_id: task.taskId, result_status: ingested.value.result_status, summary: ingested.value.summary_for_user }, task.taskId);
         await queueDailyReport(run, failed, ingested.value.result_status);
         return { state: 'FAILED', task: failed };
       }
       return advanceAfterSuccess(run, completed, ingested.value);
     } catch (error) {
+      if (error.code === 'EXECUTION_TASK_CAS_FAILED' || error.code === 'EXECUTION_LEASE_LOST') {
+        const latest = await abandonExecution(error);
+        return { state: latest?.state ?? 'FAILED', task: latest };
+      }
       let recoverySnapshot = null;
       try {
         recoverySnapshot = taskSnapshot ?? error.details?.snapshot ?? await selectedSnapshots.recover({ runId: run.runId, taskId: task.taskId, executionId: execution.executionId,
@@ -287,9 +388,23 @@ export function createOrchestrator({ projectRoot: projectRootInput, database = n
       } catch (recoveryError) {
         error.details = { ...(error.details ?? {}), recovery_error: { code: recoveryError.code ?? 'SNAPSHOT_RECOVERY_FAILED', message: recoveryError.message } };
       }
-      await selectedKernel.lease.releaseLease({ executionId: execution.executionId, state: 'FAILED', exitCode: 1, error: { code: error.code ?? 'TASK_EXECUTION_FAILED', message: error.message } });
+      try { await assertExecutionLease('TASK_FAILURE_COMMIT'); }
+      catch (leaseError) {
+        const latest = await abandonExecution(leaseError);
+        return { state: latest?.state ?? 'FAILED', task: latest };
+      }
       const receipt = writeFailureReceipt(task, error, now(clock));
-      const failed = await selectedRepository.updateTask(task.taskId, { state: 'FAILED', payload: { ...(current.payload ?? {}), recovery_snapshot: recoverySnapshot }, lastError: { code: error.code ?? 'TASK_EXECUTION_FAILED', message: error.message, receipt_path_abs: receipt } }, { eventType: 'TASK_FAILED', eventPayload: { code: error.code ?? 'TASK_EXECUTION_FAILED', message: error.message } });
+      let failed;
+      try {
+        failed = await executionMutation({ state: 'FAILED', payload: { ...(current.payload ?? {}), recovery_snapshot: recoverySnapshot },
+          lastError: { code: error.code ?? 'TASK_EXECUTION_FAILED', message: error.message, receipt_path_abs: receipt } });
+      } catch (casError) {
+        if (casError.code !== 'EXECUTION_TASK_CAS_FAILED') throw casError;
+        const latest = await abandonExecution(error);
+        return { state: latest?.state ?? 'FAILED', task: latest };
+      }
+      await selectedKernel.lease.releaseLease({ executionId: execution.executionId, state: 'FAILED', exitCode: 1,
+        error: { code: error.code ?? 'TASK_EXECUTION_FAILED', message: error.message } });
       await announce(run, 'TASK_FAILED', { task_id: task.taskId, agent_id: task.agentId, error: failed.lastError }, task.taskId);
       await queueDailyReport(run, failed, 'FAILED');
       return { state: 'FAILED', task: failed };
@@ -318,6 +433,18 @@ export function createOrchestrator({ projectRoot: projectRootInput, database = n
     if (!pending) throw Object.assign(new Error('approval not found or already resolved'), { code: 'APPROVAL_NOT_PENDING' });
     const allowed = pending.request?.options?.map((option) => option.option_id).filter(Boolean) ?? [];
     if (!allowed.includes(choice)) throw Object.assign(new Error('approval choice is not allowed'), { code: 'APPROVAL_OPTION_INVALID' });
+    if (pending.trigger === 'TASK_RETRY_EXHAUSTED') {
+      const resolved = await selectedRepository.resolveRetryExhaustedApproval({ decisionId,
+        response: { outcome: choice, notes, actor, decided_at: now(clock) } });
+      if (['ABORT', 'CANCEL', 'REJECTED'].includes(choice)) {
+        await queueDailyReport(resolved.run, resolved.task, 'CANCELLED');
+        await announce(resolved.run, 'WORKFLOW_TERMINAL', { outcome: 'CANCELLED', reason: 'user declined an exhausted retry approval' }, resolved.task.taskId);
+      } else {
+        await announce(resolved.run, 'TASK_RETRY_BATCH_APPROVED',
+          { task_id: resolved.task.taskId, decision_id: resolved.approval.decisionId, choice }, resolved.task.taskId);
+      }
+      return resolved.run;
+    }
     const approval = await selectedRepository.resolveApproval({ decisionId, response: { outcome: choice, notes, actor, decided_at: now(clock) } });
     const task = approval.taskId ? await selectedRepository.getTask(approval.taskId) : null;
     if (['CANCEL', 'ABORT', 'REJECTED'].includes(choice)) {
@@ -327,10 +454,17 @@ export function createOrchestrator({ projectRoot: projectRootInput, database = n
       }
       return finishRun(run, 'CANCELLED', 'user declined an approval through Manager');
     }
-    if (['REWORK', 'REVISE'].includes(choice) && task) {
-      await selectedRepository.updateTask(task.taskId, { state: 'READY', attempt: task.attempt + 1, contextManifest: {} }, { eventType: 'TASK_REWORK_APPROVED', eventPayload: { decision_id: approval.decisionId } });
-      const active = await selectedRepository.updateRun(run.runId, { state: 'ACTIVE', statusReason: 'user requested rework' }, { eventType: 'WORKFLOW_RESUMED', eventPayload: { decision_id: approval.decisionId } });
-      await announce(active, 'TASK_REWORK_APPROVED', { task_id: task.taskId, decision_id: approval.decisionId }, task.taskId);
+    if (['RETRY_SAME_AGENT', 'REWORK', 'REVISE'].includes(choice) && task) {
+      const exhausted = pending.trigger === 'TASK_RETRY_EXHAUSTED';
+      await selectedRepository.updateTask(task.taskId, { state: 'READY', attempt: task.attempt + 1,
+        maxAttempts: exhausted ? task.maxAttempts + 3 : task.maxAttempts,
+        jsonRegenerations: 0, executionRound: task.executionRound + 1, contextManifest: {},
+        payload: { ...(task.payload ?? {}), retry_authorization: { decision_id: approval.decisionId, choice, notes, actor, exhausted } } },
+      { eventType: 'TASK_REWORK_APPROVED', eventPayload: { decision_id: approval.decisionId, choice } });
+      const active = await selectedRepository.updateRun(run.runId, { state: 'ACTIVE', statusReason: exhausted ? 'user approved a new retry batch' : 'user requested rework' },
+        { eventType: 'WORKFLOW_RESUMED', eventPayload: { decision_id: approval.decisionId, choice } });
+      await announce(active, exhausted ? 'TASK_RETRY_BATCH_APPROVED' : 'TASK_REWORK_APPROVED',
+        { task_id: task.taskId, decision_id: approval.decisionId, choice }, task.taskId);
       return active;
     }
     const nextIndex = run.currentStepIndex + 1;
