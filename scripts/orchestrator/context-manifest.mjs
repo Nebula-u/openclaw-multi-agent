@@ -30,13 +30,16 @@ function validateManifest(projectRoot, manifest) {
 
 export function rawOutputPath(task) { return join(task.artifactRootAbs, '.agent-raw', 'result.json.raw'); }
 export function publishedOutputPath(task) { return join(task.artifactRootAbs, 'output', 'result.json'); }
+export function inputRootForAttempt(task) {
+  return task.attempt <= 1 ? join(task.artifactRootAbs, 'input') : join(task.artifactRootAbs, 'attempts', `attempt-${task.attempt}`, 'input');
+}
 
 export function createContextManifest({ projectRoot: projectRootInput, task, priorArtifacts = [] }) {
   const projectRoot = resolve(projectRootInput);
   if (typeof task.originalRequest !== 'string' || !task.originalRequest.trim()) {
     throw Object.assign(new Error('task is missing the immutable original user request'), { code: 'ORIGINAL_REQUEST_MISSING' });
   }
-  const inputRoot = join(task.artifactRootAbs, 'input');
+  const inputRoot = inputRootForAttempt(task);
   const rulesRoot = join(inputRoot, 'rules');
   const controlRoot = join(task.artifactRootAbs, '.orchestrator');
   mkdirSync(rulesRoot, { recursive: true });

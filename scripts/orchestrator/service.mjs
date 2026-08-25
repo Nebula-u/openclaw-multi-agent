@@ -6,7 +6,7 @@ import { createKernel } from '../control-kernel/kernel.mjs';
 import { openKernelDatabase, resolveKernelConfig } from '../control-kernel/database.mjs';
 import { createWorkflowRepository } from '../control-kernel/workflow-repository.mjs';
 import { assertOrchestratorWorker, loadActiveAgentRegistry } from './agent-registry.mjs';
-import { createContextManifest } from './context-manifest.mjs';
+import { createContextManifest, inputRootForAttempt } from './context-manifest.mjs';
 import { createGitWorktreeManager } from './git-worktree.mjs';
 import { createManagerControl } from '../manager-control/service.mjs';
 import { createSnapshotService } from './snapshot-service.mjs';
@@ -202,7 +202,7 @@ export function createOrchestrator({ projectRoot: projectRootInput, database = n
       contextManifestSha256: stored.contextManifest?.sha256 ?? null };
     // Context manifests created before original-request propagation did not contain
     // input/user-request.md. Regenerate those incomplete manifests before dispatch.
-    const originalRequestPath = join(artifactRootAbs, 'input', 'user-request.md');
+    const originalRequestPath = join(inputRootForAttempt(task), 'user-request.md');
     if (!task.contextManifestPathAbs || !existsSync(task.contextManifestPathAbs) || !existsSync(originalRequestPath)) {
       const context = createContextManifest({ projectRoot, task, priorArtifacts: stored.payload?.prior_artifacts ?? [] });
       task.contextManifestPathAbs = context.path; task.contextManifestSha256 = context.sha256;

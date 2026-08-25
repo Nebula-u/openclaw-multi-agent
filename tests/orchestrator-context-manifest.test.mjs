@@ -34,6 +34,26 @@ test('context manifest provides the immutable original user request to Workers',
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
+test('retry context uses an attempt-specific input directory without overwriting attempt one', () => {
+  const root = mkdtempSync(join(tmpdir(), 'orchestrator-context-retry-'));
+  try {
+    const firstTask = task(root);
+    const first = createContextManifest({ projectRoot: ROOT, task: firstTask });
+    const firstTaskPath = join(firstTask.artifactRootAbs, 'input', 'task.json');
+    const firstTaskJson = readFileSync(firstTaskPath, 'utf8');
+
+    const retryTask = { ...task(root), attempt: 2, worktreePathAbs: join(root, 'worktree-attempt-2') };
+    const retry = createContextManifest({ projectRoot: ROOT, task: retryTask });
+    const retryInputRoot = join(retryTask.artifactRootAbs, 'attempts', 'attempt-2', 'input');
+    const retryTaskPath = join(retryInputRoot, 'task.json');
+
+    assert.equal(retry.path, join(retryInputRoot, 'context-manifest.json'));
+    assert.equal(JSON.parse(readFileSync(retryTaskPath, 'utf8')).attempt, 2);
+    assert.equal(readFileSync(firstTaskPath, 'utf8'), firstTaskJson);
+    assert.equal(JSON.parse(readFileSync(first.path, 'utf8')).attempt, 1);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
 test('context creation fails closed if a run has no original user request', () => {
   const root = mkdtempSync(join(tmpdir(), 'orchestrator-context-'));
   try {
