@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import test from 'node:test';
 import { createKernelMonitorServer } from '../monitor/kernel-server.mjs';
+import { openKernelDatabase } from '../scripts/control-kernel/database.mjs';
 
 const ROOT = resolve(import.meta.dirname, '..');
 
@@ -65,4 +66,43 @@ test('Kernel Monitor exposes read-only workflow, HR and session endpoints', asyn
     const retry = await fetch(`${base}/internal/notifications/retry`, { method: 'POST', headers: { origin: 'null', 'content-type': 'application/json', 'x-monitor-internal-token': 'monitor-test-token' }, body: JSON.stringify({ notification_ids: ['NTF-1'] }) });
     assert.equal(retry.status, 403); assert.equal((await retry.json()).error, 'MONITOR_READ_ONLY');
   } finally { await monitor.close(); rmSync(temp, { recursive: true, force: true }); }
+});
+
+test('Kernel Monitor queues a local approval command without mutating the Kernel', async (t) => {
+  const runtimeRoot = mkdtempSync(join(tmpdir(), 'kernel-monitor-approval-'));
+  t.after(() => rmSync(runtimeRoot, { recursive: true, force: true }));
+  const run = { runId: 'RUN-monitor-approval', workflowId: 'WF-monitor-approval', state: 'WAITING_HUMAN', outcome: null, statusReason: null,
+    routeHash: 'a'.repeat(64), routePlan: { display_title: 'Approval', summary: 'Approval', steps: [], skipped_stages: [] }, currentStepIndex: 0,
+    managerSessionId: 'manager-session', managerDelivery: null, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
+  const kernel = { listRuns: async () => [run], listTasks: async () => [], listExecutions: async () => [] };
+  const repository = { listHrJobs: async () => [], listNotifications: async () => [], listSnapshots: async () => [], listApprovals: async () => [] };
+  const monitor = createKernelMonitorServer({ projectRoot: ROOT, runtimeRoot, sessionRoot: runtimeRoot, monitorDatabasePath: ':memory:', host: '127.0.0.1', port: 0, allowedOrigins: ['null'], reconcileIntervalMs: 1000 }, { kernel, repository, snapshots: { list: async () => [] } });
+  const address = await monitor.start();
+  try {
+    const base = `http://127.0.0.1:${address.port}`;
+    const response = await fetch(`${base}/api/approvals/resolve`, { method: 'POST', headers: { origin: 'null', 'content-type': 'application/json' }, body: JSON.stringify({
+      workflow_id: run.workflowId, run_id: run.runId, task_id: 'TASK-monitor-approval', decision_id: 'DEC-monitor-approval', choice: 'APPROVE', notes: '',
+    }) });
+    assert.equal(response.status, 202);
+    const body = await response.json();
+    assert.equal(body.status, 'QUEUED');
+    assert.equal(existsSync(join(runtimeRoot, 'orchestrator', 'approval-commands', 'commands', `${body.command_id}.json`)), true);
+    const receipt = await fetch(`${base}/api/approval-commands/${body.command_id}`, { headers: { origin: 'null' } });
+    assert.equal(receipt.status, 404);
+    const invalid = await fetch(`${base}/api/approvals/resolve`, { method: 'POST', headers: { origin: 'null', 'content-type': 'application/json' }, body: JSON.stringify({
+      workflow_id: 'not-a-workflow', run_id: run.runId, task_id: 'TASK-monitor-approval', decision_id: 'DEC-monitor-approval', choice: 'APPROVE', notes: '',
+    }) });
+    assert.equal(invalid.status, 400);
+    assert.equal((await invalid.json()).error, 'APPROVAL_COMMAND_SCHEMA_INVALID');
+  } finally { await monitor.close(); }
+});
+
+test('Kernel Monitor reads its configured runtime root by default', (t) => {
+  const projectRoot = ROOT;
+  const runtimeRoot = mkdtempSync(join(tmpdir(), 'kernel-monitor-runtime-'));
+  const configuredDatabase = openKernelDatabase({ databasePath: join(runtimeRoot, 'control', 'kernel.db') });
+  configuredDatabase.close();
+  const monitor = createKernelMonitorServer({ projectRoot, runtimeRoot, sessionRoot: runtimeRoot, monitorDatabasePath: ':memory:', host: '127.0.0.1', port: 0 });
+  t.after(async () => { await monitor.close(); rmSync(runtimeRoot, { recursive: true, force: true }); });
+  assert.equal(monitor.kernel.database.path, join(runtimeRoot, 'control', 'kernel.db'));
 });

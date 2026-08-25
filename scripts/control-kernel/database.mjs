@@ -33,13 +33,15 @@ export function resolveKernelConfig(options = {}) {
   const projectRoot = resolve(options.projectRoot ?? process.env.OPENCLAW_PROJECT_ROOT ?? process.cwd());
   const local = readEnvironmentFile(join(projectRoot, '.env'));
   const env = (name) => process.env[name] ?? local[name];
+  const runtimeRoot = resolve(options.runtimeRoot ?? env('OPENCLAW_RUNTIME_ROOT') ?? join(projectRoot, 'runtime'));
   const configuredPath = options.databasePath ?? env('OPENCLAW_KERNEL_DB_PATH');
-  const databasePath = configuredPath === ':memory:' ? ':memory:' : resolve(projectRoot, configuredPath ?? join('runtime', 'control', 'kernel.db'));
+  const databasePath = configuredPath === ':memory:' ? ':memory:' : resolve(projectRoot, configuredPath ?? join(runtimeRoot, 'control', 'kernel.db'));
   if (databasePath !== ':memory:' && (/^[\\/]{2}/u.test(String(configuredPath ?? '')) || /^[\\/]{2}/u.test(databasePath))) {
     throw Object.assign(new Error('Control Kernel SQLite must use a local filesystem path'), { code: 'KERNEL_DB_NETWORK_PATH_FORBIDDEN' });
   }
   return {
     projectRoot,
+    runtimeRoot,
     databasePath,
     busyTimeoutMs: positiveInteger(options.busyTimeoutMs ?? env('OPENCLAW_KERNEL_BUSY_TIMEOUT_MS'), 5000),
     leaseSeconds: positiveInteger(options.leaseSeconds ?? env('OPENCLAW_KERNEL_LEASE_SECONDS'), 120),

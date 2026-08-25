@@ -1,6 +1,6 @@
 # 人工审批协议
 
-审批事实由 Orchestrator 写入 SQLite `approvals`；Manager 只在原始绑定 Session 中把问题和选项转达给用户，再提交结构化 `DECISION` 请求。Worker、HR 和 Monitor 都不能创建“已批准”事实。
+审批事实由 Orchestrator 写入 SQLite `approvals`；Manager 可在原始绑定 Session 中转达问题并提交结构化 `DECISION` 请求，Monitor 也可把本机用户点击的选择写入本地审批命令队列。两条路径都由 Orchestrator 校验和写入最终事实。Worker、HR 和 Monitor 页面都不能直接创建“已批准”事实。
 
 ## 触发
 
@@ -12,7 +12,7 @@
 
 ## 绑定与选择
 
-决定必须绑定当前 workflow、原始 Manager Session、`decision_id` 和允许的 choice。过期、重复、跨 workflow 或 Session 不匹配的决定会被拒绝。
+决定必须绑定当前 workflow、`decision_id` 和允许的 choice。Manager 决定还必须绑定原始 Manager Session；Monitor 命令必须精确匹配当前的 workflow/run/task。过期、重复、跨 workflow、Session 不匹配或不存在的选项会被拒绝。
 
 常见 choice：
 

@@ -1,6 +1,6 @@
 # Monitor 运维说明
 
-Monitor 是单机、只读的观测界面。它从 `runtime/control/kernel.db` 读取工作流事实，从 OpenClaw Session 目录读取可显示的会话文本，并把可重建的健康、活动和 SSE 游标写入 `runtime/monitor/monitor.db`。
+Monitor 是单机观测界面。它从 `runtime/control/kernel.db` 读取工作流事实，从 OpenClaw Session 目录读取可显示的会话文本，并把可重建的健康、活动和 SSE 游标写入 `runtime/monitor/monitor.db`。对人工审批，它只把用户选择写入本地命令队列；不直接写 Kernel。
 
 ## 启动
 
@@ -37,6 +37,8 @@ npm run monitor:start
 - `GET /api/hr/jobs`
 - `GET /api/hr/outputs`
 - `GET /api/agents/:agent/sessions/:session/messages`（`hr-agent` 返回 `HR_SESSION_PRIVATE`）
+- `POST /api/approvals/resolve`（仅将审批选择排队）
+- `GET /api/approval-commands/:commandId`（读取 Orchestrator 写入的命令 receipt）
 
 快照 diff 来自目标 Git 仓库，即使原任务 worktree 已清理仍可读取。Monitor 的 HR 输出来自 SQLite 中已校验的结构化 findings，不读取或展示 HR 原始 Session/dossier。Monitor 不提供 restore/revert HTTP 写接口；使用 Orchestrator CLI。
 
@@ -46,7 +48,7 @@ Monitor 不负责：
 
 - 调度或继续 workflow；
 - 自动运行 HR；
-- 创建审批或代用户决定；
+- 直接创建审批事实、代用户决定或修改 Kernel；
 - restore、revert 或改写 Git；
 - 修复 Kernel。
 
@@ -56,7 +58,7 @@ Monitor 不负责：
 node scripts/orchestrator-cli.mjs retry-notifications --project-root .
 ```
 
-Monitor 不保留通知重试兼容写入口；所有 POST 请求都返回 `MONITOR_READ_ONLY`。
+Monitor 不保留通知重试兼容写入口；除 `/api/approvals/resolve` 外，POST 请求都返回 `MONITOR_READ_ONLY`。该审批接口只接受本机页面的当前审批标识和已显示的选项，实际解析、恢复和 Manager 通知仍由 Orchestrator 完成。
 
 ## 故障与保留
 

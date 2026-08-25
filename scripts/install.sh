@@ -541,10 +541,11 @@ fi
 SRC_COMMON="$PROJECT_ROOT/agents/common"
 SRC_TEMPLATES="$PROJECT_ROOT/templates"
 SRC_SYSTEM_SKILLS="$PROJECT_ROOT/agents/packages/system/skills"
-mkdir -p "$RUNTIME_ROOT_ABS/manager-control" "$RUNTIME_ROOT_ABS/runtime-core"
+mkdir -p "$RUNTIME_ROOT_ABS/manager-control" "$RUNTIME_ROOT_ABS/runtime-core" "$RUNTIME_ROOT_ABS/control-kernel"
 cp -Rf "$PROJECT_ROOT/scripts/manager-control/." "$RUNTIME_ROOT_ABS/manager-control/"
 cp -f "$PROJECT_ROOT/config/manager-control-policy.json" "$RUNTIME_ROOT_ABS/manager-control/manager-control-policy.json"
 cp -Rf "$PROJECT_ROOT/scripts/runtime-core/." "$RUNTIME_ROOT_ABS/runtime-core/"
+cp -Rf "$PROJECT_ROOT/scripts/control-kernel/." "$RUNTIME_ROOT_ABS/control-kernel/"
 for id in "${AGENT_IDS[@]}"; do
   src_ws="${SRC_WS[$id]}"
   dst_ws="${WS[$id]}"

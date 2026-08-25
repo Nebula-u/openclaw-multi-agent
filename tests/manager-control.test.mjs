@@ -5,6 +5,8 @@ import { join } from 'node:path';
 import test from 'node:test';
 import { createManagerControl } from '../scripts/manager-control/service.mjs';
 import { run as runManagerControl } from '../scripts/manager-control/cli.mjs';
+import { openKernelDatabase } from '../scripts/control-kernel/database.mjs';
+import { createWorkflowRepository } from '../scripts/control-kernel/workflow-repository.mjs';
 
 function fixture(t, options = {}) {
   const projectRoot = mkdtempSync(join(tmpdir(), 'manager-control-'));
@@ -77,4 +79,26 @@ test('manager control CLI only exposes semantic project actions', (t) => {
   assert.match(result.projectRef, /^PRJ-/u);
   assert.match(JSON.parse(output.value).projectRef, /^PRJ-/u);
   assert.throws(() => runManagerControl(['ensure', '--project-root', runtimeRoot, '--workflow-id', 'WF-CLI-002', '--project-json', '{"mode":"new","name":"not allowed"}'], output, { runtimeRoot }), (error) => error.code === 'MANAGER_CONTROL_USAGE');
+});
+
+test('manager control reads the bound pending approval and writes a matching decision request', async (t) => {
+  const runtimeRoot = mkdtempSync(join(tmpdir(), 'manager-control-approval-'));
+  const database = openKernelDatabase({ databasePath: join(runtimeRoot, 'control', 'kernel.db') });
+  t.after(() => { database.close(); rmSync(runtimeRoot, { recursive: true, force: true }); });
+  const repository = createWorkflowRepository({ database });
+  const run = await repository.createRun({ workflowId: 'WF-manager-approval', request: {}, targetProjectRootAbs: runtimeRoot, baseCommit: '1'.repeat(40),
+    managerSessionId: 'manager-session', managerSessionKey: 'manager-key', routePlan: { steps: [], route_hash: 'a'.repeat(64) } });
+  const task = await repository.createTask({ runId: run.runId, step: { step_id: 'requirements', kind: 'REQUIREMENTS', title: 'Requirements' }, agentId: 'requirement-agent' });
+  await repository.createApproval({ runId: run.runId, taskId: task.taskId, stepId: task.stepId, trigger: 'REQUIREMENT_AMBIGUITY', request: {
+    decision_id: 'DEC-manager-approval-full', workflow_id: run.workflowId, run_id: run.runId, task_id: task.taskId, summary: 'Approve requirements', options: [{ option_id: 'APPROVE', description: 'Continue' }],
+  } });
+  const output = { value: '', write(value) { this.value += value; } };
+
+  const status = runManagerControl(['orchestrator-status', '--workflow-id', run.workflowId, '--manager-session-id', 'manager-session', '--manager-session-key', 'manager-key'], output, { runtimeRoot });
+  assert.equal(status.pending_approval.decision_id, 'DEC-manager-approval-full');
+  const submitted = runManagerControl(['orchestrator-approve', '--workflow-id', run.workflowId, '--manager-session-id', 'manager-session', '--manager-session-key', 'manager-key',
+    '--decision-id', status.pending_approval.decision_id, '--choice', 'APPROVE', '--authorization-json', '{"confirmed":true,"actor":"human:test","message":"approve"}'], output, { runtimeRoot });
+  const request = JSON.parse(readFileSync(submitted.request_path, 'utf8'));
+  assert.equal(request.decision_id, 'DEC-manager-approval-full');
+  assert.equal(request.choice, 'APPROVE');
 });

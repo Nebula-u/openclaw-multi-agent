@@ -32,6 +32,9 @@ export const INTERNAL_CONTRACTS = new Set([
   // Manager requests are assembled by trusted control-plane code after the
   // human-confirmation check; they are never emitted directly by an Agent.
   'manager-request.schema.json',
+  // Local Monitor approval commands are consumed by the Orchestrator; they are
+  // not emitted by an LLM Agent.
+  'approval-command.schema.json',
   // Control Kernel 事实表投影：由 scripts/control-kernel/repository.mjs 直接
   // 从 SQLite Kernel 行映射产出，不经过任何 Agent。
   'kernel-run.schema.json',

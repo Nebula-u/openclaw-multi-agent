@@ -10,12 +10,13 @@ import { createContextManifest } from './context-manifest.mjs';
 import { createGitWorktreeManager } from './git-worktree.mjs';
 import { createManagerControl } from '../manager-control/service.mjs';
 import { createSnapshotService } from './snapshot-service.mjs';
+import { createApprovalCommandQueue } from './approval-command-queue.mjs';
 import { ingestTaskOutput, writeFailureReceipt } from './output-ingestion.mjs';
 import { runOpenClawAgent } from './openclaw-runner.mjs';
 import { compileRoutePlan, GATE_CHECKS_BY_KIND } from './route-policy.mjs';
 
 function now(clock) { const value = clock(); return value instanceof Date ? value.toISOString() : value; }
-function taskRoot(projectRoot, workflowId, taskId) { return join(projectRoot, 'runtime', 'artifacts', workflowId, taskId); }
+function taskRoot(runtimeRoot, workflowId, taskId) { return join(runtimeRoot, 'artifacts', workflowId, taskId); }
 function taskSession(task) { return `orc-${task.runId.toLowerCase()}-${task.taskId.toLowerCase()}-a${task.attempt}`.slice(0, 120); }
 function processLog(task, name, content) { const path = join(task.artifactRootAbs, 'logs', name); mkdirSync(join(task.artifactRootAbs, 'logs'), { recursive: true }); atomicWriteFile(path, String(content ?? '')); return path; }
 function notificationMessage(notification, run) {
@@ -78,17 +79,19 @@ export async function runWithLeaseHeartbeat({ lease, executionId, run, signal = 
 }
 
 export function createOrchestrator({ projectRoot: projectRootInput, database = null, kernel = null, repository = null, worktrees = null, snapshots = null,
-  projectControl = null, runner = runOpenClawAgent, notificationRunner = runOpenClawAgent, hr = null, clock = () => new Date(), maxAttempts = 3, timeoutSeconds = 900, signal = null } = {}) {
+  runtimeRoot: runtimeRootInput = null, projectControl = null, runner = runOpenClawAgent, notificationRunner = runOpenClawAgent, hr = null, clock = () => new Date(), maxAttempts = 3, timeoutSeconds = 900, signal = null } = {}) {
   const projectRoot = resolve(projectRootInput ?? process.cwd());
+  const runtimeRoot = resolve(runtimeRootInput ?? process.env.OPENCLAW_RUNTIME_ROOT ?? join(projectRoot, 'runtime'));
   const ownedDatabase = !database && !kernel && !repository;
-  const config = resolveKernelConfig({ projectRoot });
+  const config = resolveKernelConfig({ projectRoot, runtimeRoot });
   const selectedDatabase = database ?? kernel?.database ?? (repository ? null : openKernelDatabase(config));
   const selectedKernel = kernel ?? createKernel({ database: selectedDatabase, workerId: config.workerId, leaseSeconds: config.leaseSeconds, clock });
   const selectedRepository = repository ?? createWorkflowRepository({ database: selectedDatabase, clock });
   const selectedWorktrees = worktrees ?? createGitWorktreeManager({ projectRoot });
-  const selectedProjectControl = projectControl ?? createManagerControl({ projectRoot, runtimeRoot: join(projectRoot, 'runtime'), clock });
+  const selectedProjectControl = projectControl ?? createManagerControl({ projectRoot, runtimeRoot, clock });
   const selectedSnapshots = snapshots ?? createSnapshotService({ repository: selectedRepository, worktrees: selectedWorktrees });
   const registry = loadActiveAgentRegistry(projectRoot);
+  const approvalCommands = createApprovalCommandQueue({ projectRoot, runtimeRoot, resolve: resolveApprovalCommand });
   let hrService = hr;
 
   async function announce(run, type, payload, taskId = null) {
@@ -187,7 +190,7 @@ export function createOrchestrator({ projectRoot: projectRootInput, database = n
     let stored = prior.find((task) => task.stepId === step.step_id);
     if (!stored) stored = await selectedRepository.createTask({ runId: run.runId, step, agentId: step.agent_id, inputCommit: run.candidateCommit ?? run.baseCommit, maxAttempts, payload: { step, prior_artifacts: prior.filter((task) => task.state === 'SUCCEEDED').map((task) => task.payload?.published_output_path_abs).filter(Boolean) } });
     if (stored.state !== 'READY') return { stored, task: null };
-    const artifactRootAbs = taskRoot(projectRoot, run.workflowId, stored.taskId);
+    const artifactRootAbs = taskRoot(runtimeRoot, run.workflowId, stored.taskId);
     mkdirSync(artifactRootAbs, { recursive: true });
     const prepared = selectedWorktrees.prepare({ workflowId: run.workflowId, taskId: stored.taskId, runId: run.runId, attempt: stored.attempt,
       inputCommit: stored.inputCommit, targetProjectRootAbs: run.targetProjectRootAbs });
@@ -304,37 +307,56 @@ export function createOrchestrator({ projectRoot: projectRootInput, database = n
   }
 
   async function tickAll() {
+    await approvalCommands.scan();
     const runs = await selectedRepository.listRuns(); const results = [];
     for (const run of runs) if (run.state === 'ACTIVE') results.push(await tick(run.workflowId));
     await deliverNotifications(); return results;
   }
 
-  async function decide(request) {
-    const run = await selectedRepository.getRun(request.workflow_id);
-    if (!run) throw Object.assign(new Error(`workflow not found: ${request.workflow_id}`), { code: 'WORKFLOW_NOT_FOUND' });
-    if (run.managerSessionId !== request.manager_session_id || run.managerSessionKey !== request.manager_session_key) throw Object.assign(new Error('decision session does not match workflow origin'), { code: 'MANAGER_SESSION_MISMATCH' });
-    const approval = await selectedRepository.resolveApproval({ decisionId: request.decision_id, response: { outcome: request.choice, notes: request.notes ?? '', actor: request.user_authorized.actor, decided_at: request.submitted_at ?? now(clock) } });
+  async function resolveDecision({ run, decisionId, choice, notes = '', actor }) {
+    const pending = (await selectedRepository.listApprovals({ runId: run.runId, status: 'PENDING' })).find((item) => item.decisionId === decisionId);
+    if (!pending) throw Object.assign(new Error('approval not found or already resolved'), { code: 'APPROVAL_NOT_PENDING' });
+    const allowed = pending.request?.options?.map((option) => option.option_id).filter(Boolean) ?? [];
+    if (!allowed.includes(choice)) throw Object.assign(new Error('approval choice is not allowed'), { code: 'APPROVAL_OPTION_INVALID' });
+    const approval = await selectedRepository.resolveApproval({ decisionId, response: { outcome: choice, notes, actor, decided_at: now(clock) } });
     const task = approval.taskId ? await selectedRepository.getTask(approval.taskId) : null;
-    if (['CANCEL', 'ABORT', 'REJECTED'].includes(request.choice)) {
+    if (['CANCEL', 'ABORT', 'REJECTED'].includes(choice)) {
       if (task) {
         const cancelled = await selectedRepository.updateTask(task.taskId, { state: 'CANCELLED' }, { eventType: 'TASK_CANCELLED_BY_HUMAN', eventPayload: { decision_id: approval.decisionId } });
         await queueDailyReport(run, cancelled, 'CANCELLED');
       }
       return finishRun(run, 'CANCELLED', 'user declined an approval through Manager');
     }
-    if (['REWORK', 'REVISE'].includes(request.choice) && task) {
+    if (['REWORK', 'REVISE'].includes(choice) && task) {
       await selectedRepository.updateTask(task.taskId, { state: 'READY', attempt: task.attempt + 1, contextManifest: {} }, { eventType: 'TASK_REWORK_APPROVED', eventPayload: { decision_id: approval.decisionId } });
       const active = await selectedRepository.updateRun(run.runId, { state: 'ACTIVE', statusReason: 'user requested rework' }, { eventType: 'WORKFLOW_RESUMED', eventPayload: { decision_id: approval.decisionId } });
       await announce(active, 'TASK_REWORK_APPROVED', { task_id: task.taskId, decision_id: approval.decisionId }, task.taskId);
       return active;
     }
     const nextIndex = run.currentStepIndex + 1;
-    const resumed = await selectedRepository.updateRun(run.runId, { state: 'ACTIVE', currentStepIndex: nextIndex, statusReason: 'human approval accepted' }, { eventType: 'WORKFLOW_RESUMED', eventPayload: { decision_id: approval.decisionId, choice: request.choice } });
-    await announce(resumed, 'HUMAN_APPROVAL_RESOLVED', { decision_id: approval.decisionId, choice: request.choice }, task?.taskId ?? null);
+    const resumed = await selectedRepository.updateRun(run.runId, { state: 'ACTIVE', currentStepIndex: nextIndex, statusReason: 'human approval accepted' }, { eventType: 'WORKFLOW_RESUMED', eventPayload: { decision_id: approval.decisionId, choice } });
+    await announce(resumed, 'HUMAN_APPROVAL_RESOLVED', { decision_id: approval.decisionId, choice }, task?.taskId ?? null);
     return nextIndex >= run.routePlan.steps.length ? finishRun(resumed, 'SUCCEEDED', 'all route steps approved') : resumed;
+  }
+
+  async function resolveApprovalCommand(command) {
+    const run = await selectedRepository.getRun(command.workflow_id);
+    if (!run) throw Object.assign(new Error(`workflow not found: ${command.workflow_id}`), { code: 'WORKFLOW_NOT_FOUND' });
+    if (run.runId !== command.run_id) throw Object.assign(new Error('approval command run does not match workflow'), { code: 'APPROVAL_COMMAND_RUN_MISMATCH' });
+    const approval = (await selectedRepository.listApprovals({ runId: run.runId, status: 'PENDING' })).find((item) => item.decisionId === command.decision_id);
+    if (!approval) throw Object.assign(new Error('approval not found or already resolved'), { code: 'APPROVAL_NOT_PENDING' });
+    if (approval.taskId !== command.task_id) throw Object.assign(new Error('approval command task does not match pending approval'), { code: 'APPROVAL_COMMAND_TASK_MISMATCH' });
+    return resolveDecision({ run, decisionId: command.decision_id, choice: command.choice, notes: command.notes, actor: command.actor });
+  }
+
+  async function decide(request) {
+    const run = await selectedRepository.getRun(request.workflow_id);
+    if (!run) throw Object.assign(new Error(`workflow not found: ${request.workflow_id}`), { code: 'WORKFLOW_NOT_FOUND' });
+    if (run.managerSessionId !== request.manager_session_id || run.managerSessionKey !== request.manager_session_key) throw Object.assign(new Error('decision session does not match workflow origin'), { code: 'MANAGER_SESSION_MISMATCH' });
+    return resolveDecision({ run, decisionId: request.decision_id, choice: request.choice, notes: request.notes ?? '', actor: request.user_authorized.actor });
   }
 
   async function close() { if (ownedDatabase) selectedDatabase.close(); }
   function attachHrService(value) { hrService = value; return hrService; }
-  return { projectRoot, repository: selectedRepository, kernel: selectedKernel, snapshots: selectedSnapshots, createRun, reviseRun, decide, tick, tickAll, deliverNotifications, attachHrService, close };
+  return { projectRoot, runtimeRoot, repository: selectedRepository, kernel: selectedKernel, snapshots: selectedSnapshots, approvalCommands, createRun, reviseRun, decide, resolveApprovalCommand, tick, tickAll, deliverNotifications, attachHrService, close };
 }

@@ -17,7 +17,7 @@ Node Orchestrator ───── OpenClaw Agent Sessions
         ├─ Git: worktree + commit + refs/openclaw/snapshots/*
         └─ artifacts: runtime/artifacts/*
 
-Read-only Monitor ── SQLite facts + redacted Sessions
+Monitor ── SQLite facts + redacted Sessions
 ```
 
 边界：
@@ -111,7 +111,7 @@ npm run orchestrator:stop
 npm run monitor:start
 ```
 
-打开 `http://127.0.0.1:4319/`。Monitor 不执行 workflow、HR、restore 或 revert。
+打开 `http://127.0.0.1:4319/`。Monitor 可以把当前人工审批的选择写入本地 Orchestrator 命令队列；Orchestrator 才会验证、推进 workflow 并通知 Manager。Monitor 不执行 workflow、HR、restore 或 revert。
 
 ## Git 快照与回滚
 
@@ -188,11 +188,13 @@ node scripts/orchestrator-cli.mjs kernel-status --project-root .
 
 只读命令不会创建缺失的 Kernel。所有写命令与正在运行的前台 Orchestrator 互斥；冲突返回 `WORKFLOW_LOCK_CONFLICT`。停止命令只写服务控制文件，因此仍可在前台服务持锁时使用。
 
-通知重试由 Orchestrator CLI 执行；Monitor 保持只读：
+通知重试由 Orchestrator CLI 执行：
 
 ```text
 node scripts/orchestrator-cli.mjs retry-notifications --project-root .
 ```
+
+当 workflow 显示 `WAITING_HUMAN` 时，Monitor 会显示当前审批的真实选项。点击后仅显示“已排队”；前台 Orchestrator 在下一个轮询周期写入最终审批结果，并向原 Manager Session 发送通知。Manager 也可通过受限的 `manager-control orchestrator-status` 读取完整 pending `decision_id`，并通过 `orchestrator-approve` 创建绑定当前 Session 的 DECISION request；两者都不会直接写 Kernel。
 
 ## 备份和恢复
 

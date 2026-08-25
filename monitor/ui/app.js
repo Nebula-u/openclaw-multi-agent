@@ -3,12 +3,13 @@
 
   const sameOrigin = window.location.protocol !== 'file:';
   const defaultApi = window.MONITOR_CONFIG?.apiUrl || (sameOrigin ? window.location.origin : 'http://127.0.0.1:4319');
-  const state = { apiUrl: defaultApi.replace(/\/$/u, ''), workflows: [], snapshot: null, selectedWorkflowId: localStorage.getItem('openclaw.monitor.workflow') || null, selectedSessionKey: localStorage.getItem('openclaw.monitor.session') || null, source: null, renderedSessionKey: null };
+  const state = { apiUrl: defaultApi.replace(/\/$/u, ''), workflows: [], snapshot: null, selectedWorkflowId: localStorage.getItem('openclaw.monitor.workflow') || null, selectedSessionKey: localStorage.getItem('openclaw.monitor.session') || null, source: null, renderedSessionKey: null, queuedApprovals: new Map() };
   const $ = (id) => document.getElementById(id);
   const escapeHtml = (value) => String(value ?? '').replace(/[&<'"]/gu, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[char]));
   const selected = () => state.workflows.find((item) => item.workflow_id === state.selectedWorkflowId) || null;
   const time = (value) => value ? new Date(value).toLocaleString('zh-CN', { hour12: false }) : '--';
   const request = async (path) => { const response = await fetch(`${state.apiUrl}${path}`); const body = await response.json(); if (!response.ok) throw new Error(body.message || body.error || `HTTP ${response.status}`); return body; };
+  const post = async (path, value) => { const response = await fetch(`${state.apiUrl}${path}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(value) }); const body = await response.json(); if (!response.ok) throw new Error(body.message || body.error || `HTTP ${response.status}`); return body; };
   function setConnection(online, label) { $('connection-dot').classList.toggle('online', online); $('connection-state').textContent = label; }
   function taskClass(task) { return String(task.status || 'unknown').toLowerCase(); }
   function renderWorkflows() {
@@ -46,10 +47,38 @@
       $('session-window').scrollTop = $('session-window').scrollHeight;
     } catch (error) { $('session-window').innerHTML = `<p class="empty-note">无法读取会话：${escapeHtml(error.message)}</p>`; }
   }
+  const approvalKey = (workflow, approval) => `${workflow.workflow_id}:${approval.decisionId ?? approval.decision_id}`;
+  async function waitForApprovalReceipt(commandId, key, attempts = 0) {
+    try {
+      const value = await request(`/api/approval-commands/${encodeURIComponent(commandId)}`);
+      state.queuedApprovals.set(key, { commandId, status: value.receipt.status });
+      const receipt = value.receipt; $('approval-view').innerHTML = `<p>${escapeHtml(receipt.status === 'ACCEPTED' ? '审批已由 Orchestrator 接受。' : `审批被拒绝：${receipt.error?.message || receipt.error?.code || '未知错误'}`)}</p>`;
+      void reload();
+    } catch (error) {
+      if (attempts < 20 && /APPROVAL_COMMAND_RECEIPT_NOT_FOUND|HTTP 404/u.test(error.message)) setTimeout(() => { void waitForApprovalReceipt(commandId, key, attempts + 1); }, 1000);
+      else $('approval-view').innerHTML = `<p>审批命令已提交：${escapeHtml(commandId)}。${escapeHtml(error.message)}</p>`;
+    }
+  }
+  async function submitApproval(workflow, approval, choice) {
+    const key = approvalKey(workflow, approval); if (state.queuedApprovals.has(key)) return;
+    state.queuedApprovals.set(key, { commandId: null, status: 'SUBMITTING' }); render();
+    const root = $('approval-view'); root.querySelectorAll('button').forEach((button) => { button.disabled = true; });
+    try {
+      const result = await post('/api/approvals/resolve', { workflow_id: workflow.workflow_id, run_id: workflow.run_id, task_id: approval.taskId ?? approval.task_id ?? null,
+        decision_id: approval.decisionId ?? approval.decision_id, choice, notes: '' });
+      state.queuedApprovals.set(key, { commandId: result.command_id, status: 'QUEUED' }); render();
+      void waitForApprovalReceipt(result.command_id, key);
+    } catch (error) { state.queuedApprovals.delete(key); root.innerHTML = `<p>无法提交审批：${escapeHtml(error.message)}</p>`; }
+  }
   function renderNotices(workflow) {
     const notices = (state.snapshot?.notifications || []).filter((item) => item.runId === workflow?.run_id).slice(0, 8); const root = $('notification-list');
     root.innerHTML = notices.length ? notices.map((item) => `<article class="notice ${escapeHtml(String(item.status).toLowerCase())}"><b>${escapeHtml(item.status)}</b><span>${escapeHtml(item.type)}</span><small>${escapeHtml(time(item.createdAt))}</small></article>`).join('') : '<p class="empty-note">没有待转达信息</p>';
-    const approval = workflow?.pending_approval; $('approval-view').textContent = approval ? `${approval.summary || approval.trigger || '等待 Manager 在原生对话中收集用户决定'}` : '没有待审批事项';
+    const approval = workflow?.pending_approval; const approvalRoot = $('approval-view');
+    if (!approval) { for (const key of state.queuedApprovals.keys()) if (key.startsWith(`${workflow?.workflow_id}:`)) state.queuedApprovals.delete(key); approvalRoot.textContent = '没有待审批事项'; return; }
+    const requestValue = approval.request || {}; const options = Array.isArray(requestValue.options) ? requestValue.options : [];
+    const queued = state.queuedApprovals.get(approvalKey(workflow, approval));
+    approvalRoot.innerHTML = `<p>${escapeHtml(requestValue.summary || approval.trigger || '需要人工决定')}</p>${queued ? `<p>审批命令${queued.commandId ? `已提交：${escapeHtml(queued.commandId)}` : '正在提交'}。</p>` : ''}${options.length ? `<div class="approval-actions">${options.map((option) => `<button type="button" data-approval-choice="${escapeHtml(option.option_id)}"${queued ? ' disabled' : ''}>${escapeHtml(option.description || option.option_id)}</button>`).join('')}</div>` : '<p>审批选项不可用。</p>'}`;
+    approvalRoot.querySelectorAll('[data-approval-choice]').forEach((button) => button.addEventListener('click', () => { void submitApproval(workflow, approval, button.dataset.approvalChoice); }));
   }
   function renderHr(workflow) {
     const alerts = (state.snapshot?.hr_alerts || []).filter((item) => !workflow || item.workflow_id === workflow.workflow_id || item.workflowId === workflow.workflow_id); $('alert-count').textContent = alerts.length;

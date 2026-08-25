@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { existsSync, mkdtempSync, readFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import test from 'node:test';
@@ -107,10 +107,12 @@ test('Manager workspace documents the current request queue protocol', () => {
   assert.equal(existsSync(join(ROOT, 'templates', 'manager-request.decision.json')), true);
   assert.match(managerRules, /session_status/u);
   assert.match(managerRules, /templates\/manager-request\.json/u);
+  assert.match(managerRules, /orchestrator-status/u);
   assert.match(managerRules, /\.orchestrator\/receipts/u);
   assert.match(managerRules, /requirement-agent/u);
   assert.doesNotMatch(managerTools, /\.agent-raw\/route-plan\.json\.raw/u);
   assert.doesNotMatch(managerTools, /validate-request/u);
+  assert.match(managerTools, /orchestrator-approve/u);
   assert.match(managerTemplates, /manager-request\.change\.json/u);
   assert.match(managerTemplates, /manager-request\.decision\.json/u);
 });
@@ -172,6 +174,13 @@ test('foreground service polls automatically and exits cleanly after a stop requ
   assert.equal(hrRuns, 0);
   assert.equal(readForegroundServiceStatus(projectRoot).state, 'STOPPED');
   assert.throws(() => requestForegroundServiceStop(mkdtempSync(join(tmpdir(), 'orchestrator-not-running-'))), (error) => error.code === 'ORCHESTRATOR_NOT_RUNNING');
+});
+
+test('Manager request queue uses the Orchestrator runtime root by default', (t) => {
+  const runtimeRoot = mkdtempSync(join(tmpdir(), 'orchestrator-manager-runtime-'));
+  t.after(() => rmSync(runtimeRoot, { recursive: true, force: true }));
+  const queue = createManagerRequestProcessor({ orchestrator: { projectRoot: ROOT, runtimeRoot, async tickAll() { return []; } }, projectRoot: ROOT });
+  assert.equal(queue.root, join(runtimeRoot, 'agents', 'manager-agent', 'workspace', '.orchestrator'));
 });
 
 test('Manager CREATE request accepts a logical managed project reference', () => {

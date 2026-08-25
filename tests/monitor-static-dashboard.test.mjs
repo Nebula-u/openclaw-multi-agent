@@ -22,9 +22,13 @@ test('local dashboard opens without a build step and contains no external runtim
   assert.match(script, /hr-alert/u);
   assert.match(script, /api\/workflows\/stream/u);
   assert.match(html, /id="connection-state"/u);
-  assert.doesNotMatch(script, /method:\s*'POST'/u);
+  assert.match(script, /api\/approvals\/resolve/u);
+  assert.match(script, /method:\s*'POST'/u);
+  assert.match(script, /api\/approval-commands\//u);
+  assert.match(script, /queuedApprovals/u);
   assert.match(html, /id="session-window"/u);
   assert.match(html, /id="alert-list"/u);
+  assert.match(html, /id="approval-view"/u);
   assert.doesNotMatch(`${html}${script}`, /api-token|human-approval\.capability|runtime\.capability/u);
   assert.match(css, /prefers-reduced-motion/u);
   assert.match(css, /prefers-reduced-motion/u);

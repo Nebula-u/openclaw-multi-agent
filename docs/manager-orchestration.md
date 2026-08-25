@@ -6,7 +6,7 @@
 
 Manager 请求写入受管理 request queue，并绑定 `manager_session_id` 与 `manager_session_key`。Orchestrator 校验 `contracts/manager-request.schema.json`、目标 Git 根目录、路线顺序、跳过理由和固定 Agent 映射，再创建或修订 run。
 
-Manager 不能指定任意 worker、直接调用其他 Agent、修改 task/attempt/candidate/snapshot、把自己的总结当作执行事实，或在用户没有明确选择时生成批准结果。
+Manager 不能指定任意 worker、直接调用其他 Agent、修改 task/attempt/candidate/snapshot、把自己的总结当作执行事实，或在用户没有明确选择时生成批准结果。它可通过固定的 `manager-control orchestrator-status` 读取自己绑定 workflow 的完整 pending approval，并通过 `orchestrator-approve` 生成同一绑定下的 DECISION request。
 
 ## 串行执行
 

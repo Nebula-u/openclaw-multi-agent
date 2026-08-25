@@ -88,7 +88,7 @@ export async function main(argv = process.argv.slice(2)) {
   const serveAbortController = command === 'serve' ? new AbortController() : null;
   let orchestrator;
   try {
-    orchestrator = createOrchestrator({ projectRoot, signal: serveAbortController?.signal ?? null });
+    orchestrator = createOrchestrator({ projectRoot, runtimeRoot: process.env.OPENCLAW_RUNTIME_ROOT ?? null, signal: serveAbortController?.signal ?? null });
     const hr = createHrService({ projectRoot, repository: orchestrator.repository, snapshots: orchestrator.snapshots });
     orchestrator.attachHrService(hr);
     if (command === 'serve') {

@@ -429,12 +429,15 @@ try {
   $managerControlSource = Join-Path $ProjectRoot 'scripts\manager-control'
   $managerControlPolicySource = Join-Path $ProjectRoot 'config\manager-control-policy.json'
   $runtimeCoreSource = Join-Path $ProjectRoot 'scripts\runtime-core'
+  $controlKernelSource = Join-Path $ProjectRoot 'scripts\control-kernel'
   $managerControlTarget = Join-Path $RuntimeRootAbs 'manager-control'
   $runtimeCoreTarget = Join-Path $RuntimeRootAbs 'runtime-core'
-  New-Item -ItemType Directory -Force -Path $managerControlTarget, $runtimeCoreTarget | Out-Null
+  $controlKernelTarget = Join-Path $RuntimeRootAbs 'control-kernel'
+  New-Item -ItemType Directory -Force -Path $managerControlTarget, $runtimeCoreTarget, $controlKernelTarget | Out-Null
   Copy-Item -Path (Join-Path $managerControlSource '*') -Destination $managerControlTarget -Recurse -Force
   Copy-Item -LiteralPath $managerControlPolicySource -Destination (Join-Path $managerControlTarget 'manager-control-policy.json') -Force
   Copy-Item -Path (Join-Path $runtimeCoreSource '*') -Destination $runtimeCoreTarget -Recurse -Force
+  Copy-Item -Path (Join-Path $controlKernelSource '*') -Destination $controlKernelTarget -Recurse -Force
   foreach ($p in $RegisteredPackages) {
     New-Item -ItemType Directory -Force -Path $p.workspace, $p.agentDir | Out-Null
     Copy-Item -Path (Join-Path $p.workspace_source '*') -Destination $p.workspace -Recurse -Force

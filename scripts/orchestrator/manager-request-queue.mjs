@@ -6,12 +6,12 @@ import { assertManagerRequest } from './request-validation.mjs';
 
 const PROCESSED_NOW = Symbol('processedNow');
 function sha256(value) { return createHash('sha256').update(value, 'utf8').digest('hex'); }
-function requestRoot(projectRoot, managerWorkspace) { return join(resolve(managerWorkspace ?? join(projectRoot, 'runtime', 'agents', 'manager-agent', 'workspace')), '.orchestrator'); }
+function requestRoot(projectRoot, managerWorkspace, runtimeRoot) { return join(resolve(managerWorkspace ?? join(runtimeRoot ?? join(projectRoot, 'runtime'), 'agents', 'manager-agent', 'workspace')), '.orchestrator'); }
 
 export function createManagerRequestProcessor({ orchestrator, projectRoot: projectRootInput, managerWorkspace = null } = {}) {
   if (!orchestrator) throw new TypeError('orchestrator is required');
   const projectRoot = resolve(projectRootInput ?? orchestrator.projectRoot ?? process.cwd());
-  const root = requestRoot(projectRoot, managerWorkspace);
+  const root = requestRoot(projectRoot, managerWorkspace, orchestrator.runtimeRoot ? resolve(orchestrator.runtimeRoot) : null);
   const requests = join(root, 'requests'); const receipts = join(root, 'receipts');
   mkdirSync(requests, { recursive: true }); mkdirSync(receipts, { recursive: true });
   let scanning = false;

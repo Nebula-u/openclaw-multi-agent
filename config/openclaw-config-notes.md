@@ -44,7 +44,7 @@ package manifest 用 `delegation_mode=off` 表达 Manager 不承担派发职责�
 
 ## 4. sandbox 与工具
 
-- `manager-agent`：`sandbox.mode=off`。它的 `exec` 固定为 gateway host、`security=allowlist`、`ask=off`、`strictInlineEval=true`；安装器会完整替换该 Agent 的 host allowlist，仅保留 runtime bundle 中的 `manager-control` 精确入口，不放行 PowerShell、cmd、git、node 或其它解释器，也不改变其它 Agent 的审批项。入口从自身受安装器校验的位置解析唯一 runtime 和 Git 主机策略，用逻辑 `project_ref` 创建受管理项目、初始化 Git，并只允许对配置白名单中的 Git 主机 clone/fetch；默认白名单为空，禁止远程写入。
+- `manager-agent`：`sandbox.mode=off`。它的 `exec` 固定为 gateway host、`security=allowlist`、`ask=off`、`strictInlineEval=true`；安装器会完整替换该 Agent 的 host allowlist，仅保留 runtime bundle 中的 `manager-control` 精确入口，不放行 PowerShell、cmd、git、node 或其它解释器，也不改变其它 Agent 的审批项。入口从自身受安装器校验的位置解析唯一 runtime 和 Git 主机策略，用逻辑 `project_ref` 创建受管理项目、初始化 Git，并只允许对配置白名单中的 Git 主机 clone/fetch；默认白名单为空，禁止远程写入。该入口还只能读取同一 Manager Session 绑定的 workflow / pending approval，或在用户明确选择后写入一条受约束的 `DECISION` 请求，不能直接改写 Kernel。
 - `test-agent`：`sandbox.mode=all`，Docker backend，`workspaceAccess=none`，`exec.host=sandbox`，network none、只读 rootfs、drop ALL capabilities、非 root 和资源限制。
 - 其他 Worker：按 package manifest 配置；所有 Worker 的 Agent 派生白名单为空。
 

@@ -74,6 +74,8 @@ test('SQLite kernel config defaults below runtime/control and has no PostgreSQL 
   assert.equal('kernelSchema' in config, false);
   assert.equal(resolveKernelConfig({ projectRoot, databasePath: 'custom/kernel.db' }).databasePath,
     join(projectRoot, 'custom', 'kernel.db'));
+  assert.equal(resolveKernelConfig({ projectRoot, runtimeRoot: join(projectRoot, 'alternate-runtime') }).databasePath,
+    join(projectRoot, 'alternate-runtime', 'control', 'kernel.db'));
   assert.throws(() => resolveKernelConfig({ projectRoot, databasePath: '\\\\server\\share\\kernel.db' }),
     (error) => error.code === 'KERNEL_DB_NETWORK_PATH_FORBIDDEN');
 });
