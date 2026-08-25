@@ -118,3 +118,16 @@ test('Manager runtime bundle includes the fixed manager-control entrypoint', () 
     assert.equal(bundle.entries.some((entry) => entry.target_rel === 'control-kernel/database.mjs'), true);
   } finally { rmSync(runtime, { recursive: true, force: true }); }
 });
+
+test('all worker packages receive the result hash and same-session JSON regeneration protocol', () => {
+  const protocol = readFileSync(join(ROOT, 'agents', 'common', 'CONTEXT_PROTOCOL.md'), 'utf8');
+  assert.match(protocol, /artifact_manifest_hash/u);
+  assert.match(protocol, /context_manifest_sha256/u);
+  assert.match(protocol, /同一 Session/u);
+  assert.match(protocol, /不得重新执行任务/u);
+  for (const agentId of ['requirement-agent', 'architect-agent', 'developer-agent', 'test-agent', 'review-agent', 'release-agent']) {
+    const agentsMd = readFileSync(join(ROOT, 'agents', agentId, 'workspace', 'AGENTS.md'), 'utf8');
+    assert.match(agentsMd, /artifact_manifest_hash/u, agentId);
+    assert.match(agentsMd, /JSON 重生成/u, agentId);
+  }
+});

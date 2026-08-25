@@ -123,6 +123,35 @@ test('错误分类和模板区分截断、enum/type 与 schema drift', () => {
   assert.match(buildJsonRepairPrompt({ classification: 'OUTPUT_TRUNCATED', errors: [], retryNumber: 2 }), /截断/);
 });
 
+test('固定重生成提示明确指出缺失字段并禁止重新执行任务', () => {
+  const prompt = buildJsonRepairPrompt({
+    classification: 'SCHEMA_DRIFT',
+    retryNumber: 1,
+    rawOutputPath: 'F:/artifact/.agent-raw/result.json.raw',
+    contextManifestSha256: 'a'.repeat(64),
+    errors: [{ instancePath: '', keyword: 'required', params: { missingProperty: 'artifact_manifest_hash' }, message: "must have required property 'artifact_manifest_hash'" }],
+  });
+  assert.match(prompt, /缺少必填字段：artifact_manifest_hash/u);
+  assert.match(prompt, /artifact_manifest_hash.*context_manifest_sha256/u);
+  assert.match(prompt, /a{64}/u);
+  assert.match(prompt, /不得重新执行任务/u);
+  assert.match(prompt, /不得调用工具/u);
+  assert.match(prompt, /F:\/artifact\/\.agent-raw\/result\.json\.raw/u);
+});
+
+test('固定重生成提示明确指出字段路径和格式约束', () => {
+  const prompt = buildJsonRepairPrompt({
+    classification: 'TYPE_VIOLATION',
+    retryNumber: 2,
+    errors: [
+      { instancePath: '/attempt', keyword: 'type', params: { type: 'integer' }, message: 'must be integer' },
+      { instancePath: '/artifact_manifest_hash', keyword: 'pattern', params: { pattern: '^[a-f0-9]{64}$' }, message: 'must match pattern' },
+    ],
+  });
+  assert.match(prompt, /字段 \/attempt：类型必须为 integer/u);
+  assert.match(prompt, /字段 \/artifact_manifest_hash：格式必须匹配 \^\[a-f0-9\]\{64\}\$/u);
+});
+
 test('收集器只创建一个 Gateway 客户端并打包每个最终失败回复', async () => {
   const root = mkdtempSync(join(tmpdir(), 'agent-llm-collector-'));
   const scenario = {

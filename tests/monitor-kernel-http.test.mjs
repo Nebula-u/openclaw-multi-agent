@@ -33,6 +33,10 @@ test('Kernel Monitor exposes read-only workflow, HR and session endpoints', asyn
   const address = await monitor.start();
   try {
     const base = `http://127.0.0.1:${address.port}`;
+    const approvalStyles = await fetch(`${base}/approval.css`);
+    assert.equal(approvalStyles.status, 200);
+    assert.match(approvalStyles.headers.get('content-type') ?? '', /^text\/css/u);
+    assert.match(await approvalStyles.text(), /\.approval-card/u);
     const workflows = await fetch(`${base}/api/workflows`, { headers: { origin: 'null' } });
     assert.equal(workflows.status, 200); const workflowBody = await workflows.json();
     assert.equal(workflowBody.workflows[0].workflow_id, workflowId);

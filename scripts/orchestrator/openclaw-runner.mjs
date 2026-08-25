@@ -34,6 +34,25 @@ export function buildOpenClawAgentArgs({ agentId, sessionId, messagePath, timeou
   return args;
 }
 
+export function extractFinalAssistantText(stdout) {
+  let envelope;
+  try { envelope = JSON.parse(String(stdout ?? '')); }
+  catch { throw Object.assign(new Error('OpenClaw JSON stdout could not be parsed during JSON repair'), { code: 'OPENCLAW_REPAIR_OUTPUT_INVALID' }); }
+  const text = envelope?.result?.finalAssistantVisibleText
+    ?? envelope?.result?.payloads?.find((item) => typeof item?.text === 'string' && item.text.trim())?.text;
+  if (typeof text !== 'string' || !text.trim()) {
+    throw Object.assign(new Error('OpenClaw repair turn returned no final assistant JSON text'), { code: 'OPENCLAW_REPAIR_OUTPUT_MISSING' });
+  }
+  const trimmed = text.trim();
+  let value;
+  try { value = JSON.parse(trimmed); }
+  catch { throw Object.assign(new Error('OpenClaw repair turn must return only one complete JSON object'), { code: 'OPENCLAW_REPAIR_OUTPUT_INVALID' }); }
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw Object.assign(new Error('OpenClaw repair turn must return a JSON object'), { code: 'OPENCLAW_REPAIR_OUTPUT_INVALID' });
+  }
+  return trimmed;
+}
+
 export function runOpenClawAgent({ agentId, sessionId, messagePath, timeoutSeconds = 900, deliver = null, thinking = null, signal = null }) {
   if (signal?.aborted) return Promise.reject(Object.assign(new Error('OpenClaw Agent launch was cancelled before dispatch'), { code: 'ORCHESTRATOR_SHUTDOWN' }));
   const args = buildOpenClawAgentArgs({ agentId, sessionId, messagePath, timeoutSeconds, deliver, thinking });

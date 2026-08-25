@@ -70,6 +70,13 @@ export function createGitWorktreeManager({ projectRoot: projectRootInput, runGit
     if (status) fail('TASK_WORKTREE_DIRTY', 'successful Agent worktree contains uncommitted changes', { status });
     return { inputCommit, outputCommit, head, changeSummary: summarize(cwd, inputCommit, outputCommit) };
   }
+  function fingerprint(worktreePathAbs) {
+    const cwd = realpathSync.native(resolve(worktreePathAbs));
+    return {
+      head: git(cwd, ['rev-parse', '--verify', 'HEAD^{commit}'], 'fingerprint worktree HEAD'),
+      status: git(cwd, ['status', '--porcelain=v1', '--untracked-files=all'], 'fingerprint worktree status'),
+    };
+  }
   function pinSnapshot({ targetProjectRootAbs, snapshotId, outputCommit }) {
     const ref = `refs/openclaw/snapshots/${snapshotId}`;
     git(targetProjectRootAbs, ['update-ref', ref, outputCommit, '0'.repeat(40)], 'pin snapshot commit');
@@ -136,6 +143,6 @@ export function createGitWorktreeManager({ projectRoot: projectRootInput, runGit
     const revertedCommit = git(cwd, ['rev-parse', '--verify', 'HEAD^{commit}'], 'resolve revert output');
     return { inputCommit, outputCommit: revertedCommit, worktreePathAbs: cwd, changeSummary: summarize(cwd, inputCommit, revertedCommit) };
   }
-  return { inspectTarget, prepare, pathFor, worktreesRoot, restoresRoot, verifyCompletion, pinSnapshot, unpinSnapshot, captureRecovery,
+  return { inspectTarget, prepare, pathFor, worktreesRoot, restoresRoot, fingerprint, verifyCompletion, pinSnapshot, unpinSnapshot, captureRecovery,
     diffCommits, restoreSnapshot, cleanupRestore, revertSnapshot };
 }

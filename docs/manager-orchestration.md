@@ -14,9 +14,11 @@ Manager 不能指定任意 worker、直接调用其他 Agent、修改 task/attem
 2. 按 task/attempt 创建 context manifest 与独立 detached worktree。
 3. 获取该 task 的 execution lease。
 4. 用固定 Agent ID 和确定性 Session ID 调用 OpenClaw，并在执行期间周期 heartbeat lease。
-5. 校验并接收 result。
+5. 校验并接收 result；JSON 契约失败时在同一 Session 内最多两次只重生成 JSON，不重新执行任务。
 6. `COMPLETED` 走 accepted snapshot；其他状态走 recovery snapshot。
-7. 成功则推进 candidate/route；需要人工决定则写 approval 和 Manager outbox；失败按 bounded attempt 重试。
+7. 成功则推进 candidate/route；需要人工决定则写 approval 和 Manager outbox；JSON 修复预算耗尽后才按 bounded task attempt 重试。
+
+完整 task attempt 重试耗尽时，Orchestrator 创建 `TASK_RETRY_EXHAUSTED` 人工审批，选项包含 `RETRY_SAME_AGENT`、`ABORT` 和 `REWORK`。Manager 必须先用原 Session 绑定查询当前 pending approval，再在用户明确确认后提交原样 choice；Manager 不直接 dispatch、不解除 HOLD，也不自行重置重试计数。Monitor 使用同一审批事实与选项，因此两个入口不会产生不同语义。
 
 前台服务：
 

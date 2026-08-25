@@ -36,6 +36,23 @@ test('lost execution lease aborts the Agent and fails closed', async () => {
   assert.equal(aborted, true);
 });
 
+test('heartbeat cannot revive an execution after its lease deadline', async (t) => {
+  const database = openKernelDatabase({ databasePath: ':memory:' }); t.after(() => database.close());
+  let current = new Date('2026-08-25T00:00:00.000Z');
+  const repository = createWorkflowRepository({ database, clock: () => current });
+  const run = await repository.createRun({ workflowId: 'WF-heartbeat-expired', request: {}, requestSha256: 'a'.repeat(64),
+    targetProjectRootAbs: 'F:/repo', baseCommit: '1'.repeat(40), routePlan: { steps: [] }, routeHash: '2'.repeat(64) });
+  const task = await repository.createTask({ runId: run.runId, step: { kind: 'DEVELOPMENT', step_id: 'code', title: 'Code' },
+    agentId: 'developer-agent', inputCommit: run.baseCommit });
+  const lease = createLease({ database, scheduleSeconds: 120, clock: () => current });
+  const execution = await lease.acquireLease({ executionId: 'EXE-heartbeat-expired', taskId: task.taskId, runId: run.runId,
+    attempt: 1, cycle: 0, workerId: 'worker-one', agentId: 'developer-agent' });
+
+  current = new Date('2026-08-25T00:02:01.000Z');
+  assert.equal(await lease.heartbeat({ executionId: execution.executionId }), null);
+  assert.equal((await lease.reapExpiredLeases()).length, 1);
+});
+
 test('failed task advances to a new attempt before preparing another worktree', async (t) => {
   const database = openKernelDatabase({ databasePath: ':memory:' }); t.after(() => database.close());
   const orchestrator = service.createOrchestrator({ projectRoot: process.cwd(), database,

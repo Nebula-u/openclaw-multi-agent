@@ -64,3 +64,10 @@ Orchestrator 在每次派发前，于 `<artifact_root_abs>/input/` 创建不可�
 3. 读取 manifest 声明的 `context.md` / `rules.md` / `task.json` 与规则快照；不得要求未在 manifest 中声明的模板文件。
 4. 若发现哈希不一致、路径非法或 `assigned_agent` 不匹配 → `BLOCKED`。
 5. 开始工作，只在允许范围内读写。
+
+## 8. Result 产物与同一 Session JSON 重生成
+
+1. 首次写入 `result.schema.json` 前必须逐项核对契约必填字段；`artifact_manifest_hash` 必须逐字复制派发消息中的 `context_manifest_sha256`，为 64 位小写十六进制字符串。
+2. 若 Orchestrator 返回 `JSON_REWRITE_REQUEST`，这是同一 Session 内的 JSON 重生成，不是新的任务 attempt。只能依据提示中列出的缺失字段、类型、枚举或格式错误生成一个完整 JSON，不得重新执行任务、调用工具、修改 worktree、运行命令、重新测试、创建提交、重新收集证据或改变既有事实与审批结论。
+3. JSON 重生成时只在最终回复中返回一个完整 JSON 对象，不自行写文件；Orchestrator 从 OpenClaw JSON stdout 提取最终回复并原子覆盖本次暂存 result。不得返回 JSON Patch、Markdown、解释、确认文本或多个候选对象。
+4. 同一 Session JSON 重生成最多两次；是否接受、是否进入新的完整任务 attempt 由 Orchestrator 决定，Agent 不自行重试或调度。
