@@ -1,4 +1,7 @@
 import assert from 'node:assert/strict';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import test from 'node:test';
 import { inspectAssistantText } from '../scripts/hr/keywords.mjs';
 import { createHrService, parseHrAgentOutput, resolveHrAutoMode } from '../scripts/hr/service.mjs';
@@ -10,7 +13,12 @@ test('HR local rules immediately find configured uncertainty words', () => {
 });
 
 test('HR automatic mode defaults to off', () => {
-  assert.equal(resolveHrAutoMode(process.cwd(), {}), 'off');
+  const projectRoot = mkdtempSync(join(tmpdir(), 'hr-auto-mode-default-'));
+  try {
+    assert.equal(resolveHrAutoMode(projectRoot, {}), 'off');
+  } finally {
+    rmSync(projectRoot, { recursive: true, force: true });
+  }
 });
 
 test('manual review queues one dossier per Agent Session and deduplicates review keys', async () => {

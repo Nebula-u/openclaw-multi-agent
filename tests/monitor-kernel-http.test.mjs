@@ -101,12 +101,13 @@ test('Kernel Monitor queues a local approval command without mutating the Kernel
   } finally { await monitor.close(); }
 });
 
-test('Kernel Monitor reads its configured runtime root by default', (t) => {
-  const projectRoot = ROOT;
+test('Kernel Monitor uses its explicit configured database path', (t) => {
   const runtimeRoot = mkdtempSync(join(tmpdir(), 'kernel-monitor-runtime-'));
-  const configuredDatabase = openKernelDatabase({ databasePath: join(runtimeRoot, 'control', 'kernel.db') });
+  const projectRoot = ROOT;
+  const databasePath = join(runtimeRoot, 'control', 'kernel.db');
+  const configuredDatabase = openKernelDatabase({ databasePath });
   configuredDatabase.close();
-  const monitor = createKernelMonitorServer({ projectRoot, runtimeRoot, sessionRoot: runtimeRoot, monitorDatabasePath: ':memory:', host: '127.0.0.1', port: 0 });
+  const monitor = createKernelMonitorServer({ projectRoot, runtimeRoot, databasePath, sessionRoot: runtimeRoot, monitorDatabasePath: ':memory:', host: '127.0.0.1', port: 0 });
   t.after(async () => { await monitor.close(); rmSync(runtimeRoot, { recursive: true, force: true }); });
-  assert.equal(monitor.kernel.database.path, join(runtimeRoot, 'control', 'kernel.db'));
+  assert.equal(monitor.kernel.database.path, databasePath);
 });

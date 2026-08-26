@@ -4,15 +4,16 @@
 
 | Agent | 模型引用 | 协议 | 用途 |
 | --- | --- | --- | --- |
-| manager-agent | `deepseek/deepseek-v4-pro` | Chat Completions API | 用户交互、路线确认、请求提交 |
-| requirement-agent | `deepseek/deepseek-v4-pro` | Chat Completions API | 需求理解与结构化输出 |
-| architect-agent | `deepseek/deepseek-v4-pro` | Chat Completions API | 架构设计与深度推理 |
-| developer-agent | `deepseek/deepseek-v4-pro` | Chat Completions API | 代码执行、工具链、多轮修改 |
-| review-agent | `deepseek/deepseek-v4-pro` | Chat Completions API | 代码审查与深度推理 |
-| test-agent | `deepseek/deepseek-v4-pro` | Chat Completions API | 测试执行与日志分析 |
-| release-agent | `deepseek/deepseek-v4-pro` | Chat Completions API | 运维前验证与工具执行 |
+| manager-agent | `mydeep/deepseek-v4-flash` | Chat Completions API | 用户交互、路线确认、请求提交 |
+| requirement-agent | `mydeep/deepseek-v4-flash` | Chat Completions API | 需求理解与结构化输出 |
+| architect-agent | `mydeep/deepseek-v4-flash` | Chat Completions API | 架构设计与深度推理 |
+| developer-agent | `mydeep/deepseek-v4-flash` | Chat Completions API | 代码执行、工具链、多轮修改 |
+| review-agent | `mydeep/deepseek-v4-flash` | Chat Completions API | 代码审查与深度推理 |
+| test-agent | `mydeep/deepseek-v4-flash` | Chat Completions API | 测试执行与日志分析 |
+| release-agent | `mydeep/deepseek-v4-flash` | Chat Completions API | 运维前验证与工具执行 |
+| hr-agent | `mydeep/deepseek-v4-flash` | Chat Completions API | 只读 Session 与 Git 变更复核 |
 
-当前所有 7 个 Agent 统一使用 `deepseek` provider 的 `https://api.deepseek.com` + `openai-completions`，模型固定为 `deepseek-v4-pro`。不再依赖 Responses API；保留的 `deepseek-responses` 样例不参与默认路由。
+当前所有 8 个 Agent 都从项目 `.env` 中的 `OPENCLAW_AGENT_<ID>_MODEL` 读取 `mydeep/deepseek-v4-flash`。全局 `OPENCLAW_THINKING_LEVEL=off` 会写入 `agents.defaults.thinkingDefault`。模型由 `mydeep` provider 的已配置 Chat Completions 传输提供；不再依赖 Responses API。
 
 配置样例见 `config/agent-models.deepseek-routing.example.json`。不得把 API Key 写入样例、仓库、prompt、测试报告或运行日志。
 

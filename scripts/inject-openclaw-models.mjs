@@ -15,6 +15,10 @@ if (args.has('--help') || args.has('-h')) {
 const thinkingPathArg = process.argv.find((arg) => arg.startsWith('--thinking-path='));
 const thinkingPath = thinkingPathArg?.slice('--thinking-path='.length) || 'agents.defaults.thinkingDefault';
 
+export function modelEnvironmentKey(agentId) {
+  return `OPENCLAW_AGENT_${agentId.replaceAll('-', '_').toUpperCase()}_MODEL`;
+}
+
 function readEnvFile(file) {
   const values = {};
   if (!fs.existsSync(file)) return values;
@@ -65,7 +69,7 @@ const changes = [];
 const desiredAgents = structuredClone(agents);
 for (let index = 0; index < agents.length; index++) {
   const agent = agents[index];
-  const key = `OPENCLAW_AGENT_${agent.id.replaceAll('-', '_').toUpperCase()}_MODEL`;
+  const key = modelEnvironmentKey(agent.id);
   const model = env(key);
   if (model && model !== agent.model) {
     desiredAgents[index].model = model;

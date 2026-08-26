@@ -86,6 +86,13 @@ bash scripts/install.sh --apply --yes --runtime-root runtime
 
 日常更新不需要停止 OpenClaw Gateway。
 
+模型路由从项目根目录的 `.env` 读取。更新 Agent 后，先查看已注册 Agent 的当前模型，再将 `.env` 中所有 `OPENCLAW_AGENT_<ID>_MODEL` 和 `OPENCLAW_THINKING_LEVEL` 写入 OpenClaw：
+
+```text
+openclaw models status --agent manager-agent --json
+node scripts/inject-openclaw-models.mjs --apply --yes
+```
+
 ### 5. 启动 Orchestrator
 
 前台运行：

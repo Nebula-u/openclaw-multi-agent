@@ -24,6 +24,20 @@ const PWSH_AVAILABLE = spawnSync('pwsh', ['-NoProfile', '-Command', 'exit 0'], {
   encoding: 'utf8',
 }).status === 0;
 
+test('documents HR model injection and keeps the runtime injector Agent-ID driven', () => {
+  const envExample = readFileSync(join(ROOT, '.env.example'), 'utf8');
+  const readme = readFileSync(join(ROOT, 'README.md'), 'utf8');
+  const modelRouting = readFileSync(join(ROOT, 'docs', 'model-routing.md'), 'utf8');
+  const injector = readFileSync(join(ROOT, 'scripts', 'inject-openclaw-models.mjs'), 'utf8');
+
+  assert.match(envExample, /OPENCLAW_AGENT_HR_AGENT_MODEL=provider\/model-id/u);
+  assert.match(readme, /openclaw models status --agent manager-agent --json/u);
+  assert.match(readme, /node scripts\/inject-openclaw-models\.mjs --apply --yes/u);
+  assert.match(modelRouting, /hr-agent.*mydeep\/deepseek-v4-flash/su);
+  assert.match(injector, /export function modelEnvironmentKey\(agentId\)/u);
+  assert.match(injector, /const key = modelEnvironmentKey\(agent\.id\);/u);
+});
+
 test('installers materialize an explicit empty worker delegation allowlist', () => {
   const powershell = readFileSync(join(ROOT, 'scripts', 'install.ps1'), 'utf8');
   const bash = readFileSync(join(ROOT, 'scripts', 'install.sh'), 'utf8');
