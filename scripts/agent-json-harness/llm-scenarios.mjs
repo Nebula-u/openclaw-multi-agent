@@ -124,6 +124,9 @@ export const LLM_SCENARIOS = Object.entries(CONTRACT_SCENARIOS).map(([schemaFile
   name: slug(schemaFile), schemaFile, agentId, jsonl, cases: createCases(schemaFile),
 }));
 
+export const TEST_AGENT_LLM_SCENARIOS = LLM_SCENARIOS.filter((scenario) => scenario.agentId === 'test-agent');
+export const NON_TEST_AGENT_LLM_SCENARIOS = LLM_SCENARIOS.filter((scenario) => scenario.agentId !== 'test-agent');
+
 export function buildLlmCasePrompt(scenario, testCase, schemaText) {
   const format = scenario.jsonl ? 'JSONL，每一行是一个完整 JSON 对象' : '一个 JSON 对象';
   return [

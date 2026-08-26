@@ -7,7 +7,7 @@ import { dirname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 import { connectGatewayLlmClient } from './gateway-llm-client.mjs';
-import { LLM_SCENARIOS, REPETITIONS_PER_CASE } from './llm-scenarios.mjs';
+import { NON_TEST_AGENT_LLM_SCENARIOS, REPETITIONS_PER_CASE } from './llm-scenarios.mjs';
 import { runLlmCase } from './llm-runner.mjs';
 import { PROJECT_ROOT, assertRuntimeGuardReady } from './runtime-guard-client.mjs';
 
@@ -189,7 +189,7 @@ function recordOutcome(summary, row, outcome, runRoot) {
 }
 
 export async function collectLlmRun({
-  scenarios = LLM_SCENARIOS, outputRoot = DEFAULT_OUTPUT_ROOT, runId: requestedRunId = runId(), timeoutMs = 600000,
+  scenarios = NON_TEST_AGENT_LLM_SCENARIOS, outputRoot = DEFAULT_OUTPUT_ROOT, runId: requestedRunId = runId(), timeoutMs = 600000,
   concurrency = 1, repetitions = REPETITIONS_PER_CASE, connectionBatchSize = 40, createClient = connectGatewayLlmClient,
   runCaseImpl = runLlmCase, onProgress = () => {},
 } = {}) {
@@ -267,7 +267,7 @@ function parseArgs(argv) {
 
 async function main() {
   const options = parseArgs(process.argv.slice(2));
-  const scenarios = options.scenarioNames.length === 0 ? LLM_SCENARIOS : LLM_SCENARIOS.filter((item) => options.scenarioNames.includes(item.name));
+  const scenarios = options.scenarioNames.length === 0 ? NON_TEST_AGENT_LLM_SCENARIOS : NON_TEST_AGENT_LLM_SCENARIOS.filter((item) => options.scenarioNames.includes(item.name));
   if (scenarios.length === 0) throw new Error('没有匹配的测试场景。');
   const summary = await collectLlmRun({ ...options, scenarios, repetitions: REPETITIONS_PER_CASE, onProgress: ({ completed, planned }) => {
     if (completed % 30 === 0 || completed === planned) process.stdout.write(`已完成 ${completed}/${planned} 个逻辑测试。\n`);

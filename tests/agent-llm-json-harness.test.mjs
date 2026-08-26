@@ -5,7 +5,7 @@ import { existsSync, mkdtempSync, readFileSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { LLM_SCENARIOS, REPETITIONS_PER_CASE, buildLlmCasePrompt } from '../scripts/agent-json-harness/llm-scenarios.mjs';
+import { LLM_SCENARIOS, NON_TEST_AGENT_LLM_SCENARIOS, REPETITIONS_PER_CASE, TEST_AGENT_LLM_SCENARIOS, buildLlmCasePrompt } from '../scripts/agent-json-harness/llm-scenarios.mjs';
 import { textFromMessage } from '../scripts/agent-json-harness/gateway-llm-client.mjs';
 import { runLlmCase } from '../scripts/agent-json-harness/llm-runner.mjs';
 import { collectLlmRun } from '../scripts/agent-json-harness/collect-llm-failures.mjs';
@@ -33,6 +33,13 @@ test('LLM 场景矩阵覆盖每份 Agent 契约的三个固定需求，并固定
     assert.ok(scenario.cases.every((item) => typeof item.requirement === 'string' && item.requirement.length >= 10));
     assert.notEqual(scenario.agentId, 'dialogue-agent');
   }
+});
+
+test('主矩阵排除 Docker sandbox 的 test-agent，专用矩阵只包含该 Agent', () => {
+  assert.deepEqual(TEST_AGENT_LLM_SCENARIOS.map((item) => item.name).sort(), ['evidence', 'json-validation-error']);
+  assert.ok(NON_TEST_AGENT_LLM_SCENARIOS.every((item) => item.agentId !== 'test-agent'));
+  assert.equal(NON_TEST_AGENT_LLM_SCENARIOS.length * 3 * REPETITIONS_PER_CASE, 510);
+  assert.equal(TEST_AGENT_LLM_SCENARIOS.length * 3 * REPETITIONS_PER_CASE, 60);
 });
 
 test('轻量 Agent 契约测试为每个 JSON Schema 定义对应 Agent 与格式', () => {

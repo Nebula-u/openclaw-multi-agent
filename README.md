@@ -228,13 +228,35 @@ Kernel 测试全部使用临时 SQLite，不需要外部数据库，也不应因
 
 ### Agent JSON 生成与清洗测试
 
-生产环境对齐矩阵是独立比较测试：对宿主实际提供的哈希、提交号、归档快照和审计记录传入固定夹具，并要求 Agent 原样复制。它仅覆盖 8 个此前出现 JSON 错误的 Schema 场景，共 240 个逻辑测试（每场景 3 个样例 × 每样例 10 次），包含 `test-agent`：
+主矩阵排除使用 Docker sandbox 的 `test-agent`，覆盖其余 17 个 Agent Schema
+场景（510 个逻辑测试）：
+
+```text
+npm run agent-json:matrix -- --run-id schema-matrix-<YYYYMMDD-HHMM> --concurrency 1 --timeout-seconds 120
+```
+
+结果写入 `artifacts/agent-json-workflow/<run-id>/`。`test-agent` 单独运行，
+便于将 Docker sandbox 启动问题与 JSON 输出质量分开统计（60 个逻辑测试）：
+
+```text
+npm run agent-json:test-agent -- --run-id test-agent-matrix-<YYYYMMDD-HHMM> --concurrency 1 --timeout-seconds 120
+```
+
+结果写入 `artifacts/agent-json-workflow-test-agent/<run-id>/`。运行专用测试前，
+确认 Docker Desktop Linux Engine 已启动且测试镜像可访问。
+
+生产环境对齐矩阵是新增的独立比较测试：它不改动上述原始自由生成样例，而是对宿主实际
+提供的哈希、提交号、归档快照和审计记录传入固定夹具，并要求 Agent 原样复制。它覆盖全部
+8 个此前出现 JSON 错误的 Schema 场景，共 240 个逻辑测试（每场景 3 个样例 × 每样例 10 次），
+包含 `test-agent`：
 
 ```text
 npm run agent-json:production-aligned -- --run-id production-aligned-matrix-20260826-1600 --concurrency 1 --timeout-seconds 120
 ```
 
-结果写入 `artifacts/agent-json-workflow-production-aligned/<run-id>/`。这是仅测 JSON 输出与修复链路的矩阵；如本机未启用 Docker sandbox，请先按当前测试策略临时关闭 `test-agent` sandbox，完成后再恢复，避免把启动失败混入 JSON 质量统计。
+结果写入 `artifacts/agent-json-workflow-production-aligned/<run-id>/`。这是仅测 JSON 输出与
+修复链路的矩阵；如本机未启用 Docker sandbox，请先按当前测试策略临时关闭 `test-agent`
+sandbox，完成后再恢复，避免把启动失败混入 JSON 质量统计。
 
 安装 dry-run 与验证：
 
