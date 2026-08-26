@@ -310,6 +310,7 @@ export function createOrchestrator({ projectRoot: projectRootInput, database = n
       return selectedRepository.getTask(task.taskId);
     };
     let testSandbox = null;
+    let testSandboxCollection = null;
     let taskSnapshot = null;
     try {
       let executionOutcome = null;
@@ -342,7 +343,7 @@ export function createOrchestrator({ projectRoot: projectRootInput, database = n
             processLog(task, `attempt-${task.attempt}${logSuffix}.stdout.log`, result.stdout);
             processLog(task, `attempt-${task.attempt}${logSuffix}.stderr.log`, result.stderr);
             if (result.exitCode !== 0) throw openClawAgentExitError(result);
-            if (!regeneration && testSandbox) selectedTestSandboxStager.collect(task, testSandbox);
+            if (!regeneration && testSandbox) testSandboxCollection = selectedTestSandboxStager.collect(task, testSandbox);
             if (regeneration) {
               if (heartbeatSignal.aborted) throw Object.assign(new Error('execution lease was lost before JSON repair could be accepted'), { code: 'EXECUTION_LEASE_LOST' });
               const held = await selectedKernel.lease.heartbeat({ executionId: execution.executionId, phase: 'JSON_REGENERATION_VALIDATION' });
@@ -356,7 +357,9 @@ export function createOrchestrator({ projectRoot: projectRootInput, database = n
               atomicWriteFile(task.rawOutputPath, `${extractFinalAssistantText(result.stdout).trim()}\n`);
             }
             try {
-              return { result, ingested: ingestTaskOutput({ projectRoot, task, occurredAt: now(clock) }) };
+              return { result, ingested: ingestTaskOutput({ projectRoot, task, occurredAt: now(clock), sandboxContext: testSandbox ? {
+                attestation: testSandbox.attestation, referencePathMappings: testSandboxCollection?.referencePathMappings ?? [],
+              } : null }) };
             } catch (error) {
               if (!isJsonRegenerable(error)) {
                 if (isOutputBoundaryFailure(error)) {
@@ -388,6 +391,9 @@ export function createOrchestrator({ projectRoot: projectRootInput, database = n
         } });
       }
       const { result, ingested } = executionOutcome;
+      if (testSandbox && selectedTestSandboxStager.integrateCommit) {
+        selectedTestSandboxStager.integrateCommit(task, testSandbox, ingested.value.output_commit ?? task.inputCommit);
+      }
       const snapshotInput = { runId: run.runId, taskId: task.taskId, executionId: execution.executionId,
         attempt: task.attempt, agentId: task.agentId, sessionId, inputCommit: task.inputCommit,
         worktreePathAbs: task.worktreePathAbs, targetProjectRootAbs: task.targetProjectRootAbs };

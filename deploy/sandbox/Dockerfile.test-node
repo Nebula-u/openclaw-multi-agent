@@ -8,6 +8,7 @@ RUN sed -i 's|deb.debian.org|mirrors.ustc.edu.cn|g' /etc/apt/sources.list.d/debi
   && rm -rf /var/lib/apt/lists/* \
   && groupadd --gid 10001 sandbox \
   && useradd --create-home --uid 10001 --gid 10001 --shell /bin/bash sandbox \
+  && git config --system --add safe.directory /workspace/.task-sandbox/repo \
   && mkdir -p /worktree /input /agent-raw /raw-logs \
   && chown -R sandbox:sandbox /worktree /input /agent-raw /raw-logs
 
