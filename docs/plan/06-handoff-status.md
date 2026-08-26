@@ -415,18 +415,9 @@ EBUSY: resource busy or locked, unlink
   'C:\Users\...\Temp\stategraph-runtime-XXXX\checkpoints.db'
 ```
 
-成因：机器上有 4 个残留 `node.exe` 进程持有 `runtime/artifacts/` 与临时 checkpoint db 的句柄（很可能是之前的 Monitor 或 workflow 进程未退出）。
+成因：机器上有残留服务持有 `runtime/artifacts/` 与临时 checkpoint db 的句柄（很可能是之前的 Monitor 或 workflow 进程未退出）。
 
-**接手时先清干净再跑测试**，否则会误判：
-
-```bash
-# Windows：确认并清理残留进程
-tasklist | grep -i node
-# 逐个确认不是当前需要的进程后再终止
-
-# 清理测试产物残留
-rm -rf runtime/artifacts/WF-json-retry runtime/artifacts/WF-launch-failure
-```
+接手时应先通过项目提供的服务停止入口优雅停止对应服务并确认句柄释放；严禁枚举或终止全部 Node 进程，否则会同时终止 OpenClaw Gateway、Orchestrator 和运行中的 Agent。无法确认句柄所有者时保留现场并报告，不扩大清理范围。
 
 清理后 `test:stategraph` 应回到 31/31 或仅剩个别与本改造无关的失败。**不要因为这些 EPERM/EBUSY 去改 `atomic-store.mjs`** —— 那是正常的原子写实现，问题在环境。
 

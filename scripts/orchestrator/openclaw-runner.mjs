@@ -6,6 +6,7 @@ const EXPLICIT_DELIVERY_CHANNELS = new Set([
   'feishu', 'nostr', 'msteams', 'mattermost', 'nextcloud-talk', 'matrix', 'raft', 'line', 'zalo',
   'clickclack', 'zalouser', 'sms', 'synology-chat', 'tlon', 'qa-channel', 'qqbot', 'twitch',
 ]);
+const GATEWAY_DISCONNECTED = /gateway(?: not connected|[^\r\n]*(?:ECONNREFUSED|(?:socket|websocket|connection|request|connect)[^\r\n]*(?:closed|refused|lost|failed|unavailable|disconnected)))/iu;
 
 export function deliveryArgs(deliver) {
   if (!deliver) return [];
@@ -53,6 +54,20 @@ export function extractFinalAssistantText(stdout) {
   return trimmed;
 }
 
+export function classifyOpenClawExit({ exitCode, signal, stdout = '', stderr = '', cancelled = false }) {
+  if (cancelled) return 'ORCHESTRATOR_SHUTDOWN';
+  if (exitCode === 0) return null;
+  if (GATEWAY_DISCONNECTED.test(String(stderr))) {
+    return 'OPENCLAW_GATEWAY_UNAVAILABLE';
+  }
+  // Windows taskkill /PID /T /F reports code 1 and no signal/output for the
+  // terminated cmd/Node tree; handled OpenClaw failures normally emit stderr.
+  if (signal || (exitCode === 1 && !String(stdout).trim() && !String(stderr).trim())) {
+    return 'OPENCLAW_AGENT_DISAPPEARED';
+  }
+  return null;
+}
+
 export function runOpenClawAgent({ agentId, sessionId, messagePath, timeoutSeconds = 900, deliver = null, thinking = null, signal = null }) {
   if (signal?.aborted) return Promise.reject(Object.assign(new Error('OpenClaw Agent launch was cancelled before dispatch'), { code: 'ORCHESTRATOR_SHUTDOWN' }));
   const args = buildOpenClawAgentArgs({ agentId, sessionId, messagePath, timeoutSeconds, deliver, thinking });
@@ -75,7 +90,8 @@ export function runOpenClawAgent({ agentId, sessionId, messagePath, timeoutSecon
     });
     child.once('close', (exitCode, closeSignal) => {
       signal?.removeEventListener('abort', cancel);
-      resolveRun({ exitCode: exitCode ?? -1, signal: closeSignal, stdout, stderr, cancelled });
+      const failureCode = classifyOpenClawExit({ exitCode, signal: closeSignal, stdout, stderr, cancelled });
+      resolveRun({ exitCode: exitCode ?? -1, signal: closeSignal, stdout, stderr, cancelled, failureCode });
     });
   });
 }

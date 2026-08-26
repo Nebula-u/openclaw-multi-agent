@@ -97,6 +97,13 @@ export async function runWithLeaseHeartbeat({ lease, executionId, run, signal = 
   }
 }
 
+export function openClawAgentExitError(result) {
+  return Object.assign(new Error(`OpenClaw Agent exited with ${result.exitCode}`), {
+    code: result.failureCode ?? 'OPENCLAW_AGENT_EXIT_NONZERO',
+    details: { signal: result.signal ?? null, stderr: String(result.stderr ?? '').slice(-4000) },
+  });
+}
+
 export function createOrchestrator({ projectRoot: projectRootInput, database = null, kernel = null, repository = null, worktrees = null, snapshots = null,
   runtimeRoot: runtimeRootInput = null, projectControl = null, runner = runOpenClawAgent, notificationRunner = runOpenClawAgent, hr = null, clock = () => new Date(), maxAttempts = 3, timeoutSeconds = 900, signal = null } = {}) {
   const projectRoot = resolve(projectRootInput ?? process.cwd());
@@ -297,7 +304,7 @@ export function createOrchestrator({ projectRoot: projectRootInput, database = n
             const logSuffix = regeneration ? `.json-regeneration-${regeneration}` : '';
             processLog(task, `attempt-${task.attempt}${logSuffix}.stdout.log`, result.stdout);
             processLog(task, `attempt-${task.attempt}${logSuffix}.stderr.log`, result.stderr);
-            if (result.exitCode !== 0) throw Object.assign(new Error(`OpenClaw Agent exited with ${result.exitCode}`), { code: 'OPENCLAW_AGENT_EXIT_NONZERO', details: { stderr: String(result.stderr ?? '').slice(-4000) } });
+            if (result.exitCode !== 0) throw openClawAgentExitError(result);
             if (regeneration) {
               if (heartbeatSignal.aborted) throw Object.assign(new Error('execution lease was lost before JSON repair could be accepted'), { code: 'EXECUTION_LEASE_LOST' });
               const held = await selectedKernel.lease.heartbeat({ executionId: execution.executionId, phase: 'JSON_REGENERATION_VALIDATION' });

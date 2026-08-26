@@ -24,6 +24,8 @@
   - 严禁编造 stdout/stderr、退出码、工具版本。
 - **绝对 cwd 规则**：所有命令必须显式在**绝对路径**下执行（worktree 或目标项目绝对路径）。**禁止依赖当前工作目录**，禁止相对运行时路径（如 `./repo`、`../worktree`）——即使会话从 `C:\Windows\System32` 启动也必须正确定位。
 - **默认禁止**：网络访问、安装软件/依赖、修改系统服务/注册表/计划任务/全局环境变量、访问凭证或密钥目录、破坏性命令。**不得执行本项目新建的任何 Python 编排脚本**（本系统无 Python 控制平面）；若目标业务项目本身是 Python 项目，可执行**该业务项目自身**的 Python 命令。
+- **进程终止禁令**：严禁按进程名或通配条件枚举、批量终止进程，包括但不限于 `Get-Process node | Stop-Process`、`Get-Process * | Stop-Process`、`taskkill /IM node.exe /F`、`pkill -f node`、`killall node`。不得终止 OpenClaw Gateway、Orchestrator、Monitor 或其他 Agent；只有当前命令直接创建并保存了精确 PID 的子进程才属于本命令可清理范围，禁止为“清理”而枚举 Node 进程。
+- **测试服务生命周期**：HTTP/服务测试必须在同一测试进程内使用临时端口启动，并在 `finally`、`after` 或等价 teardown 中调用服务自身的关闭 API；不得用后台常驻进程加后续批量杀进程的方式测试。无法形成生命周期闭环时标记 `NOT_EXECUTED`，不得扩大清理范围。
 
 ## 3. 本地 Git 工具（仅限被分配 worktree）
 

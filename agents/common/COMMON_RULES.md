@@ -47,6 +47,7 @@
 - 不执行远程 Git 操作（push/pull/fetch/remote）。
 - 不修改全局 Git 配置。
 - 不执行破坏性命令（`git reset --hard`、`git clean -fdx`、递归删除等）。
+- 不按进程名或通配条件批量终止进程（尤其是 Node 进程）；需要此类操作时返回 `HUMAN_DECISION_REQUIRED`，不得以“清理残留”为由自行执行。
 - 不执行本项目新建的任何 Python 编排脚本（本系统无 Python 控制平面）。
 - 不调用、派生或指挥其他 Agent；所有 Agent 的跨会话工具白名单为空。
 - 不读取或持有 runtime capability、人工决定能力、workflow lock 或 Control Kernel 数据库写权限。

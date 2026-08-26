@@ -32,6 +32,7 @@
 ## 5. 破坏性操作
 
 - 任何破坏性 / 不可逆 / 可能影响其他项目的操作 → 必须人工审批（见 APPROVAL_RULES.md）。
+- 按进程名或通配条件批量终止进程（如终止全部 `node` 进程）属于破坏性操作；Agent 必须返回 `HUMAN_DECISION_REQUIRED`，不得执行。
 - 默认选择非破坏性替代方案。
 
 ## 6. TEST 强制 Docker sandbox
