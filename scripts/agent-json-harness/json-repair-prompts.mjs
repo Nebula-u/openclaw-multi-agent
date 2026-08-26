@@ -22,6 +22,7 @@ function diagnosticLines(errors) {
 function base({ retryNumber, kind, errors, rawOutputPath = null, contextManifestSha256 = null }) {
   const lines = [
     `JSON_REWRITE_REQUEST kind=${kind} retry=${retryNumber}/${MAX_REPAIR_RETRIES}.`,
+    '这是自动化 JSON 生成与清洗工作流测试的修复阶段，旨在验证 JSON 清洗和重试是否正常。',
     '这是 JSON 产物修复，不是任务重做。复用本会话中已经完成的工作。',
     '不得调用工具、不得重新执行任务、不得编辑代码、运行命令、重新测试、创建提交、重新收集证据或改变审批结论。',
     '只返回一个完整的 JSON 对象（JSONL 时每行一个完整 JSON 对象）；不得输出 Markdown、代码围栏、解释或前后缀。',

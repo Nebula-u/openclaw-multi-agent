@@ -2,6 +2,14 @@
 
 `run-contract.mjs` 只通过 OpenClaw Gateway 向已注册 Agent 发送消息；它不直接请求任何 LLM API。每次运行固定发起 **10 次** 独立的轻量会话调用，随后由脚本使用 Runtime Guard + Ajv 校验 Agent 返回的 JSON/JSONL。
 
+这是单一 Schema 的无重试冒烟检查。需要覆盖所有 Agent Schema、每份 Schema
+3 个固定样例、每样例 10 次，并验证 JSON 清洗和同 Session 修复流程时，请在
+项目根目录运行：
+
+```powershell
+npm run agent-json:matrix -- --run-id schema-matrix-<YYYYMMDD-HHMM> --concurrency 1 --timeout-seconds 120
+```
+
 每个 `contracts/*.schema.json` 都在 `contract-scenarios.mjs` 中有一项明确配置、一个 `run-<contract>.mjs` 无参数入口：对应的 Agent 和 JSON/JSONL 格式。运行任一契约：
 
 ```powershell

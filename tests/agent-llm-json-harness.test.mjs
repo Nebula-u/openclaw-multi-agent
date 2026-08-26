@@ -1,10 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { existsSync, mkdtempSync, readFileSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { LLM_SCENARIOS, buildLlmCasePrompt } from '../scripts/agent-json-harness/llm-scenarios.mjs';
+import { LLM_SCENARIOS, REPETITIONS_PER_CASE, buildLlmCasePrompt } from '../scripts/agent-json-harness/llm-scenarios.mjs';
 import { textFromMessage } from '../scripts/agent-json-harness/gateway-llm-client.mjs';
 import { runLlmCase } from '../scripts/agent-json-harness/llm-runner.mjs';
 import { collectLlmRun } from '../scripts/agent-json-harness/collect-llm-failures.mjs';
@@ -18,15 +19,18 @@ const EXPECTED_SCHEMAS = [
   'component-build-result.schema.json', 'component-request.schema.json', 'context-manifest.schema.json',
   'evidence.schema.json', 'gate-result.schema.json', 'json-validation-error.schema.json',
   'release-decision.schema.json', 'result.schema.json', 'review-findings.schema.json', 'skill-package.schema.json',
-  'route-plan.schema.json', 'task.schema.json',
+  'route-plan.schema.json', 'task-run.schema.json', 'task.schema.json',
 ];
 
-test('LLM 场景矩阵覆盖每份契约的 5 个不同需求', () => {
+test('LLM 场景矩阵覆盖每份 Agent 契约的三个固定需求，并固定每例十次', () => {
   assert.deepEqual(LLM_SCENARIOS.map((item) => item.schemaFile).sort(), [...EXPECTED_SCHEMAS].sort());
+  assert.equal(REPETITIONS_PER_CASE, 10);
+  assert.equal(LLM_SCENARIOS.length * 3 * REPETITIONS_PER_CASE, 570);
   for (const scenario of LLM_SCENARIOS) {
-    assert.equal(scenario.cases.length, 5);
-    assert.equal(new Set(scenario.cases.map((item) => item.id)).size, 5);
-    assert.equal(new Set(scenario.cases.map((item) => item.topic)).size, 5);
+    assert.equal(scenario.cases.length, 3);
+    assert.equal(new Set(scenario.cases.map((item) => item.id)).size, 3);
+    assert.equal(new Set(scenario.cases.map((item) => item.topic)).size, 3);
+    assert.ok(scenario.cases.every((item) => typeof item.requirement === 'string' && item.requirement.length >= 10));
     assert.notEqual(scenario.agentId, 'dialogue-agent');
   }
 });
@@ -46,6 +50,7 @@ test('轻量 Agent 契约测试为每个 JSON Schema 定义对应 Agent 与格�
 test('提示只要求最终 LLM 回复，且不嵌入模板', () => {
   const scenario = LLM_SCENARIOS.find((item) => item.schemaFile === 'result.schema.json');
   const prompt = buildLlmCasePrompt(scenario, scenario.cases[0], '{"type":"object"}');
+  assert.match(prompt, /JSON 生成与清洗工作流测试/);
   assert.match(prompt, /不要调用任何工具/);
   assert.match(prompt, /仅回复/);
   assert.doesNotMatch(prompt, /templates\//i);
@@ -85,6 +90,7 @@ test('空回复恢复为合法 JSON 时标记为成功', async () => {
 
 test('固定重写模板明确要求 JSON 且禁止空输出', () => {
   const prompt = buildJsonRepairPrompt({ classification: 'EMPTY_RESPONSE', errors: [], retryNumber: 1 });
+  assert.match(prompt, /JSON 生成与清洗工作流测试/);
   assert.match(prompt, /JSON/);
   assert.match(prompt, /content 为空/);
 });
@@ -123,6 +129,16 @@ test('错误分类和模板区分截断、enum/type 与 schema drift', () => {
   assert.match(buildJsonRepairPrompt({ classification: 'OUTPUT_TRUNCATED', errors: [], retryNumber: 2 }), /截断/);
 });
 
+test('Gateway 传输异常不触发 JSON 修复，也不伪装成 Schema 失败', async () => {
+  const scenario = LLM_SCENARIOS.find((item) => item.schemaFile === 'result.schema.json');
+  const calls = [];
+  const client = { send: async (input) => { calls.push(input); throw new Error('Gateway connection closed'); } };
+  const outcome = await runLlmCase({ client, scenario, testCase: scenario.cases[0], runId: 'transport-run' });
+  assert.equal(outcome.classification, 'TRANSPORT_FAILURE');
+  assert.equal(outcome.attempts.length, 1);
+  assert.equal(calls.length, 1);
+});
+
 test('固定重生成提示明确指出缺失字段并禁止重新执行任务', () => {
   const prompt = buildJsonRepairPrompt({
     classification: 'SCHEMA_DRIFT',
@@ -152,11 +168,11 @@ test('固定重生成提示明确指出字段路径和格式约束', () => {
   assert.match(prompt, /字段 \/artifact_manifest_hash：格式必须匹配 \^\[a-f0-9\]\{64\}\$/u);
 });
 
-test('收集器只创建一个 Gateway 客户端并打包每个最终失败回复', async () => {
+test('收集器固定规划三乘十并为每个无效尝试保留原件与诊断', async () => {
   const root = mkdtempSync(join(tmpdir(), 'agent-llm-collector-'));
   const scenario = {
     name: 'uncapped', schemaFile: 'result.schema.json', agentId: 'developer-agent', jsonl: false,
-    cases: [1, 2, 3, 4].map((number) => ({ id: `case-${number}`, topic: `主题-${number}` })),
+    cases: [1, 2, 3].map((number) => ({ id: `case-${number}`, topic: `主题-${number}`, requirement: `固定测试需求 ${number}` })),
   };
   let created = 0;
   let closed = 0;
@@ -168,16 +184,28 @@ test('收集器只创建一个 Gateway 客户端并打包每个最终失败回�
       classification: 'RETRY_FAILED', scenario, testCase, sessionKey: `unit:${testCase.id}`,
       attempts: [1, 2].map((attempt) => ({ attempt, prompt: `提示 ${attempt}`, response: '{}', validation: { ok: false, errors: [{ code: 'SCHEMA_REQUIRED', path: '$', message: 'required' }] }, error: null })),
     }),
-    concurrency: 3, repetitions: 1, connectionBatchSize: 2, onProgress: () => {},
+    concurrency: 3, repetitions: REPETITIONS_PER_CASE, connectionBatchSize: 12, onProgress: () => {},
   });
   assert.equal(created, 1);
   assert.equal(closed, 1);
-  assert.equal(reconnected, 1);
-  assert.equal(summary.totals.packaged, 4);
-  for (const number of [1, 2, 3, 4]) {
-    const folder = join(root, 'unit-run', 'failures', `uncapped__case-${number}-r1`);
-    assert.ok(existsSync(join(folder, 'attempt1-response.json')));
-    assert.ok(existsSync(join(folder, 'attempt2-guard.json')));
+  assert.equal(reconnected, 2);
+  assert.equal(summary.totals.planned, 30);
+  assert.equal(summary.totals.executed, 30);
+  assert.equal(summary.totals.packaged, 60);
+  assert.equal(summary.scenarios[0].final_pass_rate, 0);
+  for (const number of [1, 2, 3]) {
+    const folder = join(root, 'unit-run', 'failures', `uncapped__case-${number}-r1`, 'attempt-1');
+    assert.ok(existsSync(join(folder, 'raw-response.txt')));
+    assert.ok(existsSync(join(folder, 'validation.json')));
+    assert.ok(existsSync(join(folder, 'diagnosis.json')));
   }
-  assert.match(readFileSync(join(root, 'unit-run', 'report.md'), 'utf8'), /已打包供审阅：4/);
+  assert.match(readFileSync(join(root, 'unit-run', 'report.md'), 'utf8'), /最终通过率/);
+});
+
+test('真实矩阵命令拒绝覆盖固定的每样例十次配置', () => {
+  const run = spawnSync(process.execPath, ['scripts/agent-json-harness/collect-llm-failures.mjs', '--repetitions', '9'], {
+    cwd: process.cwd(), encoding: 'utf8',
+  });
+  assert.equal(run.status, 1);
+  assert.match(run.stderr, /固定为每个样例 10 次/);
 });

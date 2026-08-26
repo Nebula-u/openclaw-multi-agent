@@ -41,6 +41,13 @@ export async function runLlmCase({ client, scenario, testCase, runId, timeoutMs 
   for (let attemptNumber = 1; attemptNumber <= MAX_REPAIR_RETRIES + 1; attemptNumber += 1) {
     const result = await attempt({ client, scenario, testCase, runId, prompt, attemptNumber, timeoutMs });
     attempts.push(result);
+    if (result.error) {
+      return {
+        classification: 'TRANSPORT_FAILURE', repair_classification: 'LLM_INVOCATION_ERROR',
+        scenario, testCase, sessionKey: sessionKey({ scenario, testCase, runId }), attempts,
+        repair_retries: 0,
+      };
+    }
     if (result.validation.ok) {
       return {
         classification: attemptNumber === 1 ? 'PASSED_FIRST' : 'REPAIR_RETRY_SUCCEEDED',
