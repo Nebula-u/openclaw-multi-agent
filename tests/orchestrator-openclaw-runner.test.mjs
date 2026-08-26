@@ -10,6 +10,24 @@ test('worker launch inherits configured thinking so HR can review persisted reas
   assert.equal(args.includes('--thinking'), false);
 });
 
+test('TEST task messages use staged sandbox paths without host command paths', () => {
+  const message = service.taskMessage({
+    workflowId: 'WF-stage', taskId: 'TASK-stage', runId: 'RUN-stage', stepId: 'test', agentId: 'test-agent', attempt: 1,
+    worktreePathAbs: '/host/runtime/worktrees/task/repo', artifactRootAbs: '/host/runtime/artifacts/task', contextManifestPathAbs: '/host/runtime/artifacts/task/input/context-manifest.json',
+    contextManifestSha256: 'a'.repeat(64), rawOutputPath: '/host/runtime/artifacts/task/.agent-raw/result.json.raw',
+    testSandbox: {
+      executionWorktreeAbs: '/workspace/.task-sandbox/repo',
+      executionInputRootAbs: '/workspace/.task-sandbox/input',
+      executionContextManifestPathAbs: '/workspace/.task-sandbox/input/execution-context-manifest.json',
+      executionRawOutputPath: '/workspace/.task-sandbox/output/result.json.raw',
+    },
+  });
+  assert.match(message, /execution_worktree_path_abs: \/workspace\/.task-sandbox\/repo/u);
+  assert.match(message, /execution_context_manifest_path_abs: \/workspace\/.task-sandbox\/input\/execution-context-manifest\.json/u);
+  assert.match(message, /\/workspace\/.task-sandbox\/output\/result\.json\.raw/u);
+  assert.doesNotMatch(message, /\/host\/runtime\//u);
+});
+
 test('HR launch can explicitly disable its own thinking output', () => {
   const args = buildOpenClawAgentArgs({ agentId: 'hr-agent', sessionId: 'hr-one', messagePath: 'F:/message.md', thinking: 'off' });
   assert.deepEqual(args.slice(args.indexOf('--thinking'), args.indexOf('--thinking') + 2), ['--thinking', 'off']);

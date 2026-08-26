@@ -1,7 +1,8 @@
-import { chmodSync, copyFileSync, cpSync, existsSync, lstatSync, mkdirSync, openSync, readdirSync, rmSync, closeSync, unlinkSync } from 'node:fs';
+import { chmodSync, copyFileSync, cpSync, existsSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, rmSync, closeSync, unlinkSync, writeFileSync } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { inputRootForAttempt, rawOutputPath } from './context-manifest.mjs';
+import { sha256File } from '../runtime-core/atomic-store.mjs';
 
 export class TestSandboxStagingError extends Error {
   constructor(code, message, details = {}) { super(message); this.name = 'TestSandboxStagingError'; this.code = code; this.details = details; }
@@ -52,10 +53,56 @@ function defaultGit(cwd, args) {
   return String(result.stdout ?? '').trim();
 }
 
+function executionTaskInput({ source, task, inputRoot, executionInputRootAbs, executionWorktreeAbs, executionRootAbs, executionOutputRootAbs, executionRawLogsRootAbs }) {
+  const originalRequestPath = source.original_request_path_abs ?? join(inputRoot, 'user-request.md');
+  if (!inside(inputRoot, originalRequestPath)) throw new TestSandboxStagingError('TEST_SANDBOX_INPUT_PATH_ESCAPE', 'task input references a path outside the staged input root', { path_abs: originalRequestPath });
+  return {
+    ...source,
+    target_project_root_abs: executionWorktreeAbs,
+    worktree_path_abs: executionWorktreeAbs,
+    artifact_root_abs: executionRootAbs,
+    allowed_write_paths_abs: [executionWorktreeAbs, executionOutputRootAbs, executionRawLogsRootAbs],
+    forbidden_paths_abs: [executionInputRootAbs],
+    original_request_path_abs: join(executionInputRootAbs, relative(inputRoot, originalRequestPath)),
+    prior_artifacts: [],
+    result_identity: {
+      worktree_path_abs: task.worktreePathAbs,
+      artifact_root_abs: task.artifactRootAbs,
+      input_commit: task.inputCommit,
+      artifact_manifest_hash: task.contextManifestSha256 ?? null,
+    },
+  };
+}
+
+function buildExecutionManifest({ source, task, inputRoot, stagedInputRootAbs, executionInputRootAbs, executionWorktreeAbs, executionRootAbs, executionRawOutputPath }) {
+  const stagedInputFiles = (source.input_files ?? []).map((file) => {
+    if (!inside(inputRoot, file.path_abs)) throw new TestSandboxStagingError('TEST_SANDBOX_INPUT_PATH_ESCAPE', 'context manifest input escapes the staged input root', { path_abs: file.path_abs });
+    const stagedRelativePath = relative(inputRoot, file.path_abs);
+    return { ...file, path_abs: join(executionInputRootAbs, stagedRelativePath), sha256: sha256File(join(stagedInputRootAbs, stagedRelativePath)) };
+  });
+  return {
+    ...source,
+    target_project_root_abs: executionWorktreeAbs,
+    worktree_path_abs: executionWorktreeAbs,
+    artifact_root_abs: executionRootAbs,
+    input_files: stagedInputFiles,
+    expected_output_paths_abs: [executionRawOutputPath],
+    execution_raw_output_path_abs: executionRawOutputPath,
+    host_context_manifest_sha256: task.contextManifestSha256 ?? null,
+    result_identity: {
+      worktree_path_abs: task.worktreePathAbs,
+      artifact_root_abs: task.artifactRootAbs,
+      input_commit: task.inputCommit,
+      artifact_manifest_hash: task.contextManifestSha256 ?? null,
+    },
+  };
+}
+
 export function createTestSandboxStager({ workspaceRoot: workspaceRootInput, runGit = defaultGit } = {}) {
   if (!workspaceRootInput) throw new TypeError('workspaceRoot is required');
   const workspaceRoot = resolve(workspaceRootInput);
   const stagingRoot = join(workspaceRoot, '.task-sandbox');
+  const containerRootAbs = '/workspace/.task-sandbox';
   const lockPath = join(workspaceRoot, '.task-sandbox.lock');
   let active = null;
 
@@ -91,20 +138,44 @@ export function createTestSandboxStager({ workspaceRoot: workspaceRootInput, run
       const executionWorktreeAbs = join(stagingRoot, 'repo');
       const executionOutputRootAbs = join(stagingRoot, 'output');
       const executionRawLogsRootAbs = join(stagingRoot, 'raw-logs');
+      const executionRawOutputPath = join(executionOutputRootAbs, 'result.json.raw');
+      const containerInputRootAbs = join(containerRootAbs, 'input');
+      const containerWorktreeAbs = join(containerRootAbs, 'repo');
+      const containerOutputRootAbs = join(containerRootAbs, 'output');
+      const containerRawLogsRootAbs = join(containerRootAbs, 'raw-logs');
+      const containerRawOutputPath = join(containerOutputRootAbs, 'result.json.raw');
+      const containerContextManifestPathAbs = join(containerInputRootAbs, 'execution-context-manifest.json');
       cpSync(inputRoot, executionInputRootAbs, { recursive: true, dereference: false, errorOnExist: true });
-      chmodReadOnly(executionInputRootAbs);
       mkdirSync(executionOutputRootAbs, { recursive: true });
       mkdirSync(executionRawLogsRootAbs, { recursive: true });
       runGit(workspaceRoot, ['clone', '--no-local', task.worktreePathAbs, executionWorktreeAbs]);
       const stagedCommit = runGit(executionWorktreeAbs, ['rev-parse', 'HEAD']);
       if (stagedCommit !== task.inputCommit) throw new TestSandboxStagingError('TEST_SANDBOX_INPUT_COMMIT_MISMATCH', 'staged repository does not match the assigned input commit', { expected: task.inputCommit, actual: stagedCommit });
+      const executionContextManifestPathAbs = join(executionInputRootAbs, 'execution-context-manifest.json');
+      const sourceManifest = JSON.parse(readFileSync(join(executionInputRootAbs, 'context-manifest.json'), 'utf8'));
+      const sourceTask = JSON.parse(readFileSync(join(executionInputRootAbs, 'task.json'), 'utf8'));
+      const executionTask = executionTaskInput({ source: sourceTask, task, inputRoot, executionInputRootAbs: containerInputRootAbs, executionWorktreeAbs: containerWorktreeAbs,
+        executionRootAbs: containerRootAbs, executionOutputRootAbs: containerOutputRootAbs, executionRawLogsRootAbs: containerRawLogsRootAbs });
+      writeFileSync(join(executionInputRootAbs, 'task.json'), `${JSON.stringify(executionTask, null, 2)}\n`, 'utf8');
+      const executionManifest = buildExecutionManifest({ source: sourceManifest, task, inputRoot, stagedInputRootAbs: executionInputRootAbs,
+        executionInputRootAbs: containerInputRootAbs, executionWorktreeAbs: containerWorktreeAbs, executionRootAbs: containerRootAbs, executionRawOutputPath: containerRawOutputPath });
+      writeFileSync(executionContextManifestPathAbs, `${JSON.stringify(executionManifest, null, 2)}\n`, 'utf8');
+      chmodReadOnly(executionInputRootAbs);
       active = {
         executionRootAbs: stagingRoot,
         executionInputRootAbs,
         executionWorktreeAbs,
         executionOutputRootAbs,
-        executionRawOutputPath: join(executionOutputRootAbs, 'result.json.raw'),
+        executionRawOutputPath,
+        executionContextManifestPathAbs,
         executionRawLogsRootAbs,
+        containerRootAbs,
+        containerInputRootAbs,
+        containerWorktreeAbs,
+        containerOutputRootAbs,
+        containerRawOutputPath,
+        containerContextManifestPathAbs,
+        containerRawLogsRootAbs,
         attestation: {
           backend: 'openclaw-workspace-staging', workspace_root_abs: workspaceRoot,
           execution_root_abs: stagingRoot, input_commit: stagedCommit,

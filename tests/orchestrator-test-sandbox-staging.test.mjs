@@ -5,6 +5,7 @@ import { join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import test from 'node:test';
 import { createTestSandboxStager } from '../scripts/orchestrator/test-sandbox-staging.mjs';
+import { sha256File } from '../scripts/runtime-core/atomic-store.mjs';
 
 function git(cwd, args) {
   const result = spawnSync('git', ['-C', cwd, ...args], { encoding: 'utf8', shell: false });
@@ -26,7 +27,22 @@ function fixture() {
   git(source, ['add', 'app.js']);
   git(source, ['commit', '-m', 'initial']);
   mkdirSync(inputRoot, { recursive: true });
-  writeFileSync(join(inputRoot, 'context-manifest.json'), '{"task":"stage"}\n');
+  const hostRawOutput = join(artifactRootAbs, '.agent-raw', 'result.json.raw');
+  const hostPublishedOutput = join(artifactRootAbs, 'output', 'result.json');
+  writeFileSync(join(inputRoot, 'task.json'), `${JSON.stringify({
+    target_project_root_abs: source,
+    worktree_path_abs: source,
+    artifact_root_abs: artifactRootAbs,
+    allowed_write_paths_abs: [source, join(artifactRootAbs, '.agent-raw')],
+    forbidden_paths_abs: [inputRoot, join(artifactRootAbs, 'output')],
+    original_request_path_abs: join(inputRoot, 'user-request.md'),
+    prior_artifacts: [],
+  })}\n`);
+  writeFileSync(join(inputRoot, 'context-manifest.json'), `${JSON.stringify({
+    task: 'stage', target_project_root_abs: source, worktree_path_abs: source, artifact_root_abs: artifactRootAbs,
+    input_files: [{ path_abs: join(inputRoot, 'task.json'), sha256: 'a'.repeat(64), role: 'task' }],
+    expected_output_paths_abs: [hostRawOutput, hostPublishedOutput],
+  })}\n`);
   writeFileSync(join(inputRoot, 'user-request.md'), 'Test only this repository.\n');
   return {
     root,
@@ -56,6 +72,33 @@ test('staging exposes only the assigned input and repository clone', (t) => {
   assert.equal(staged.executionInputRootAbs, join(value.workspace, '.task-sandbox', 'input'));
   assert.equal(readFileSync(join(staged.executionInputRootAbs, 'user-request.md'), 'utf8'), 'Test only this repository.\n');
   assert.equal(readFileSync(join(staged.executionWorktreeAbs, 'app.js'), 'utf8'), 'export const value = 1;\n');
+  const executionManifest = JSON.parse(readFileSync(staged.executionContextManifestPathAbs, 'utf8'));
+  assert.equal(staged.containerWorktreeAbs, '/workspace/.task-sandbox/repo');
+  assert.equal(executionManifest.worktree_path_abs, staged.containerWorktreeAbs);
+  assert.equal(executionManifest.execution_raw_output_path_abs, staged.containerRawOutputPath);
+  assert.equal(executionManifest.target_project_root_abs, staged.containerWorktreeAbs);
+  assert.equal(executionManifest.artifact_root_abs, staged.containerRootAbs);
+  assert.deepEqual(executionManifest.input_files.map((file) => file.path_abs), [join(staged.containerInputRootAbs, 'task.json')]);
+  assert.deepEqual(executionManifest.input_files.map((file) => file.sha256), [sha256File(join(staged.executionInputRootAbs, 'task.json'))]);
+  assert.deepEqual(executionManifest.expected_output_paths_abs, [staged.containerRawOutputPath]);
+  assert.deepEqual(executionManifest.result_identity, {
+    worktree_path_abs: value.task.worktreePathAbs,
+    artifact_root_abs: value.task.artifactRootAbs,
+    input_commit: value.task.inputCommit,
+    artifact_manifest_hash: null,
+  });
+  const stagedTask = JSON.parse(readFileSync(join(staged.executionInputRootAbs, 'task.json'), 'utf8'));
+  assert.equal(stagedTask.worktree_path_abs, staged.containerWorktreeAbs);
+  assert.equal(stagedTask.artifact_root_abs, staged.containerRootAbs);
+  assert.deepEqual(stagedTask.allowed_write_paths_abs, [staged.containerWorktreeAbs, staged.containerOutputRootAbs, staged.containerRawLogsRootAbs]);
+  assert.deepEqual(stagedTask.forbidden_paths_abs, [staged.containerInputRootAbs]);
+  assert.deepEqual(stagedTask.result_identity, executionManifest.result_identity);
+  const { result_identity: ignoredResultIdentity, ...executionView } = executionManifest;
+  const { result_identity: ignoredTaskIdentity, ...executionTaskView } = stagedTask;
+  assert.equal(JSON.stringify(executionView).includes(value.task.worktreePathAbs), false, 'execution manifest must not retain the host worktree outside result identity');
+  assert.equal(JSON.stringify(executionView).includes(value.task.artifactRootAbs), false, 'execution manifest must not retain the host artifact root outside result identity');
+  assert.equal(JSON.stringify(executionTaskView).includes(value.task.worktreePathAbs), false, 'staged task input must not retain the host worktree outside result identity');
+  assert.equal(JSON.stringify(executionTaskView).includes(value.task.artifactRootAbs), false, 'staged task input must not retain the host artifact root outside result identity');
   assert.equal(existsSync(join(value.workspace, '.task-sandbox', 'sibling-task')), false);
   assert.equal(staged.attestation.input_commit, value.task.inputCommit);
 
@@ -74,6 +117,17 @@ test('staging rejects a second TEST task until the active staging is cleaned', (
   stager.cleanup(first);
   const second = stager.prepare({ ...value.task, taskId: 'TASK-other' });
   stager.cleanup(second);
+});
+
+test('failed preparation removes the staging root and lock before propagating the error', (t) => {
+  const value = fixture();
+  t.after(() => rmSync(value.root, { recursive: true, force: true }));
+  const stager = createTestSandboxStager({ workspaceRoot: value.workspace });
+
+  assert.throws(() => stager.prepare({ ...value.task, worktreePathAbs: join(value.root, 'missing-worktree') }), (error) => error.code === 'TEST_SANDBOX_WORKTREE_MISSING');
+
+  assert.equal(existsSync(join(value.workspace, '.task-sandbox')), false);
+  assert.equal(existsSync(join(value.workspace, '.task-sandbox.lock')), false);
 });
 
 test('collection copies only staged result and raw logs to the canonical artifact root', (t) => {

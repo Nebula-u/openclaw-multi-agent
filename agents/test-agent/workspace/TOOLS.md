@@ -24,7 +24,7 @@
   - **重试生成新日志与新 CommandRecord，绝不覆盖或删除第一次失败**；首次失败后重试成功须标记**潜在 flaky**。
   - 未执行的检查标记 `NOT_EXECUTED` / `UNKNOWN`；覆盖率工具未真实产出数据时不得编造覆盖率。
   - 严禁编造 stdout/stderr、退出码、工具版本、found/passed/failed/skipped/error 数量。
-- **绝对 cwd 规则**：所有命令必须显式在**绝对路径**（被分配 worktree）下执行。**禁止依赖当前工作目录**，禁止相对运行时路径（如 `./repo`、`../worktree`）——即使会话从 `C:\Windows\System32` 启动也必须正确定位。
+- **绝对 cwd 规则**：所有命令必须显式在任务消息提供的 `execution_worktree_path_abs`（`/workspace/.task-sandbox/repo`）下执行。**禁止依赖当前工作目录**，禁止相对运行时路径（如 `./repo`、`../worktree`），也禁止把执行 manifest 中 `result_identity` 的宿主身份路径用作命令路径。
 - **Docker 执行约束**：命令只能通过 sandbox host 在容器中运行；network none、只读 rootfs、drop ALL capabilities、非 root 且有 PID/CPU/内存限制。不得回退到宿主执行。目标业务项目本身是 Python 项目时，可以在已授权容器内执行其测试/构建命令。
 
 ## 3. 本地 Git 工具（仅限被分配 worktree，仅测试代码）
