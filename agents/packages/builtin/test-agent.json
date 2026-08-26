@@ -18,10 +18,10 @@
     "mode": "all",
     "backend": "docker",
     "scope": "session",
-    "workspaceAccess": "none",
+    "workspaceAccess": "rw",
     "docker": {
       "image": "openclaw-test-node:22-slim",
-      "workdir": "/workspace",
+      "workdir": "/workspace/.task-sandbox/repo",
       "network": "none",
       "readOnlyRoot": true,
       "capDrop": ["ALL"],

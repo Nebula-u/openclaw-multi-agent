@@ -37,7 +37,17 @@ Monitor ── SQLite facts + redacted Sessions
 - 已安装并可运行的 OpenClaw。
 - Windows PowerShell 7，或 Linux Bash。
 
-不需要 PostgreSQL、Redis、Docker 数据库容器或额外 SQLite npm 包。
+不需要 PostgreSQL、Redis、Docker 数据库容器或额外 SQLite npm 包。`TEST` 任务例外：它必须使用 Docker sandbox。Windows 需要已启动并可由 OpenClaw 访问的 Docker Desktop Linux daemon；Linux 需要已启动并可由 OpenClaw 访问的 Docker Engine。
+
+首次启用 TEST 前，在项目根目录构建 test-agent 镜像：
+
+```text
+docker build --tag openclaw-test-node:22-slim --file deploy/sandbox/Dockerfile.test-node .
+```
+
+镜像构建可联网下载基础镜像和系统包；实际 TEST 容器始终使用 `network: none`。若 Docker daemon、镜像或 OpenClaw sandbox workspace 不可用，TEST 必须 fail closed，不会退回宿主执行。
+
+TEST staging 是全局强制串行的：同一时刻只允许一个 TEST 任务使用 test-agent 的 `.task-sandbox` workspace。后续 TEST 必须等待当前任务清理完成，不能并行执行或复用前一任务目录。
 
 ## 首次安装
 
@@ -85,6 +95,8 @@ bash scripts/install.sh --apply --yes --runtime-root runtime
 ```
 
 日常更新不需要停止 OpenClaw Gateway。
+
+本项目更新了 Agent package、common rules 或 test-agent workspace 时，必须在每台已安装机器执行上述对应的普通更新命令，使 installed Agent 获得新的 sandbox 配置与规则。
 
 ### 5. 启动 Orchestrator
 
@@ -237,7 +249,7 @@ bash scripts/validate-install.sh --runtime-root runtime
 
 ## Agent 安全重装
 
-只有普通更新不能恢复、注册状态或受管理 runtime 损坏时，才使用 Windows 安全重装。先手动停止 OpenClaw Gateway，然后执行：
+只有普通更新不能恢复、注册状态或受管理 runtime 损坏时，才使用 Windows 安全重装。它是 Windows-only；先手动停止 OpenClaw Gateway 并显式确认后，再执行：
 
 ```text
 pwsh -NoProfile -File scripts/reinstall-agents.ps1 -Apply -Yes -GatewayStopped -RuntimeRoot runtime

@@ -38,7 +38,7 @@
 ## 6. TEST 强制 Docker sandbox
 
 - test-agent 只能在代码准备并校验的 Docker sandbox 中执行，`isolation_mode=SANDBOXED_DOCKER`。
-- sandbox 必须满足：network none、只读 rootfs、drop ALL capabilities、非 root、PID/CPU/内存限制，并仅挂载当前 worktree、input、`.agent-raw` 与 raw logs。
+- sandbox 必须满足：network none、只读 rootfs、drop ALL capabilities、非 root、PID/CPU/内存限制。由于 OpenClaw 当前版本不支持 per-run bind mount，Orchestrator 必须在 test-agent 的独占 staging workspace 中仅保留当前任务的 `/workspace/.task-sandbox/{repo,input,output,raw-logs}`；不得暴露宿主 runtime 路径或其他任务内容。
 - 每次执行必须保存由宿主交叉验证的 container/image/mount/network/rootfs/capability/resource attestation；缺失或不一致时 fail closed。
 - test-agent 不得修改 sandbox 配置、外部 bind、Docker daemon 或宿主 OpenClaw 配置。
 

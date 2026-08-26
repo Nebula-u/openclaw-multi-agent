@@ -124,6 +124,31 @@ test('active architecture documents describe Orchestrator dispatch, SQLite, and 
   assert.doesNotMatch(resultContract.properties.summary_for_manager.description, /Manager.*调度/u);
 });
 
+test('test-agent package and policy expose only the writable staged Docker workspace', () => {
+  const testAgent = JSON.parse(readFileSync(join(ROOT, 'agents', 'packages', 'builtin', 'test-agent.json'), 'utf8'));
+  const policy = JSON.parse(readFileSync(join(ROOT, 'config', 'test-sandbox-policy.json'), 'utf8'));
+  const expectedMounts = {
+    worktree: { container_path: '/workspace/.task-sandbox/repo', mode: 'rw' },
+    input: { container_path: '/workspace/.task-sandbox/input', mode: 'ro' },
+    agent_raw: { container_path: '/workspace/.task-sandbox/output', mode: 'rw' },
+    raw_logs: { container_path: '/workspace/.task-sandbox/raw-logs', mode: 'rw' },
+  };
+
+  assert.equal(testAgent.sandbox_config.workspaceAccess, 'rw');
+  assert.equal(testAgent.sandbox_config.docker.workdir, '/workspace/.task-sandbox/repo');
+  assert.equal(policy.workspace_access, 'rw');
+  assert.equal(policy.docker.workdir, '/workspace/.task-sandbox/repo');
+  assert.deepEqual(policy.mounts, expectedMounts);
+  assert.doesNotMatch(JSON.stringify(testAgent.sandbox_config), /"binds"/u);
+  assert.doesNotMatch(JSON.stringify(policy.docker), /"binds"/u);
+  assert.equal(testAgent.sandbox_config.docker.network, 'none');
+  assert.equal(testAgent.sandbox_config.docker.readOnlyRoot, true);
+  assert.deepEqual(testAgent.sandbox_config.docker.capDrop, ['ALL']);
+  assert.equal(policy.docker.network, 'none');
+  assert.equal(policy.docker.read_only_root, true);
+  assert.deepEqual(policy.docker.cap_drop, ['ALL']);
+});
+
 test('installers synchronize model catalog limits and protect raw artifact storage', () => {
   const powershell = readFileSync(join(ROOT, 'scripts', 'install.ps1'), 'utf8');
   const componentLib = readFileSync(join(ROOT, 'scripts', 'component-lib.ps1'), 'utf8');
