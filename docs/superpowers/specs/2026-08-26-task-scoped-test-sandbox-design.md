@@ -2,18 +2,18 @@
 
 ## Goal
 
-Make every `TEST` task run in an isolated, one-shot Docker container that can access only that task's input, worktree, staged result output, and raw logs.
+Make every `TEST` task run in an isolated Docker session workspace containing only that task's staged input, Git worktree copy, result output, and raw logs.
 
 ## Problem
 
-OpenClaw's persistent test-agent sandbox currently mounts only its agent workspace at `/workspace`. The Orchestrator dispatches host-absolute paths under `<project>/runtime`, so the container cannot read the task context or worktree and cannot write the staged result. Replacing the Docker sandbox with host execution would violate the project's mandatory Docker isolation rule.
+OpenClaw's test-agent sandbox mounts only its agent workspace at `/workspace`. Its `openclaw agent` CLI does not support per-run Docker bind overrides. The Orchestrator currently dispatches host-absolute paths under `<project>/runtime`, so the container cannot read the task context or worktree and cannot write the staged result. Replacing the Docker sandbox with host execution would violate the project's mandatory Docker isolation rule.
 
 ## Scope
 
-- Add a task-scoped Docker sandbox launcher to the Orchestrator for `TEST` tasks.
-- Map host task paths to stable container paths and make those paths explicit in the dispatched context.
+- Stage every TEST task's immutable input and an isolated Git worktree copy inside the OpenClaw session workspace mounted at `/workspace`.
+- Map the staged task layout to stable container paths and make those paths explicit in the dispatched context.
 - Preserve the existing Docker hardening profile: no network, read-only root filesystem, non-root user, `CAP_DROP=ALL`, and process/CPU/memory limits.
-- Validate the task sandbox before an agent is dispatched and collect a host-verified mount attestation.
+- Validate the staged task workspace before an agent is dispatched and collect a host-verified staging attestation.
 - Make blocked preflight output ingestible without losing the task's expected `input_commit`.
 - Cover the launcher, path translation, and blocked-result handling with automated Node tests.
 
@@ -26,40 +26,40 @@ OpenClaw's persistent test-agent sandbox currently mounts only its agent workspa
 
 ## Architecture
 
-For every TEST execution, the Orchestrator builds a `TaskSandboxSpec` from the task's canonical host paths. It starts a fresh Docker container using the configured test image, then dispatches the test agent with a container-specific context. The persistent OpenClaw agent sandbox remains restricted to its own workspace; task execution occurs only in the task-scoped container.
+OpenClaw exposes a shared agent workspace when `workspaceAccess` is `rw`; it does not expose a per-session writable workspace. Therefore the Orchestrator reserves one global TEST staging lease before every TEST execution, deletes any previous staging directory, and recreates the task layout below the dedicated test-agent workspace. It then stages an immutable input copy and creates a task-local Git clone before dispatching test-agent. The lease prevents concurrent TEST tasks, so the writable workspace contains one task's files only. The Orchestrator removes the staging directory and releases the lease after every completion, error, and cancellation path.
 
-| Host source | Container target | Mode |
+| Staged session-workspace source | Container target | Mode |
 | --- | --- | --- |
-| Attempt input directory | `/task/input` | read-only |
-| Assigned worktree | `/task/repo` | read-write |
-| Task `.agent-raw` directory | `/task/output` | read-write |
-| Task `raw-logs` directory | `/task/raw-logs` | read-write |
+| Immutable attempt input copy | `/workspace/task/input` | read-only after staging |
+| Task-local Git clone | `/workspace/task/repo` | read-write |
+| Staged raw result directory | `/workspace/task/output` | read-write |
+| Staged raw-log directory | `/workspace/task/raw-logs` | read-write |
 
 The generated container context has two path classes:
 
-- **Execution paths** (`/task/...`) are the only paths test-agent may pass to commands.
+- **Execution paths** (`/workspace/task/...`) are the only paths test-agent may pass to commands.
 - **Identity paths** are canonical host paths and are copied verbatim into result identity fields so the host-side output boundary can validate them. They are never command working directories.
 
-The output directory is prepared with permissions compatible with the configured container UID/GID before launch. The container is removed after result collection, including error and cancellation paths.
+The staging directory is prepared with permissions compatible with the configured container UID/GID. Before staging, the host verifies and restores the immutable test-agent workspace files from their managed source. After the agent finishes, the host copies only the staged result and raw logs to the canonical task artifact root, validates them, removes the staging directory, restores the immutable workspace files, and releases the TEST staging lease. A test-agent Git commit is transferred to the canonical assigned worktree only through an explicitly validated patch/commit handoff; it is never exposed as a host bind mount.
 
 ## Failure Handling
 
-Before dispatch, the host verifies each mount source is inside the task's authorized roots, exists, has the expected type, and has the required read/write access. Any failure returns a structured `BLOCKED` result without starting test commands.
+Before dispatch, the host verifies the TEST staging lease, dedicated workspace, input copy, task-local Git clone, output directory, raw-log directory, and workspace-file hashes. Any failure returns a structured `BLOCKED` result without starting test commands.
 
 `BLOCKED` output must retain the task's supplied `input_commit`, even when the worktree cannot be read. The output ingestion boundary accepts this preflight result, records the infrastructure issue, and follows the configured human-decision path rather than regenerating JSON or retrying unchanged infrastructure.
 
 ## Portability
 
-All host paths are derived at runtime from `projectRoot`, `runtimeRoot`, and task metadata; no `/home/ubuntu/...` path is embedded in source. Docker invocation uses argument arrays, not shell-concatenated commands. Linux Docker Engine and Windows Docker Desktop are supported provided that Docker bind mounts are available and the test image can be built or obtained.
+All host paths are derived at runtime from `projectRoot`, task metadata, and OpenClaw's reported session workspace; no `/home/ubuntu/...` path is embedded in source. Git and OpenClaw invocation use argument arrays, not shell-concatenated commands. Linux Docker Engine and Windows Docker Desktop are supported provided that the OpenClaw sandbox workspace is available and the test image can be built or obtained.
 
 Installed Agent configuration is regenerated on each target machine by the existing installer, which resolves that machine's project and runtime paths. Machine-local OpenClaw configuration, credentials, sandboxes, artifacts, and containers are not copied between computers.
 
 ## Acceptance Criteria
 
-1. A TEST task receives exactly the four task-scoped mounts above; no sibling task worktree or artifact root is mounted.
+1. A TEST staging lease permits one TEST execution at a time. Its dedicated writable workspace contains only its staged input, task-local repository clone, staged output, and staged raw logs; no sibling task worktree or artifact root is present.
 2. The container retains `network=none`, read-only rootfs, non-root execution, dropped capabilities, and existing resource limits.
-3. The agent can read `/task/input`, read/write `/task/repo`, and write `/task/output` and `/task/raw-logs`.
-4. The agent cannot write `/` or access an unmounted sibling task path.
+3. The agent can read `/workspace/task/input`, read/write `/workspace/task/repo`, and write `/workspace/task/output` and `/workspace/task/raw-logs`.
+4. The agent cannot write `/` or access a host runtime path or sibling task staging path.
 5. Host path identity fields remain valid for output ingestion while commands use only container paths.
 6. Missing or invalid mount inputs produce one ingestible `BLOCKED` result with the original task `input_commit`; they do not enter JSON regeneration loops.
 7. Automated tests cover Linux and Windows command/path construction without requiring a real Docker daemon; a Docker-backed integration test runs when Docker is available.
