@@ -32,6 +32,35 @@ function Test-Json([string]$Path) {
 function Test-Throws([scriptblock]$Action) {
   try { & $Action; return $false } catch { return $true }
 }
+function Get-OptionalPropertyValue($Object, [string]$Name) {
+  if ($null -ne $Object -and $Object.PSObject.Properties.Name -contains $Name) { return $Object.$Name }
+  return $null
+}
+function Add-InstalledTestAgentSandboxChecks([object[]]$Agents, [string]$ErrorDetail = '') {
+  $testAgents = @($Agents | Where-Object { [string]$_.id -eq 'test-agent' })
+  $sandbox = if ($testAgents.Count -eq 1) { Get-OptionalPropertyValue $testAgents[0] 'sandbox' } else { $null }
+  if ($null -eq $sandbox) {
+    $detail = if ($ErrorDetail) { $ErrorDetail } else { 'test-agent sandbox 不存在或重复' }
+    Add-Check '已安装 test-agent sandbox workspaceAccess=rw' $false $detail
+    Add-Check '已安装 test-agent sandbox 工作目录为任务暂存 repo' $false $detail
+    Add-Check '已安装 test-agent sandbox 不含外部 bind 挂载' $false $detail
+    Add-Check '已安装 test-agent sandbox Docker 加固' $false $detail
+    return
+  }
+
+  $docker = Get-OptionalPropertyValue $sandbox 'docker'
+  $workspaceAccess = [string](Get-OptionalPropertyValue $sandbox 'workspaceAccess')
+  Add-Check '已安装 test-agent sandbox workspaceAccess=rw' ($workspaceAccess -eq 'rw') $workspaceAccess
+  $workdir = [string](Get-OptionalPropertyValue $docker 'workdir')
+  Add-Check '已安装 test-agent sandbox 工作目录为任务暂存 repo' ($workdir -eq '/workspace/.task-sandbox/repo') $workdir
+  $hasBinds = $null -ne (Get-OptionalPropertyValue $docker 'binds')
+  Add-Check '已安装 test-agent sandbox 不含外部 bind 挂载' (-not $hasBinds)
+  $network = [string](Get-OptionalPropertyValue $docker 'network')
+  $readOnlyRoot = Get-OptionalPropertyValue $docker 'readOnlyRoot'
+  $capDrop = @(Get-OptionalPropertyValue $docker 'capDrop' | ForEach-Object { [string]$_ })
+  $hardening = ([string](Get-OptionalPropertyValue $sandbox 'backend') -eq 'docker') -and $network -eq 'none' -and $readOnlyRoot -eq $true -and $capDrop.Count -eq 1 -and $capDrop[0] -eq 'ALL' -and [int](Get-OptionalPropertyValue $docker 'pidsLimit') -eq 256 -and [string](Get-OptionalPropertyValue $docker 'memory') -eq '2g' -and [double](Get-OptionalPropertyValue $docker 'cpus') -eq 2
+  Add-Check '已安装 test-agent sandbox Docker 加固' $hardening "network=$network readOnlyRoot=$readOnlyRoot capDrop=$($capDrop -join ',')"
+}
 
 Write-Host '== package 驱动静态验证 ==' -ForegroundColor Cyan
 Write-Host "ProjectRoot: $ProjectRoot"
@@ -235,6 +264,13 @@ Add-Check '运行时 Prompt 不依赖旧 Python 控制面' ($badLegacy.Count -eq
 
 if (-not $SkipOpenClaw) {
   if (Get-Command openclaw -ErrorAction SilentlyContinue) {
+    try {
+      $installedAgentsOut = & openclaw config get agents.list --json 2>&1
+      if ($LASTEXITCODE -ne 0) { throw ($installedAgentsOut -join "`n") }
+      Add-InstalledTestAgentSandboxChecks @(ConvertFrom-OpenClawJsonOutput -Output ($installedAgentsOut -join "`n") -Description '已安装 agents.list 输出')
+    } catch {
+      Add-InstalledTestAgentSandboxChecks @() $_.Exception.Message
+    }
     $validateOut = & openclaw config validate --json 2>&1
     Add-Check 'openclaw config validate --json' ($LASTEXITCODE -eq 0) ($validateOut -join "`n")
     $skillOut = & openclaw skills info skill-creator --agent (Get-ManagerPackage $Packages).id --json 2>&1

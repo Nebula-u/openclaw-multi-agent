@@ -249,6 +249,103 @@ esac
   }
 });
 
+function installedTestAgent({ externalBinds = false } = {}) {
+  const docker = {
+    image: 'openclaw-test-node:22-slim',
+    workdir: '/workspace/.task-sandbox/repo',
+    network: 'none',
+    readOnlyRoot: true,
+    capDrop: ['ALL'],
+    pidsLimit: 256,
+    memory: '2g',
+    cpus: 2,
+  };
+  if (externalBinds) docker.binds = ['/host/runtime:/host/runtime:ro'];
+  return [{ id: 'test-agent', sandbox: { mode: 'all', backend: 'docker', workspaceAccess: 'rw', docker } }];
+}
+
+function writeValidatorOpenClaw(bin, agentsPath, callsPath) {
+  const fakeOpenClaw = join(bin, 'openclaw');
+  const fakeOpenClawCmd = join(bin, 'openclaw.cmd');
+  writeFileSync(fakeOpenClaw, `#!/usr/bin/env bash
+printf '%s\\n' "$*" >> "$FAKE_OPENCLAW_CALLS"
+case "\${1:-}:\${2:-}:\${3:-}" in
+  --version::) printf 'fake-openclaw 0\\n' ;;
+  config:validate:*) printf '{"valid":true}\\n' ;;
+  config:get:agents.list) cat "$FAKE_OPENCLAW_AGENTS" ;;
+  skills:info:*) printf '{"available":true}\\n' ;;
+  *) exit 1 ;;
+esac
+`, 'utf8');
+  chmodSync(fakeOpenClaw, 0o755);
+  writeFileSync(fakeOpenClawCmd, `@echo off
+echo %*>> "%FAKE_OPENCLAW_CALLS%"
+if "%~1"=="--version" (echo fake-openclaw 0 & exit /b 0)
+if "%~1"=="config" if "%~2"=="validate" (echo {"valid":true} & exit /b 0)
+if "%~1"=="config" if "%~2"=="get" if "%~3"=="agents.list" (type "%FAKE_OPENCLAW_AGENTS%" & exit /b 0)
+if "%~1"=="skills" if "%~2"=="info" (echo {"available":true} & exit /b 0)
+exit /b 1
+`, 'utf8');
+  return { FAKE_OPENCLAW_AGENTS: agentsPath, FAKE_OPENCLAW_CALLS: callsPath };
+}
+
+function runInstalledSandboxValidator(command, agents) {
+  const root = mkdtempSync(join(tmpdir(), 'openclaw-installed-sandbox-validator-'));
+  const bin = join(root, 'bin');
+  const agentsPath = join(root, 'agents.json');
+  const callsPath = join(root, 'openclaw-calls.txt');
+  const previousManifest = existsSync(DRY_MANIFEST) ? readFileSync(DRY_MANIFEST) : null;
+  try {
+    mkdirSync(bin, { recursive: true });
+    writeFileSync(agentsPath, JSON.stringify(agents), 'utf8');
+    const env = writeValidatorOpenClaw(bin, agentsPath, callsPath);
+    const result = spawnSync(command[0], command.slice(1), {
+      cwd: ROOT,
+      encoding: 'utf8',
+      env: { ...process.env, ...env, PATH: `${bin}${delimiter}${process.env.PATH}` },
+    });
+    return { result, calls: readFileSync(callsPath, 'utf8') };
+  } finally {
+    if (previousManifest === null) {
+      rmSync(DRY_MANIFEST, { force: true });
+    } else {
+      mkdirSync(dirname(DRY_MANIFEST), { recursive: true });
+      writeFileSync(DRY_MANIFEST, previousManifest);
+    }
+    rmSync(root, { recursive: true, force: true });
+  }
+}
+
+for (const [name, command, available] of [
+  ['Bash', ['bash', VALIDATOR], BASH_AVAILABLE],
+  ['PowerShell', ['pwsh', '-NoProfile', '-File', POWERSHELL_VALIDATOR], PWSH_AVAILABLE],
+]) {
+  test(`${name} validator verifies the installed staged test-agent sandbox`, {
+    skip: available ? false : `${name} unavailable in this environment`,
+  }, () => {
+    const { result, calls } = runInstalledSandboxValidator(command, installedTestAgent());
+
+    assert.equal(result.status, 0, result.stdout + result.stderr);
+    assert.match(result.stdout, /workspaceAccess.*rw/u);
+    assert.match(result.stdout, /\.task-sandbox\/repo/u);
+    assert.doesNotMatch(result.stdout, /docker\.binds/u);
+    assert.match(result.stdout, /network=none.*readOnlyRoot=true.*capDrop=ALL/u);
+    assert.match(calls, /^config get agents\.list --json$/mu);
+    assert.match(calls, /^config validate --json$/mu);
+    assert.match(calls, /^skills info skill-creator --agent manager-agent --json$/mu);
+    assert.doesNotMatch(calls, /^(?:config set|agents (?:add|delete))/mu);
+  });
+
+  test(`${name} validator rejects installed test-agent external bind mounts`, {
+    skip: available ? false : `${name} unavailable in this environment`,
+  }, () => {
+    const { result } = runInstalledSandboxValidator(command, installedTestAgent({ externalBinds: true }));
+
+    assert.notEqual(result.status, 0, result.stdout + result.stderr);
+    assert.match(result.stdout, /\[FAIL\].*外部 bind/u);
+  });
+}
+
 test(
   'PowerShell validator isolates its installer dry-run from conflicting outer openclaw agents',
   { skip: PWSH_AVAILABLE ? false : 'pwsh unavailable in this environment' },
