@@ -226,6 +226,16 @@ npm run test:runtime-bundle
 
 Kernel 测试全部使用临时 SQLite，不需要外部数据库，也不应因缺少数据库而跳过。
 
+### Agent JSON 生成与清洗测试
+
+生产环境对齐矩阵是独立比较测试：对宿主实际提供的哈希、提交号、归档快照和审计记录传入固定夹具，并要求 Agent 原样复制。它仅覆盖 8 个此前出现 JSON 错误的 Schema 场景，共 240 个逻辑测试（每场景 3 个样例 × 每样例 10 次），包含 `test-agent`：
+
+```text
+npm run agent-json:production-aligned -- --run-id production-aligned-matrix-20260826-1600 --concurrency 1 --timeout-seconds 120
+```
+
+结果写入 `artifacts/agent-json-workflow-production-aligned/<run-id>/`。这是仅测 JSON 输出与修复链路的矩阵；如本机未启用 Docker sandbox，请先按当前测试策略临时关闭 `test-agent` sandbox，完成后再恢复，避免把启动失败混入 JSON 质量统计。
+
 安装 dry-run 与验证：
 
 ```text

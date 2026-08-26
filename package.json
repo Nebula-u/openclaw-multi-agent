@@ -9,9 +9,10 @@
   "scripts": {
     "test": "npm run test:runtime-guard && npm run test:agent-json && npm run test:runtime-bundle && npm run test:orchestrator && npm run test:hr && npm run test:monitor && npm run test:kernel && node --test tests/validate-install.test.mjs",
     "test:runtime-guard": "node --test tests/runtime-guard.test.mjs",
-    "test:agent-json:offline": "node --test tests/agent-llm-json-harness.test.mjs",
+    "test:agent-json:offline": "node --test tests/agent-llm-json-harness.test.mjs tests/agent-llm-json-production-aligned-harness.test.mjs",
     "test:agent-json": "npm run test:agent-json:offline",
     "agent-json:matrix": "node scripts/agent-json-harness/collect-llm-failures.mjs",
+    "agent-json:production-aligned": "node scripts/agent-json-harness/collect-production-aligned-llm-failures.mjs",
     "agent-json:real": "npm run agent-json:matrix",
     "agent-json:collect": "npm run agent-json:matrix",
     "agent-contract:test": "node scripts/agent-llm-contract-tests/run-contract.mjs",
