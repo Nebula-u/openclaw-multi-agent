@@ -316,13 +316,13 @@ export function createOrchestrator({ projectRoot: projectRootInput, database = n
       let executionOutcome = null;
       if (task.kind === 'TEST') {
         try {
-          testSandbox = selectedTestSandboxStager.prepare(task);
+          testSandbox = await selectedTestSandboxStager.prepare(task);
           task.testSandbox = testSandbox;
         } catch (error) {
           const occurredAt = now(clock);
           atomicWriteFile(task.rawOutputPath, `${JSON.stringify(stagingPreparationBlockedResult(task, error, occurredAt))}\n`);
           executionOutcome = { result: { exitCode: 1, stdout: '', stderr: error.message, failureCode: error.code ?? 'TEST_SANDBOX_PREPARE_FAILED' },
-            ingested: ingestTaskOutput({ projectRoot, task, occurredAt }) };
+            ingested: ingestTaskOutput({ projectRoot, task, occurredAt, testSandboxPreparationFailure: true }) };
         }
       }
       if (!executionOutcome) {
@@ -461,7 +461,7 @@ export function createOrchestrator({ projectRoot: projectRootInput, database = n
       await queueDailyReport(run, failed, 'FAILED');
       return { state: 'FAILED', task: failed };
     } finally {
-      if (testSandbox) selectedTestSandboxStager.cleanup(testSandbox);
+      if (testSandbox) await selectedTestSandboxStager.cleanup(testSandbox);
     }
   }
 

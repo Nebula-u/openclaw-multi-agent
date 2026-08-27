@@ -1,10 +1,14 @@
 import assert from 'node:assert/strict';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { once } from 'node:events';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve, win32 } from 'node:path';
-import { spawnSync } from 'node:child_process';
+import { pathToFileURL } from 'node:url';
+import { spawn, spawnSync } from 'node:child_process';
+import { createConnection } from 'node:net';
+import { setTimeout as delay } from 'node:timers/promises';
 import test from 'node:test';
-import { buildTestSandboxPaths, createTestSandboxStager } from '../scripts/orchestrator/test-sandbox-staging.mjs';
+import { acquireTestSandboxLease, buildTestSandboxPaths, createTestSandboxStager } from '../scripts/orchestrator/test-sandbox-staging.mjs';
 import { sha256File } from '../scripts/runtime-core/atomic-store.mjs';
 
 const ROOT = resolve(import.meta.dirname, '..');
@@ -73,6 +77,46 @@ function createStager(workspace) {
   return createTestSandboxStager({ projectRoot: ROOT, workspaceRoot: workspace, inspectSandbox: () => SANDBOX_PROFILE });
 }
 
+async function waitForFile(path) {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    if (existsSync(path)) return readFileSync(path, 'utf8').trim();
+    await delay(20);
+  }
+  assert.fail(`timed out waiting for ${path}`);
+}
+
+async function waitForExit(child) {
+  if (child.exitCode !== null || child.signalCode !== null) return;
+  await once(child, 'exit');
+}
+
+function spawnLeaseWorker(workspace, statusPath) {
+  const source = `
+    import { once } from 'node:events';
+    import { writeFileSync } from 'node:fs';
+    const { acquireTestSandboxLease } = await import(process.env.TEST_SANDBOX_MODULE_URL);
+    try {
+      const lease = await acquireTestSandboxLease(process.env.TEST_SANDBOX_WORKSPACE);
+      writeFileSync(process.env.TEST_SANDBOX_STATUS, 'acquired\\n');
+      process.stdin.resume();
+      await once(process.stdin, 'end');
+      await lease.release();
+    } catch (error) {
+      writeFileSync(process.env.TEST_SANDBOX_STATUS, \`\${error.code ?? 'ERROR'}\\n\`);
+      process.exitCode = error.code === 'TEST_SANDBOX_BUSY' ? 0 : 1;
+    }
+  `;
+  return spawn(process.execPath, ['--input-type=module', '--eval', source], {
+    env: {
+      ...process.env,
+      TEST_SANDBOX_MODULE_URL: pathToFileURL(join(ROOT, 'scripts', 'orchestrator', 'test-sandbox-staging.mjs')).href,
+      TEST_SANDBOX_WORKSPACE: workspace,
+      TEST_SANDBOX_STATUS: statusPath,
+    },
+    stdio: ['pipe', 'ignore', 'pipe'],
+  });
+}
+
 test('container path construction stays POSIX when host paths are Windows paths', () => {
   const paths = buildTestSandboxPaths({ workspaceRoot: 'C:\\OpenClaw\\agents\\test-agent\\workspace', hostPath: win32 });
   assert.equal(paths.stagingRoot, 'C:\\OpenClaw\\agents\\test-agent\\workspace\\.task-sandbox');
@@ -82,12 +126,78 @@ test('container path construction stays POSIX when host paths are Windows paths'
   assert.equal(paths.containerWorktreeAbs.includes('\\'), false);
 });
 
-test('staging exposes only the assigned input and repository clone', (t) => {
+test('native Windows TEST staging fails closed because immutable input cannot be enforced', async (t) => {
+  const value = fixture();
+  t.after(() => rmSync(value.root, { recursive: true, force: true }));
+  const stager = createTestSandboxStager({
+    workspaceRoot: value.workspace, inspectSandbox: () => SANDBOX_PROFILE, platform: 'win32',
+  });
+
+  await assert.rejects(stager.prepare(value.task), (error) => error.code === 'TEST_SANDBOX_NATIVE_LINUX_REQUIRED');
+  assert.equal(existsSync(join(value.workspace, '.task-sandbox')), false);
+});
+
+test('OS-backed TEST lease recovers from process death and admits only one concurrent process', { timeout: 15_000 }, async (t) => {
+  const root = mkdtempSync(join(tmpdir(), 'test-sandbox-lease-'));
+  const workspace = join(root, 'workspace');
+  mkdirSync(workspace, { recursive: true });
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  writeFileSync(join(workspace, '.task-sandbox.lock'), 'malformed legacy lock\n');
+  writeFileSync(join(workspace, '.task-sandbox.lock.recover'), 'malformed legacy recovery lock\n');
+
+  const firstStatus = join(root, 'first.status');
+  const first = spawnLeaseWorker(workspace, firstStatus);
+  assert.equal(await waitForFile(firstStatus), 'acquired');
+  const firstExit = once(first, 'exit');
+  first.kill('SIGKILL');
+  await firstExit;
+
+  const contenderStatuses = [join(root, 'contender-a.status'), join(root, 'contender-b.status')];
+  const contenders = contenderStatuses.map((status) => spawnLeaseWorker(workspace, status));
+  const statuses = await Promise.all(contenderStatuses.map(waitForFile));
+  assert.deepEqual(statuses.toSorted(), ['TEST_SANDBOX_BUSY', 'acquired']);
+  const winner = contenders[statuses.indexOf('acquired')];
+  const loser = contenders[statuses.indexOf('TEST_SANDBOX_BUSY')];
+  winner.stdin.end();
+  await Promise.all([waitForExit(winner), waitForExit(loser)]);
+
+  const lease = await acquireTestSandboxLease(workspace);
+  const client = createConnection(lease.endpoint);
+  await once(client, 'connect');
+  await Promise.race([
+    lease.release(),
+    delay(500).then(() => assert.fail('a local client connection prevented TEST lease release')),
+  ]);
+  client.destroy();
+});
+
+test('OS-backed TEST lease serializes physical workspace aliases', async (t) => {
+  const root = mkdtempSync(join(tmpdir(), 'test-sandbox-lease-alias-'));
+  const workspace = join(root, 'workspace');
+  const alias = join(root, 'workspace-alias');
+  mkdirSync(workspace, { recursive: true });
+  symlinkSync(workspace, alias, 'dir');
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const lease = await acquireTestSandboxLease(workspace);
+  let unexpectedAliasLease = null;
+
+  try {
+    await assert.rejects(acquireTestSandboxLease(alias).then((value) => {
+      unexpectedAliasLease = value;
+      return value;
+    }), (error) => error.code === 'TEST_SANDBOX_BUSY');
+  } finally {
+    await unexpectedAliasLease?.release();
+    await lease.release();
+  }
+});
+
+test('staging exposes only the assigned input and repository clone', async (t) => {
   const value = fixture();
   t.after(() => rmSync(value.root, { recursive: true, force: true }));
   const stager = createStager(value.workspace);
 
-  const staged = stager.prepare(value.task);
+  const staged = await stager.prepare(value.task);
 
   assert.equal(staged.executionRootAbs, join(value.workspace, '.task-sandbox'));
   assert.equal(staged.executionWorktreeAbs, join(value.workspace, '.task-sandbox', 'repo'));
@@ -132,39 +242,40 @@ test('staging exposes only the assigned input and repository clone', (t) => {
   assert.equal(receipt.verification.runtime_container_inspected, false);
   assert.match(receipt.limitations[0], /per-run container ID/u);
 
-  stager.cleanup(staged);
+  await stager.cleanup(staged);
   assert.equal(existsSync(join(value.workspace, '.task-sandbox')), false);
 });
 
-test('staging rejects a second TEST task until the active staging is cleaned', (t) => {
+test('staging rejects a second TEST task until the active staging is cleaned', async (t) => {
   const value = fixture();
   t.after(() => rmSync(value.root, { recursive: true, force: true }));
   const stager = createStager(value.workspace);
-  const first = stager.prepare(value.task);
+  const first = await stager.prepare(value.task);
 
-  assert.throws(() => stager.prepare({ ...value.task, taskId: 'TASK-other' }), (error) => error.code === 'TEST_SANDBOX_BUSY');
+  await assert.rejects(stager.prepare({ ...value.task, taskId: 'TASK-other' }), (error) => error.code === 'TEST_SANDBOX_BUSY');
 
-  stager.cleanup(first);
-  const second = stager.prepare({ ...value.task, taskId: 'TASK-other' });
-  stager.cleanup(second);
+  await stager.cleanup(first);
+  const second = await stager.prepare({ ...value.task, taskId: 'TASK-other' });
+  await stager.cleanup(second);
 });
 
-test('failed preparation removes the staging root and lock before propagating the error', (t) => {
+test('failed preparation removes staging and releases the OS lease before propagating the error', async (t) => {
   const value = fixture();
   t.after(() => rmSync(value.root, { recursive: true, force: true }));
   const stager = createStager(value.workspace);
 
-  assert.throws(() => stager.prepare({ ...value.task, worktreePathAbs: join(value.root, 'missing-worktree') }), (error) => error.code === 'TEST_SANDBOX_WORKTREE_MISSING');
+  await assert.rejects(stager.prepare({ ...value.task, worktreePathAbs: join(value.root, 'missing-worktree') }), (error) => error.code === 'TEST_SANDBOX_WORKTREE_MISSING');
 
   assert.equal(existsSync(join(value.workspace, '.task-sandbox')), false);
-  assert.equal(existsSync(join(value.workspace, '.task-sandbox.lock')), false);
+  const lease = await acquireTestSandboxLease(value.workspace);
+  await lease.release();
 });
 
-test('collection copies only staged result and raw logs to the canonical artifact root', (t) => {
+test('collection copies only staged result and raw logs to the canonical artifact root', async (t) => {
   const value = fixture();
   t.after(() => rmSync(value.root, { recursive: true, force: true }));
   const stager = createStager(value.workspace);
-  const staged = stager.prepare(value.task);
+  const staged = await stager.prepare(value.task);
   mkdirSync(staged.executionRawLogsRootAbs, { recursive: true });
   writeFileSync(staged.executionRawOutputPath, '{"result_status":"BLOCKED"}\n');
   writeFileSync(join(staged.executionRawLogsRootAbs, 'test.stdout.log'), 'real test output\n');
@@ -175,14 +286,14 @@ test('collection copies only staged result and raw logs to the canonical artifac
   assert.equal(readFileSync(join(value.task.artifactRootAbs, 'raw-logs', 'test.stdout.log'), 'utf8'), 'real test output\n');
   assert.deepEqual(collected.rawLogs, [join(value.task.artifactRootAbs, 'raw-logs', 'test.stdout.log')]);
   assert.equal(collected.referencePathMap[staged.containerRawLogsRootAbs + '/test.stdout.log'], join(value.task.artifactRootAbs, 'raw-logs', 'test.stdout.log'));
-  stager.cleanup(staged);
+  await stager.cleanup(staged);
 });
 
-test('staging permissions let configured image UID 10001 write repo/output/logs while input stays read-only', (t) => {
+test('staging permissions let configured image UID 10001 write repo/output/logs while input stays read-only', async (t) => {
   const value = fixture();
   t.after(() => rmSync(value.root, { recursive: true, force: true }));
   const sandbox = createStager(value.workspace);
-  const staged = sandbox.prepare(value.task);
+  const staged = await sandbox.prepare(value.task);
 
   assert.notEqual(statSync(staged.executionWorktreeAbs).mode & 0o002, 0);
   assert.notEqual(statSync(join(staged.executionWorktreeAbs, 'app.js')).mode & 0o002, 0);
@@ -190,18 +301,18 @@ test('staging permissions let configured image UID 10001 write repo/output/logs 
   assert.notEqual(statSync(staged.executionRawLogsRootAbs).mode & 0o002, 0);
   assert.equal(statSync(staged.executionInputRootAbs).mode & 0o222, 0);
   assert.equal(statSync(join(staged.executionInputRootAbs, 'task.json')).mode & 0o222, 0);
-  sandbox.cleanup(staged);
+  await sandbox.cleanup(staged);
 });
 
-test('Docker configured image can use a real staged bind without writing immutable input', { timeout: 30_000 }, (t) => {
+test('Docker configured image can use a real staged bind without writing immutable input', { timeout: 30_000 }, async (t) => {
   const daemon = spawnSync('docker', ['version', '--format', '{{.Server.Version}}'], { encoding: 'utf8', shell: false });
   const image = SANDBOX_PROFILE.docker.image;
   const inspected = spawnSync('docker', ['image', 'inspect', image], { encoding: 'utf8', shell: false });
   if (daemon.status !== 0 || inspected.status !== 0) return t.skip(`Docker daemon/configured image unavailable: ${image}`);
   const value = fixture();
   const sandbox = createStager(value.workspace);
-  const staged = sandbox.prepare(value.task);
-  t.after(() => { sandbox.cleanup(staged); rmSync(value.root, { recursive: true, force: true }); });
+  const staged = await sandbox.prepare(value.task);
+  t.after(async () => { await sandbox.cleanup(staged); rmSync(value.root, { recursive: true, force: true }); });
 
   const script = [
     'test "$(id -u):$(id -g)" = "10001:10001"',
@@ -226,21 +337,32 @@ test('Docker configured image can use a real staged bind without writing immutab
   assert.equal(readFileSync(join(staged.executionRawLogsRootAbs, 'e2e.log'), 'utf8'), 'log\n');
 });
 
-test('staging safely recovers a dead-owner lock and preserves a live-owner lock', (t) => {
+test('cleanup handles restrictive container-owned staging and releases the OS lease', { timeout: 30_000 }, async (t) => {
+  const daemon = spawnSync('docker', ['version', '--format', '{{.Server.Version}}'], { encoding: 'utf8', shell: false });
+  const image = SANDBOX_PROFILE.docker.image;
+  const inspected = spawnSync('docker', ['image', 'inspect', image], { encoding: 'utf8', shell: false });
+  if (daemon.status !== 0 || inspected.status !== 0) return t.skip(`Docker daemon/configured image unavailable: ${image}`);
   const value = fixture();
-  t.after(() => rmSync(value.root, { recursive: true, force: true }));
-  const lockPath = join(value.workspace, '.task-sandbox.lock');
-  writeFileSync(lockPath, `${JSON.stringify({ schema_version: 1, pid: 2147483647, token: 'dead', created_at: '2026-08-26T00:00:00.000Z' })}\n`);
-  const recovered = createStager(value.workspace);
-  const staged = recovered.prepare(value.task);
-  recovered.cleanup(staged);
-
-  writeFileSync(lockPath, `${JSON.stringify({ schema_version: 1, pid: process.pid, token: 'live', created_at: new Date().toISOString() })}\n`);
-  assert.throws(() => createStager(value.workspace).prepare(value.task), (error) => error.code === 'TEST_SANDBOX_BUSY');
-  assert.equal(JSON.parse(readFileSync(lockPath, 'utf8')).token, 'live');
+  t.after(() => {
+    if (existsSync(join(value.workspace, '.task-sandbox'))) spawnSync('docker', ['run', '--rm', '--network', 'none', '--read-only', '--cap-drop', 'ALL',
+      '--volume', `${value.workspace}:/workspace`, image, 'bash', '-lc', 'chmod -R a+rwx /workspace/.task-sandbox'], { encoding: 'utf8', shell: false });
+    rmSync(value.root, { recursive: true, force: true });
+  });
+  const sandbox = createStager(value.workspace);
+  const staged = await sandbox.prepare(value.task);
+  const result = spawnSync('docker', ['run', '--rm', '--network', 'none', '--read-only', '--cap-drop', 'ALL',
+    '--volume', `${value.workspace}:/workspace`, image, 'bash', '-lc',
+    'mkdir -m 0700 /workspace/.task-sandbox/repo/container-owned && printf "leftover\\n" > /workspace/.task-sandbox/repo/container-owned/file.txt'],
+  { encoding: 'utf8', shell: false, timeout: 25_000 });
+  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+  await sandbox.cleanup(staged);
+  assert.equal(existsSync(join(value.workspace, '.task-sandbox')), false);
+  const next = createStager(value.workspace);
+  const restaged = await next.prepare(value.task);
+  await next.cleanup(restaged);
 });
 
-test('staging copies prior artifacts to immutable container-visible paths with host-computed hashes', (t) => {
+test('staging copies prior artifacts to immutable container-visible paths with host-computed hashes', async (t) => {
   const value = fixture();
   t.after(() => rmSync(value.root, { recursive: true, force: true }));
   const prior = join(value.root, 'prior-artifacts', 'result.json');
@@ -252,7 +374,7 @@ test('staging copies prior artifacts to immutable container-visible paths with h
   writeFileSync(taskPath, `${JSON.stringify(taskInput)}\n`);
   const sandbox = createStager(value.workspace);
 
-  const staged = sandbox.prepare(value.task);
+  const staged = await sandbox.prepare(value.task);
 
   const stagedTask = JSON.parse(readFileSync(join(staged.executionInputRootAbs, 'task.json'), 'utf8'));
   assert.deepEqual(stagedTask.prior_artifacts, [{
@@ -262,14 +384,14 @@ test('staging copies prior artifacts to immutable container-visible paths with h
   const stagedPrior = join(staged.executionInputRootAbs, 'prior-artifacts', '001-result.json');
   assert.equal(readFileSync(stagedPrior, 'utf8'), '{"result_status":"COMPLETED"}\n');
   assert.equal(statSync(stagedPrior).mode & 0o222, 0);
-  sandbox.cleanup(staged);
+  await sandbox.cleanup(staged);
 });
 
-test('validated TEST commit is imported into the canonical assigned worktree before staging cleanup', (t) => {
+test('validated TEST commit is imported into the canonical assigned worktree before staging cleanup', async (t) => {
   const value = fixture();
   t.after(() => rmSync(value.root, { recursive: true, force: true }));
   const sandbox = createStager(value.workspace);
-  const staged = sandbox.prepare(value.task);
+  const staged = await sandbox.prepare(value.task);
   mkdirSync(join(staged.executionWorktreeAbs, 'tests'), { recursive: true });
   writeFileSync(join(staged.executionWorktreeAbs, 'tests', 'new.test.js'), 'assert.equal(1, 1);\n');
   git(staged.executionWorktreeAbs, ['config', 'user.email', 'test-agent@example.invalid']);
@@ -285,15 +407,15 @@ test('validated TEST commit is imported into the canonical assigned worktree bef
   assert.equal(git(value.task.worktreePathAbs, ['rev-parse', 'HEAD']), outputCommit);
   assert.equal(git(value.task.worktreePathAbs, ['status', '--porcelain=v1', '--untracked-files=all']), '');
   assert.equal(readFileSync(join(value.task.worktreePathAbs, 'tests', 'new.test.js'), 'utf8'), 'assert.equal(1, 1);\n');
-  sandbox.cleanup(staged);
+  await sandbox.cleanup(staged);
   assert.equal(git(value.task.worktreePathAbs, ['cat-file', '-t', outputCommit]), 'commit');
 });
 
-test('TEST commit import rejects production paths and leaves the canonical worktree unchanged', (t) => {
+test('TEST commit import rejects production paths and leaves the canonical worktree unchanged', async (t) => {
   const value = fixture();
   t.after(() => rmSync(value.root, { recursive: true, force: true }));
   const sandbox = createStager(value.workspace);
-  const staged = sandbox.prepare(value.task);
+  const staged = await sandbox.prepare(value.task);
   writeFileSync(join(staged.executionWorktreeAbs, 'app.js'), 'export const value = 2;\n');
   git(staged.executionWorktreeAbs, ['config', 'user.email', 'test-agent@example.invalid']);
   git(staged.executionWorktreeAbs, ['config', 'user.name', 'Test Agent']);
@@ -303,5 +425,47 @@ test('TEST commit import rejects production paths and leaves the canonical workt
 
   assert.throws(() => sandbox.integrateCommit(value.task, staged, outputCommit), (error) => error.code === 'TEST_SANDBOX_CHANGE_PATH_UNAUTHORIZED');
   assert.equal(git(value.task.worktreePathAbs, ['rev-parse', 'HEAD']), value.task.inputCommit);
-  sandbox.cleanup(staged);
+  await sandbox.cleanup(staged);
+});
+
+test('TEST commit import rejects a production file renamed into an allowed test path', async (t) => {
+  const value = fixture();
+  t.after(() => rmSync(value.root, { recursive: true, force: true }));
+  const sandbox = createStager(value.workspace);
+  const staged = await sandbox.prepare(value.task);
+  mkdirSync(join(staged.executionWorktreeAbs, 'tests'), { recursive: true });
+  git(staged.executionWorktreeAbs, ['mv', 'app.js', 'tests/app.test.js']);
+  git(staged.executionWorktreeAbs, ['config', 'user.email', 'test-agent@example.invalid']);
+  git(staged.executionWorktreeAbs, ['config', 'user.name', 'Test Agent']);
+  git(staged.executionWorktreeAbs, ['commit', '-m', 'test-agent: disguise production deletion as test rename']);
+  const outputCommit = git(staged.executionWorktreeAbs, ['rev-parse', 'HEAD']);
+
+  assert.throws(() => sandbox.integrateCommit(value.task, staged, outputCommit), (error) => error.code === 'TEST_SANDBOX_CHANGE_PATH_UNAUTHORIZED');
+  assert.equal(git(value.task.worktreePathAbs, ['rev-parse', 'HEAD']), value.task.inputCommit);
+  assert.equal(readFileSync(join(value.task.worktreePathAbs, 'app.js'), 'utf8'), 'export const value = 1;\n');
+  await sandbox.cleanup(staged);
+});
+
+test('TEST commit import preserves leading whitespace when authorizing NUL-delimited Git paths', async (t) => {
+  const value = fixture();
+  t.after(() => rmSync(value.root, { recursive: true, force: true }));
+  const disguisedDirectory = join(value.task.worktreePathAbs, ' tests');
+  mkdirSync(disguisedDirectory);
+  writeFileSync(join(disguisedDirectory, 'app.js'), 'export const disguised = 1;\n');
+  git(value.task.worktreePathAbs, ['add', ' tests/app.js']);
+  git(value.task.worktreePathAbs, ['commit', '-m', 'add production directory with leading whitespace']);
+  value.task.inputCommit = git(value.task.worktreePathAbs, ['rev-parse', 'HEAD']);
+  const sandbox = createStager(value.workspace);
+  const staged = await sandbox.prepare(value.task);
+  t.after(() => sandbox.cleanup(staged));
+  writeFileSync(join(staged.executionWorktreeAbs, ' tests', 'app.js'), 'export const disguised = 2;\n');
+  git(staged.executionWorktreeAbs, ['config', 'user.email', 'test-agent@example.invalid']);
+  git(staged.executionWorktreeAbs, ['config', 'user.name', 'Test Agent']);
+  git(staged.executionWorktreeAbs, ['add', ' tests/app.js']);
+  git(staged.executionWorktreeAbs, ['commit', '-m', 'test-agent: modify disguised production path']);
+  const outputCommit = git(staged.executionWorktreeAbs, ['rev-parse', 'HEAD']);
+
+  assert.throws(() => sandbox.integrateCommit(value.task, staged, outputCommit), (error) => error.code === 'TEST_SANDBOX_CHANGE_PATH_UNAUTHORIZED');
+  assert.equal(readFileSync(join(value.task.worktreePathAbs, ' tests', 'app.js'), 'utf8'), 'export const disguised = 1;\n');
+  await sandbox.cleanup(staged);
 });

@@ -149,6 +149,14 @@ test('test-agent package and policy expose only the writable staged Docker works
   assert.deepEqual(policy.docker.cap_drop, ['ALL']);
 });
 
+test('README documents Linux-only TEST staging and native Windows fail-closed behavior', () => {
+  const readme = readFileSync(join(ROOT, 'README.md'), 'utf8');
+  assert.match(readme, /TEST.*Linux.*Docker Engine/su);
+  assert.match(readme, /Windows.*TEST.*fail closed/su);
+  assert.match(readme, /per-run.*只读.*submount/isu);
+  assert.doesNotMatch(readme, /Windows 需要已启动并可由 OpenClaw 访问的 Docker Desktop Linux daemon/u);
+});
+
 test('installers synchronize model catalog limits and protect raw artifact storage', () => {
   const powershell = readFileSync(join(ROOT, 'scripts', 'install.ps1'), 'utf8');
   const componentLib = readFileSync(join(ROOT, 'scripts', 'component-lib.ps1'), 'utf8');

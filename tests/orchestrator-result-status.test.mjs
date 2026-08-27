@@ -319,7 +319,7 @@ test('TEST ingestion verifies the host receipt and maps collected execution evid
   mkdirSync(task.worktreePathAbs, { recursive: true });
   const hostLogs = join(task.artifactRootAbs, 'raw-logs');
   mkdirSync(hostLogs, { recursive: true });
-  for (const [name, content] of [['test.stdout.log', 'ok\n'], ['command-records.jsonl', '{}\n'], ['evidence.jsonl', '{}\n']]) writeFileSync(join(hostLogs, name), content);
+  for (const [name, content] of [['test.stdout.log', 'ok\n'], ['command-records.jsonl', '{}\n'], ['evidence.jsonl', '{}\n'], ['claim-evidence.jsonl', '{}\n']]) writeFileSync(join(hostLogs, name), content);
   mkdirSync(join(task.artifactRootAbs, '.agent-raw'), { recursive: true });
   const result = {
     ...blockedTestResult(task), result_status: 'COMPLETED', summary_for_user: 'Tests passed.', summary_for_manager: 'Tests passed.',
@@ -328,6 +328,8 @@ test('TEST ingestion verifies the host receipt and maps collected execution evid
     report_files: ['/workspace/.task-sandbox/raw-logs/test.stdout.log'],
     command_record_refs: ['/workspace/.task-sandbox/raw-logs/command-records.jsonl'],
     evidence_refs: ['/workspace/.task-sandbox/raw-logs/evidence.jsonl'],
+    claims: [{ claim_id: 'CLAIM-1', statement: 'The test passed.', classification: 'OBSERVED',
+      evidence_refs: ['/workspace/.task-sandbox/raw-logs/claim-evidence.jsonl'] }],
   };
   writeFileSync(join(task.artifactRootAbs, '.agent-raw', 'result.json.raw'), `${JSON.stringify(result)}\n`);
   const attestation = hostSandboxAttestation(task);
@@ -340,12 +342,31 @@ test('TEST ingestion verifies the host receipt and maps collected execution evid
   assert.deepEqual(ingested.value.report_files, [join(hostLogs, 'test.stdout.log')]);
   assert.deepEqual(ingested.value.command_record_refs, [join(hostLogs, 'command-records.jsonl')]);
   assert.deepEqual(ingested.value.evidence_refs, [join(hostLogs, 'evidence.jsonl')]);
+  assert.deepEqual(ingested.value.claims[0].evidence_refs, [join(hostLogs, 'claim-evidence.jsonl')]);
   assert.equal(ingested.value.sandbox_attestation.authority, 'orchestrator-host');
   assert.equal(ingested.value.sandbox_attestation.receipt_path_abs, attestation.receipt_path_abs);
   assert.equal(ingested.value.sandbox_attestation.runtime_container_inspected, false);
   assert.deepEqual(ingested.value.sandbox_attestation.agent_claim, result.sandbox_attestation);
   assert.equal(ingested.artifacts.some((artifact) => artifact.path_abs === attestation.receipt_path_abs && artifact.sha256 === attestation.receipt_sha256), true);
   assert.doesNotMatch(readFileSync(ingested.outputPath, 'utf8'), /\/workspace\/\.task-sandbox\/raw-logs/u);
+});
+
+test('reference mapping preserves absent arrays and records no mapping transformation when no reference changes', (t) => {
+  const root = mkdtempSync(join(tmpdir(), 'orchestrator-test-ingest-no-map-'));
+  const task = {
+    kind: 'TEST', workflowId: 'WF-Test-No-Map', taskId: 'TASK-Test-No-Map', runId: 'RUN-Test-No-Map', agentId: 'test-agent', attempt: 1,
+    inputCommit: '1'.repeat(40), worktreePathAbs: join(root, 'repo'), artifactRootAbs: join(root, 'artifacts'), contextManifestSha256: 'a'.repeat(64),
+  };
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  mkdirSync(join(task.artifactRootAbs, '.agent-raw'), { recursive: true });
+  writeFileSync(join(task.artifactRootAbs, '.agent-raw', 'result.json.raw'), `${JSON.stringify(blockedTestResult(task))}\n`);
+  const attestation = hostSandboxAttestation(task);
+
+  const ingested = ingestTaskOutput({ projectRoot: ROOT, task, sandboxContext: { attestation, referencePathMappings: [] } });
+
+  for (const field of ['report_files', 'command_record_refs', 'evidence_refs']) assert.equal(Object.hasOwn(ingested.value, field), false);
+  const receipt = JSON.parse(readFileSync(ingested.receiptPath, 'utf8'));
+  assert.equal(receipt.transformations.includes('container_references_mapped'), false);
 });
 
 test('TEST ingestion fails closed when a host attestation receipt is missing or changed', (t) => {
@@ -362,6 +383,23 @@ test('TEST ingestion fails closed when a host attestation receipt is missing or 
   writeFileSync(attestation.receipt_path_abs, '{}\n');
   assert.throws(() => ingestTaskOutput({ projectRoot: ROOT, task, sandboxContext: { attestation, referencePathMappings: [] } }),
     (error) => error.code === 'TEST_SANDBOX_ATTESTATION_HASH_MISMATCH');
+});
+
+test('staged TEST ingestion rejects an agent attempt to downgrade the isolation mode', (t) => {
+  const root = mkdtempSync(join(tmpdir(), 'orchestrator-test-isolation-downgrade-'));
+  const task = {
+    kind: 'TEST', workflowId: 'WF-Test-Isolation', taskId: 'TASK-Test-Isolation', runId: 'RUN-Test-Isolation', agentId: 'test-agent', attempt: 1,
+    inputCommit: '1'.repeat(40), worktreePathAbs: join(root, 'repo'), artifactRootAbs: join(root, 'artifacts'), contextManifestSha256: 'a'.repeat(64),
+  };
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  mkdirSync(join(task.artifactRootAbs, '.agent-raw'), { recursive: true });
+  writeFileSync(join(task.artifactRootAbs, '.agent-raw', 'result.json.raw'), `${JSON.stringify({
+    ...blockedTestResult(task), isolation_mode: 'UNSANDBOXED_LOCAL', sandbox_attestation: null,
+  })}\n`);
+
+  assert.throws(() => ingestTaskOutput({ projectRoot: ROOT, task, sandboxContext: {
+    attestation: hostSandboxAttestation(task), referencePathMappings: [],
+  } }), (error) => error.code === 'TEST_SANDBOX_ISOLATION_MISMATCH');
 });
 
 test('TEST staging preparation failure is recorded as BLOCKED, releases its lease, and never reaches the runner', async (t) => {

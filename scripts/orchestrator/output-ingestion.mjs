@@ -42,28 +42,51 @@ function assertIdentity(task, value) {
       regular(path, 'AGENT_OUTPUT_REFERENCE_UNSAFE');
     }
   }
+  for (const [index, claim] of (value.claims ?? []).entries()) {
+    for (const path of claim?.evidence_refs ?? []) {
+      if (!isAbsolute(path)) continue;
+      if (!inside(task.artifactRootAbs, path) && !inside(task.worktreePathAbs, path)) {
+        throw new OutputBoundaryError('AGENT_OUTPUT_REFERENCE_ESCAPE', 'claims[].evidence_refs escapes granted roots', { claim_index: index, path });
+      }
+      regular(path, 'AGENT_OUTPUT_REFERENCE_UNSAFE');
+    }
+  }
 }
 
 function mappedReferences(value, mappings = []) {
   const mapped = structuredClone(value);
+  const mapPath = (path) => {
+    if (typeof path !== 'string' || !posix.isAbsolute(path)) return path;
+    for (const mapping of mappings) {
+      const containerRoot = String(mapping?.container_root_abs ?? '').replace(/\/$/u, '');
+      if (!containerRoot || (path !== containerRoot && !path.startsWith(`${containerRoot}/`))) continue;
+      const suffix = posix.relative(containerRoot, path);
+      if (suffix === '..' || suffix.startsWith('../')) continue;
+      return suffix ? join(mapping.host_root_abs, ...suffix.split('/')) : resolve(mapping.host_root_abs);
+    }
+    return path;
+  };
   for (const field of ['report_files', 'command_record_refs', 'evidence_refs']) {
-    mapped[field] = (mapped[field] ?? []).map((path) => {
-      if (typeof path !== 'string' || !posix.isAbsolute(path)) return path;
-      for (const mapping of mappings) {
-        const containerRoot = String(mapping?.container_root_abs ?? '').replace(/\/$/u, '');
-        if (!containerRoot || (path !== containerRoot && !path.startsWith(`${containerRoot}/`))) continue;
-        const suffix = posix.relative(containerRoot, path);
-        if (suffix === '..' || suffix.startsWith('../')) continue;
-        return suffix ? join(mapping.host_root_abs, ...suffix.split('/')) : resolve(mapping.host_root_abs);
-      }
-      return path;
-    });
+    if (Array.isArray(mapped[field])) mapped[field] = mapped[field].map(mapPath);
+  }
+  for (const claim of mapped.claims ?? []) {
+    if (Array.isArray(claim?.evidence_refs)) claim.evidence_refs = claim.evidence_refs.map(mapPath);
   }
   return mapped;
 }
 
-function attachHostSandboxAttestation(task, value, sandboxContext) {
-  if (task.agentId !== 'test-agent' || value.isolation_mode !== 'SANDBOXED_DOCKER') return value;
+function attachHostSandboxAttestation(task, value, sandboxContext, testSandboxPreparationFailure) {
+  if (task.agentId !== 'test-agent') return value;
+  if (testSandboxPreparationFailure) {
+    if (sandboxContext || value.isolation_mode !== 'UNSANDBOXED_LOCAL' || value.role !== 'orchestrator'
+      || value.result_status !== 'BLOCKED' || value.self_validation?.preflight_passed !== false) {
+      throw new OutputBoundaryError('TEST_SANDBOX_PREPARATION_RESULT_INVALID', 'only the host-generated TEST preparation failure may be ingested without Docker attestation');
+    }
+    return value;
+  }
+  if (value.isolation_mode !== 'SANDBOXED_DOCKER') {
+    throw new OutputBoundaryError('TEST_SANDBOX_ISOLATION_MISMATCH', 'a dispatched TEST result must report SANDBOXED_DOCKER isolation');
+  }
   const attestation = sandboxContext?.attestation;
   if (!attestation?.receipt_path_abs || !attestation?.receipt_sha256) {
     throw new OutputBoundaryError('TEST_SANDBOX_ATTESTATION_MISSING', 'SANDBOXED_DOCKER TEST output requires a host-owned sandbox attestation receipt');
@@ -98,7 +121,7 @@ function attachHostSandboxAttestation(task, value, sandboxContext) {
   };
 }
 
-export function ingestTaskOutput({ projectRoot, task, occurredAt = new Date().toISOString(), sandboxContext = null }) {
+export function ingestTaskOutput({ projectRoot, task, occurredAt = new Date().toISOString(), sandboxContext = null, testSandboxPreparationFailure = false }) {
   const rawPath = rawOutputPath(task); const rawResult = readRegularFileNoFollow(rawPath);
   if (!rawResult.available) throw new OutputBoundaryError('AGENT_OUTPUT_MISSING', `required file must be a single-link regular file: ${rawPath}`);
   const raw = rawResult.text;
@@ -107,7 +130,7 @@ export function ingestTaskOutput({ projectRoot, task, occurredAt = new Date().to
   catch (error) { throw new OutputBoundaryError('AGENT_OUTPUT_JSON_INVALID', error.message, { diagnostic: error.diagnostic ?? 'JSON_PARSE_ERROR' }); }
   validateResult(projectRoot, ingestion.value);
   const mapped = mappedReferences(ingestion.value, sandboxContext?.referencePathMappings);
-  const value = attachHostSandboxAttestation(task, mapped, sandboxContext);
+  const value = attachHostSandboxAttestation(task, mapped, sandboxContext, testSandboxPreparationFailure);
   assertIdentity(task, value);
   const boundaryTransformations = [];
   if (JSON.stringify(mapped) !== JSON.stringify(ingestion.value)) boundaryTransformations.push('container_references_mapped');

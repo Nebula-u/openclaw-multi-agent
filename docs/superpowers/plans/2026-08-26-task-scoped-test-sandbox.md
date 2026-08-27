@@ -155,7 +155,7 @@ Run: `node --test tests/validate-install.test.mjs tests/runtime-bundle.test.mjs`
 
 - [ ] **Step 3: Update package, policy, and instructions without weakening Docker hardening**
 
-- [ ] **Step 4: Document image build, Agent update, Windows Docker Desktop, Linux Docker Engine, and serial TEST behavior**
+- [ ] **Step 4: Document image build, Agent update, Linux Docker Engine, native Windows fail-closed behavior, and serial TEST behavior**
 
 - [ ] **Step 5: Run focused tests and commit**
 

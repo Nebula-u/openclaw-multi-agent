@@ -1,10 +1,11 @@
-import { randomUUID } from 'node:crypto';
+import { createHash } from 'node:crypto';
 import {
-  chmodSync, closeSync, copyFileSync, cpSync, existsSync, lstatSync, mkdirSync, openSync, readFileSync,
-  readdirSync, rmSync, statSync, unlinkSync, writeFileSync,
+  chmodSync, copyFileSync, cpSync, existsSync, lstatSync, mkdirSync, readFileSync,
+  readdirSync, rmSync, statSync, writeFileSync,
 } from 'node:fs';
 import * as nodePath from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { createServer } from 'node:net';
 import { inputRootForAttempt, rawOutputPath } from './context-manifest.mjs';
 import { atomicWriteJson, sha256File } from '../runtime-core/atomic-store.mjs';
 import { openClawSpawnSpec } from './process-utils.mjs';
@@ -65,7 +66,8 @@ function chmodContainerWritable(path) {
 function defaultGit(cwd, args) {
   const result = spawnSync('git', ['-C', cwd, ...args], { encoding: 'utf8', shell: false, windowsHide: true });
   if (result.status !== 0) fail('TEST_SANDBOX_GIT_FAILED', `git ${args.join(' ')} failed`, { cwd, stderr: String(result.stderr ?? '').trim() });
-  return String(result.stdout ?? '').trim();
+  const stdout = String(result.stdout ?? '');
+  return args.includes('-z') ? stdout : stdout.trim();
 }
 
 function defaultInspectSandbox() {
@@ -105,6 +107,7 @@ export function buildTestSandboxPaths({ workspaceRoot, hostPath = nodePath } = {
   const containerRootAbs = '/workspace/.task-sandbox';
   return {
     workspaceRoot: workspaceRootAbs, stagingRoot, lockPath: hostPath.join(workspaceRootAbs, '.task-sandbox.lock'),
+    recoveryLockPath: hostPath.join(workspaceRootAbs, '.task-sandbox.lock.recover'),
     executionInputRootAbs: hostPath.join(stagingRoot, 'input'), executionWorktreeAbs: hostPath.join(stagingRoot, 'repo'),
     executionOutputRootAbs: hostPath.join(stagingRoot, 'output'), executionRawLogsRootAbs: hostPath.join(stagingRoot, 'raw-logs'),
     executionRawOutputPath: hostPath.join(stagingRoot, 'output', 'result.json.raw'),
@@ -175,14 +178,6 @@ function buildExecutionManifest({ source, task, inputRoot, paths }) {
   };
 }
 
-function processAlive(pid) {
-  if (!Number.isInteger(pid) || pid <= 0) return null;
-  try { process.kill(pid, 0); return true; }
-  catch (error) { if (error.code === 'ESRCH') return false; if (error.code === 'EPERM') return true; return null; }
-}
-function sameFile(first, second) {
-  return first.dev === second.dev && first.ino === second.ino && first.size === second.size && first.mtimeMs === second.mtimeMs;
-}
 function testChangeAllowed(path) {
   const normalized = String(path).replaceAll('\\', '/').replace(/^\.\//u, '');
   const segments = normalized.toLowerCase().split('/');
@@ -192,44 +187,48 @@ function testChangeAllowed(path) {
     || name === 'conftest.py';
 }
 
-export function createTestSandboxStager({ workspaceRoot: workspaceRootInput, runGit = defaultGit, inspectSandbox = defaultInspectSandbox, clock = () => new Date() } = {}) {
+export async function acquireTestSandboxLease(workspaceRoot, { platform = process.platform } = {}) {
+  if (!['linux', 'win32'].includes(platform)) {
+    fail('TEST_SANDBOX_PLATFORM_UNSUPPORTED', 'the TEST staging lease requires native Linux or Windows OS locking');
+  }
+  const workspaceRootAbs = nodePath.resolve(workspaceRoot);
+  mkdirSync(workspaceRootAbs, { recursive: true });
+  const workspaceIdentity = statSync(workspaceRootAbs, { bigint: true });
+  const identity = createHash('sha256').update(`${platform}:${workspaceIdentity.dev}:${workspaceIdentity.ino}`).digest('hex');
+  const endpoint = platform === 'win32'
+    ? `\\\\.\\pipe\\openclaw-test-sandbox-${identity}`
+    : `\0openclaw-test-sandbox-${identity}`;
+  const server = createServer((socket) => socket.destroy());
+  await new Promise((resolve, reject) => {
+    const onError = (error) => {
+      if (error.code === 'EADDRINUSE') reject(new TestSandboxStagingError('TEST_SANDBOX_BUSY', 'another process owns the TEST staging workspace'));
+      else reject(error);
+    };
+    server.once('error', onError);
+    server.listen(endpoint, () => {
+      server.off('error', onError);
+      resolve();
+    });
+  });
+  let released = false;
+  return {
+    endpoint,
+    async release() {
+      if (released) return;
+      released = true;
+      await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    },
+  };
+}
+
+export function createTestSandboxStager({ workspaceRoot: workspaceRootInput, runGit = defaultGit, inspectSandbox = defaultInspectSandbox,
+  clock = () => new Date(), platform = process.platform } = {}) {
   const paths = buildTestSandboxPaths({ workspaceRoot: workspaceRootInput });
-  const lockOwner = { schema_version: 1, pid: process.pid, token: randomUUID(), created_at: clock().toISOString() };
   let active = null;
+  let lease = null;
 
-  function acquire() {
-    mkdirSync(paths.workspaceRoot, { recursive: true });
-    for (let attempt = 0; attempt < 3; attempt += 1) {
-      let descriptor;
-      try {
-        descriptor = openSync(paths.lockPath, 'wx', 0o600);
-        writeFileSync(descriptor, `${JSON.stringify(lockOwner)}\n`, 'utf8');
-        closeSync(descriptor);
-        return;
-      } catch (error) {
-        if (descriptor !== undefined) try { closeSync(descriptor); } catch { /* already closed */ }
-        if (error.code !== 'EEXIST') throw error;
-      }
-      let owner; let before;
-      try { before = lstatSync(paths.lockPath); owner = JSON.parse(readFileSync(paths.lockPath, 'utf8')); }
-      catch { fail('TEST_SANDBOX_BUSY', 'the TEST staging lock owner cannot be verified safely', { lock_path_abs: paths.lockPath }); }
-      const alive = processAlive(owner?.pid);
-      if (alive !== false) fail('TEST_SANDBOX_BUSY', 'another live or unverifiable TEST process owns the staging workspace', { lock_path_abs: paths.lockPath, owner_pid: owner?.pid ?? null });
-      let after;
-      try { after = lstatSync(paths.lockPath); } catch (error) { if (error.code === 'ENOENT') continue; throw error; }
-      if (!sameFile(before, after)) continue;
-      try { unlinkSync(paths.lockPath); } catch (error) { if (error.code !== 'ENOENT') throw error; }
-    }
-    fail('TEST_SANDBOX_BUSY', 'the stale TEST staging lock changed during recovery', { lock_path_abs: paths.lockPath });
-  }
-
-  function release() {
-    try {
-      const owner = JSON.parse(readFileSync(paths.lockPath, 'utf8'));
-      if (owner?.token !== lockOwner.token) fail('TEST_SANDBOX_LOCK_OWNERSHIP_LOST', 'refusing to remove a TEST staging lock owned by another process');
-      unlinkSync(paths.lockPath);
-    } catch (error) { if (error.code !== 'ENOENT') throw error; }
-  }
+  async function acquire() { lease = await acquireTestSandboxLease(paths.workspaceRoot, { platform }); }
+  async function release() { const owned = lease; lease = null; await owned?.release(); }
   function normalizeContainerOwnedModes(image) {
     const command = [
       'find /workspace/.task-sandbox -xdev -user 10001 -type d -exec chmod 0777 {} +',
@@ -242,24 +241,31 @@ export function createTestSandboxStager({ workspaceRoot: workspaceRootInput, run
       status: result.status ?? null, stderr: String(result.stderr ?? '').trim(),
     });
   }
-  function cleanRoot() {
+  function cleanRoot(configuredImage = active?.configuredImage ?? null) {
     if (!inside(paths.workspaceRoot, paths.stagingRoot) || nodePath.resolve(paths.stagingRoot) === paths.workspaceRoot) fail('TEST_SANDBOX_PATH_UNSAFE', 'staging root escapes the dedicated test workspace');
-    chmodHostWritable(paths.stagingRoot);
-    try { rmSync(paths.stagingRoot, { recursive: true, force: true }); }
-    catch (error) {
-      if (!['EACCES', 'EPERM'].includes(error.code) || !active?.configuredImage) throw error;
-      normalizeContainerOwnedModes(active.configuredImage);
+    const removeFromHost = () => {
       chmodHostWritable(paths.stagingRoot);
       rmSync(paths.stagingRoot, { recursive: true, force: true });
+    };
+    try { removeFromHost(); }
+    catch (error) {
+      if (!['EACCES', 'EPERM'].includes(error.code) || !configuredImage) throw error;
+      normalizeContainerOwnedModes(configuredImage);
+      removeFromHost();
     }
   }
 
-  function prepare(task) {
+  async function prepare(task) {
     if (active) fail('TEST_SANDBOX_BUSY', 'this stager already owns a TEST task');
-    acquire();
+    if (platform !== 'linux') {
+      fail('TEST_SANDBOX_NATIVE_LINUX_REQUIRED', 'TEST input immutability is enforceable only on a native Linux Docker Engine host');
+    }
+    await acquire();
+    let cleanupImage = null;
     try {
       const configuredSandbox = verifiedSandboxProfile(inspectSandbox);
-      cleanRoot();
+      cleanupImage = configuredSandbox.docker.image;
+      cleanRoot(cleanupImage);
       const inputRoot = inputRootForAttempt(task);
       if (!existsSync(inputRoot)) fail('TEST_SANDBOX_INPUT_MISSING', `task input root is missing: ${inputRoot}`);
       safeTree(inputRoot, 'TEST_SANDBOX_INPUT_UNSAFE');
@@ -310,7 +316,10 @@ export function createTestSandboxStager({ workspaceRoot: workspaceRootInput, run
       };
       return active;
     } catch (error) {
-      cleanRoot(); release(); throw error;
+      let pendingError = error;
+      try { cleanRoot(cleanupImage); } catch (cleanupError) { pendingError = cleanupError; }
+      finally { await release(); }
+      throw pendingError;
     }
   }
 
@@ -347,7 +356,7 @@ export function createTestSandboxStager({ workspaceRoot: workspaceRootInput, run
     if (stagedStatus) fail('TEST_SANDBOX_WORKTREE_DIRTY', 'staged TEST clone contains uncommitted changes', { status: stagedStatus });
     try { runGit(staging.executionWorktreeAbs, ['merge-base', '--is-ancestor', task.inputCommit, outputCommit]); }
     catch { fail('TEST_SANDBOX_OUTPUT_COMMIT_NOT_DESCENDANT', 'TEST output_commit is not descended from input_commit'); }
-    const changedPaths = runGit(staging.executionWorktreeAbs, ['diff', '--name-only', '-z', task.inputCommit, outputCommit]).split('\0').filter(Boolean).sort();
+    const changedPaths = runGit(staging.executionWorktreeAbs, ['diff', '--no-renames', '--name-only', '-z', task.inputCommit, outputCommit]).split('\0').filter(Boolean).sort();
     const unauthorized = changedPaths.filter((path) => !testChangeAllowed(path));
     if (unauthorized.length) fail('TEST_SANDBOX_CHANGE_PATH_UNAUTHORIZED', 'TEST commit changes paths outside the test code/config/fixture policy', { paths: unauthorized });
     const canonicalHead = runGit(task.worktreePathAbs, ['rev-parse', '--verify', 'HEAD^{commit}']);
@@ -362,9 +371,9 @@ export function createTestSandboxStager({ workspaceRoot: workspaceRootInput, run
     return { inputCommit: task.inputCommit, outputCommit, changedPaths };
   }
 
-  function cleanup(staging) {
+  async function cleanup(staging) {
     if (staging !== active) return;
-    try { cleanRoot(); } finally { active = null; release(); }
+    try { cleanRoot(); } finally { active = null; await release(); }
   }
 
   return { prepare, collect, integrateCommit, cleanup };

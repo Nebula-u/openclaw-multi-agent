@@ -37,7 +37,7 @@ Monitor ── SQLite facts + redacted Sessions
 - 已安装并可运行的 OpenClaw。
 - Windows PowerShell 7，或 Linux Bash。
 
-不需要 PostgreSQL、Redis、Docker 数据库容器或额外 SQLite npm 包。`TEST` 任务例外：它必须使用 Docker sandbox。Windows 需要已启动并可由 OpenClaw 访问的 Docker Desktop Linux daemon；Linux 需要已启动并可由 OpenClaw 访问的 Docker Engine。
+不需要 PostgreSQL、Redis、Docker 数据库容器或额外 SQLite npm 包。`TEST` 任务例外：它必须部署在原生 Linux 服务器上，并使用可由 OpenClaw 访问的 Linux Docker Engine。Windows 仍可用于安装、管理和非 TEST 工作流，但原生 Windows 上的 TEST staging 会明确 fail closed，不会退回宿主执行。原因是 Docker Desktop 的单一可写 workspace bind 无法可靠强制 `.task-sandbox/input` 不可写；在 OpenClaw 提供 per-run 只读 submount 前，不支持 Windows TEST 执行。
 
 首次启用 TEST 前，在项目根目录构建 test-agent 镜像：
 
