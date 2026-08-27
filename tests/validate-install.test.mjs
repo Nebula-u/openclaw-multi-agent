@@ -138,6 +138,16 @@ test('active architecture documents describe Orchestrator dispatch, SQLite, and 
   assert.doesNotMatch(resultContract.properties.summary_for_manager.description, /Manager.*调度/u);
 });
 
+test('test-agent keeps session-isolated mounts and prunes idle sandboxes after one hour', () => {
+  const testAgentPackage = JSON.parse(readFileSync(join(ROOT, 'agents', 'packages', 'builtin', 'test-agent.json'), 'utf8'));
+  const sandboxPolicy = JSON.parse(readFileSync(join(ROOT, 'config', 'test-sandbox-policy.json'), 'utf8'));
+
+  assert.equal(testAgentPackage.sandbox_config.scope, 'session');
+  assert.equal(testAgentPackage.sandbox_config.prune.idleHours, 1);
+  assert.equal(sandboxPolicy.scope, 'session');
+  assert.equal(sandboxPolicy.prune.idle_hours, 1);
+});
+
 test('installers synchronize model catalog limits and protect raw artifact storage', () => {
   const powershell = readFileSync(join(ROOT, 'scripts', 'install.ps1'), 'utf8');
   const componentLib = readFileSync(join(ROOT, 'scripts', 'component-lib.ps1'), 'utf8');

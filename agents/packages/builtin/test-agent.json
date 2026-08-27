@@ -19,6 +19,9 @@
     "backend": "docker",
     "scope": "session",
     "workspaceAccess": "none",
+    "prune": {
+      "idleHours": 1
+    },
     "docker": {
       "image": "openclaw-test-node:22-slim",
       "workdir": "/workspace",

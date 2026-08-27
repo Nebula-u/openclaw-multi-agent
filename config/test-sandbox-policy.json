@@ -10,6 +10,9 @@
   "backend": "docker",
   "scope": "session",
   "workspace_access": "none",
+  "prune": {
+    "idle_hours": 1
+  },
   "exec_host": "sandbox",
   "elevated_enabled": false,
   "docker": {

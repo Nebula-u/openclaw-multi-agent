@@ -62,6 +62,14 @@
         "backend": { "enum": ["docker", "ssh", "openshell"] },
         "scope": { "enum": ["session", "agent", "shared"] },
         "workspaceAccess": { "enum": ["none", "ro", "rw"] },
+        "prune": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "idleHours": { "type": "number", "minimum": 0 },
+            "maxAgeDays": { "type": "number", "minimum": 0 }
+          }
+        },
         "docker": {
           "type": "object",
           "additionalProperties": false,
