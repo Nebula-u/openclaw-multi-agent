@@ -9,7 +9,7 @@
   "mode": "all",
   "backend": "docker",
   "scope": "session",
-  "workspace_access": "none",
+  "workspace_access": "rw",
   "prune": {
     "idle_hours": 1
   },
@@ -17,7 +17,7 @@
   "elevated_enabled": false,
   "docker": {
     "image": "openclaw-test-node:22-slim",
-    "workdir": "/workspace",
+    "workdir": "/workspace/.task-sandbox/repo",
     "network": "none",
     "read_only_root": true,
     "cap_drop": ["ALL"],
@@ -28,10 +28,9 @@
     "dangerously_allow_reserved_container_targets": false
   },
   "mounts": {
-    "worktree": { "container_path": "/worktree", "mode": "rw" },
-    "input": { "container_path": "/input", "mode": "ro" },
-    "agent_raw": { "container_path": "/agent-raw", "mode": "rw" },
-    "raw_logs": { "container_path": "/raw-logs", "mode": "rw" }
+    "worktree": { "container_path": "/workspace/.task-sandbox/repo", "mode": "rw" },
+    "input": { "container_path": "/workspace/.task-sandbox/input", "mode": "ro" },
+    "agent_raw": { "container_path": "/workspace/.task-sandbox/output", "mode": "rw" },
+    "raw_logs": { "container_path": "/workspace/.task-sandbox/raw-logs", "mode": "rw" }
   }
 }
-

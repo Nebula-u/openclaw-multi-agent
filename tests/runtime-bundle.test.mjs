@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import test from 'node:test';
 import { buildBundle } from '../scripts/runtime-bundle.mjs';
 
@@ -127,6 +127,35 @@ test('Manager workspace requires quote-safe manager-control arguments', () => {
   assert.match(workspace, /--authorization-summary/u);
   assert.doesNotMatch(workspace, /--project-json/u);
   assert.doesNotMatch(workspace, /--authorization-json/u);
+});
+test('bundled test-agent instructions use only the staged Docker execution paths', () => {
+  const runtime = mkdtempSync(join(tmpdir(), 'runtime-bundle-test-agent-'));
+  try {
+    const bundle = buildBundle(ROOT, runtime, { agentIds: ['test-agent'] });
+    const testAgentsEntry = bundle.entries.find((entry) => entry.target_rel === 'agents/test-agent/workspace/AGENTS.md');
+    const testToolsEntry = bundle.entries.find((entry) => entry.target_rel === 'agents/test-agent/workspace/TOOLS.md');
+    assert.ok(testAgentsEntry, 'test-agent AGENTS.md is included in the runtime bundle');
+    assert.ok(testToolsEntry, 'test-agent TOOLS.md is included in the runtime bundle');
+    for (const entry of bundle.entries) {
+      const target = join(runtime, entry.target_rel);
+      mkdirSync(dirname(target), { recursive: true });
+      cpSync(join(ROOT, entry.source_rel), target);
+    }
+    const testAgents = readFileSync(join(runtime, testAgentsEntry.target_rel), 'utf8');
+    const testTools = readFileSync(join(runtime, testToolsEntry.target_rel), 'utf8');
+    assert.match(testTools, /\/workspace\/\.task-sandbox\/repo/u);
+    assert.match(testTools, /\/workspace\/\.task-sandbox\/input/u);
+    assert.match(testTools, /\/workspace\/\.task-sandbox\/output/u);
+    assert.match(testTools, /\/workspace\/\.task-sandbox\/raw-logs/u);
+    assert.doesNotMatch(testTools, /\.agent-raw/u);
+    assert.match(testAgents, /\/workspace\/\.task-sandbox\/repo/u);
+    assert.match(testAgents, /\/workspace\/\.task-sandbox\/input/u);
+    assert.match(testAgents, /\/workspace\/\.task-sandbox\/output/u);
+    assert.match(testAgents, /\/workspace\/\.task-sandbox\/raw-logs/u);
+    for (const instructions of [testAgents, testTools]) {
+      assert.doesNotMatch(instructions, /(?:^|[\s`"'])\/(?:worktree|input|agent-raw|raw-logs)(?:\/|`|\b)/u);
+    }
+  } finally { rmSync(runtime, { recursive: true, force: true }); }
 });
 
 test('all worker packages receive the result hash and same-session JSON regeneration protocol', () => {

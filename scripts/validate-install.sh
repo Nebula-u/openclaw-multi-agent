@@ -37,6 +37,34 @@ check() {
   case "$2" in PASS) PASS_N=$((PASS_N+1));; FAIL) FAIL_N=$((FAIL_N+1));; UNKNOWN) UNK_N=$((UNK_N+1));; esac
 }
 
+check_installed_test_agent_sandbox() {
+  local agents_json sandbox workspace_access workdir binds_absent hardening detail
+  if ! agents_json="$(openclaw config get agents.list --json 2>/dev/null)"; then
+    check "已安装 test-agent sandbox workspaceAccess=rw" FAIL "无法读取 agents.list"
+    check "已安装 test-agent sandbox 工作目录为任务暂存 repo" FAIL "无法读取 agents.list"
+    check "已安装 test-agent sandbox 不含外部 bind 挂载" FAIL "无法读取 agents.list"
+    check "已安装 test-agent sandbox Docker 加固" FAIL "无法读取 agents.list"
+    return
+  fi
+  if ! sandbox="$(printf '%s' "$agents_json" | jq -ce '[.[] | select(.id == "test-agent") | .sandbox] | if length == 1 then .[0] else error("test-agent sandbox missing or duplicated") end' 2>/dev/null)"; then
+    check "已安装 test-agent sandbox workspaceAccess=rw" FAIL "test-agent sandbox 不存在或重复"
+    check "已安装 test-agent sandbox 工作目录为任务暂存 repo" FAIL "test-agent sandbox 不存在或重复"
+    check "已安装 test-agent sandbox 不含外部 bind 挂载" FAIL "test-agent sandbox 不存在或重复"
+    check "已安装 test-agent sandbox Docker 加固" FAIL "test-agent sandbox 不存在或重复"
+    return
+  fi
+
+  workspace_access="$(printf '%s' "$sandbox" | jq -r '.workspaceAccess // ""')"
+  [ "$workspace_access" = rw ] && check "已安装 test-agent sandbox workspaceAccess=rw" PASS "$workspace_access" || check "已安装 test-agent sandbox workspaceAccess=rw" FAIL "$workspace_access"
+  workdir="$(printf '%s' "$sandbox" | jq -r '.docker.workdir // ""')"
+  [ "$workdir" = /workspace/.task-sandbox/repo ] && check "已安装 test-agent sandbox 工作目录为任务暂存 repo" PASS "$workdir" || check "已安装 test-agent sandbox 工作目录为任务暂存 repo" FAIL "$workdir"
+  binds_absent="$(printf '%s' "$sandbox" | jq -r '(.docker | has("binds")) | not')"
+  [ "$binds_absent" = true ] && check "已安装 test-agent sandbox 不含外部 bind 挂载" PASS || check "已安装 test-agent sandbox 不含外部 bind 挂载" FAIL
+  hardening="$(printf '%s' "$sandbox" | jq -r '.backend == "docker" and .docker.network == "none" and .docker.readOnlyRoot == true and .docker.capDrop == ["ALL"] and .docker.pidsLimit == 256 and .docker.memory == "2g" and .docker.cpus == 2')"
+  detail="network=$(printf '%s' "$sandbox" | jq -r '.docker.network // ""') readOnlyRoot=$(printf '%s' "$sandbox" | jq -r '.docker.readOnlyRoot // ""') capDrop=$(printf '%s' "$sandbox" | jq -r '(.docker.capDrop // []) | join(",")')"
+  [ "$hardening" = true ] && check "已安装 test-agent sandbox Docker 加固" PASS "$detail" || check "已安装 test-agent sandbox Docker 加固" FAIL "$detail"
+}
+
 echo "== package 驱动静态验证 (Bash) =="
 echo "ProjectRoot: $PROJECT_ROOT"
 
@@ -169,6 +197,7 @@ if grep -rIlqE 'python[[:space:]]+-m[[:space:]]+src\.openclaw_sdlc|openclaw_sdlc
 
 if [ "$SKIP_OPENCLAW" -eq 0 ]; then
   if command -v openclaw >/dev/null 2>&1; then
+    check_installed_test_agent_sandbox
     openclaw config validate --json >/dev/null 2>&1 && check "openclaw config validate --json" PASS || check "openclaw config validate --json" FAIL
     openclaw skills info skill-creator --agent "$MANAGER_ID" --json >/dev/null 2>&1 && check "成熟 skill-creator 对 manager 可用" PASS || check "成熟 skill-creator 对 manager 可用" FAIL
   else check "openclaw CLI 可用" UNKNOWN; fi
