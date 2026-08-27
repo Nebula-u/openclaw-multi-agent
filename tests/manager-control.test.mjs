@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
-import { existsSync, mkdtempSync, realpathSync, rmSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdtempSync, realpathSync, rmSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -75,10 +76,12 @@ test('manager control CLI only exposes semantic project actions', (t) => {
   t.after(() => rmSync(runtimeRoot, { recursive: true, force: true }));
   const output = { value: '', write(value) { this.value += value; } };
 
-  const result = runManagerControl(['ensure', '--workflow-id', 'WF-CLI-001', '--project-json', '{"mode":"new","name":"cli demo"}'], output, { runtimeRoot });
+  const result = runManagerControl(['ensure', '--workflow-id', 'WF-CLI-001', '--project-name', 'cli demo', '--project-mode', 'new'], output, { runtimeRoot });
   assert.match(result.projectRef, /^PRJ-/u);
   assert.match(JSON.parse(output.value).projectRef, /^PRJ-/u);
-  assert.throws(() => runManagerControl(['ensure', '--project-root', runtimeRoot, '--workflow-id', 'WF-CLI-002', '--project-json', '{"mode":"new","name":"not allowed"}'], output, { runtimeRoot }), (error) => error.code === 'MANAGER_CONTROL_USAGE');
+  assert.throws(() => runManagerControl(['ensure', '--workflow-id', 'WF-CLI-002', '--project-name', 'invalid remote', '--project-mode', 'new', '--remote-url', 'https://example.test/project.git'], output, { runtimeRoot }), (error) => error.code === 'MANAGER_CONTROL_USAGE');
+  assert.throws(() => runManagerControl(['ensure', '--workflow-id', 'WF-CLI-003', '--project-name', 'missing remote', '--project-mode', 'remote'], output, { runtimeRoot }), (error) => error.code === 'MANAGER_CONTROL_USAGE');
+  assert.throws(() => runManagerControl(['ensure', '--project-root', runtimeRoot, '--workflow-id', 'WF-CLI-004', '--project-name', 'not allowed', '--project-mode', 'new'], output, { runtimeRoot }), (error) => error.code === 'MANAGER_CONTROL_USAGE');
 });
 
 test('manager control reads the bound pending approval and writes a matching decision request', async (t) => {
@@ -97,8 +100,37 @@ test('manager control reads the bound pending approval and writes a matching dec
   const status = runManagerControl(['orchestrator-status', '--workflow-id', run.workflowId, '--manager-session-id', 'manager-session', '--manager-session-key', 'manager-key'], output, { runtimeRoot });
   assert.equal(status.pending_approval.decision_id, 'DEC-manager-approval-full');
   const submitted = runManagerControl(['orchestrator-approve', '--workflow-id', run.workflowId, '--manager-session-id', 'manager-session', '--manager-session-key', 'manager-key',
-    '--decision-id', status.pending_approval.decision_id, '--choice', 'APPROVE', '--authorization-json', '{"confirmed":true,"actor":"human:test","message":"approve"}'], output, { runtimeRoot });
+    '--decision-id', status.pending_approval.decision_id, '--choice', 'APPROVE', '--authorization-summary', 'User explicitly approved requirements'], output, { runtimeRoot });
   const request = JSON.parse(readFileSync(submitted.request_path, 'utf8'));
   assert.equal(request.decision_id, 'DEC-manager-approval-full');
   assert.equal(request.choice, 'APPROVE');
+  assert.equal(request.user_authorized.message, 'User explicitly approved requirements');
+  assert.throws(() => runManagerControl(['orchestrator-approve', '--workflow-id', run.workflowId, '--manager-session-id', 'manager-session', '--manager-session-key', 'manager-key',
+    '--decision-id', status.pending_approval.decision_id, '--choice', 'APPROVE', '--authorization-summary', '   '], output, { runtimeRoot }), (error) => error.code === 'MANAGER_CONTROL_USAGE');
+});
+
+test('Windows manager-control.cmd preserves semantic project arguments from PowerShell', (t) => {
+  if (process.platform !== 'win32') { t.skip('Windows-only PowerShell and .cmd integration test'); return; }
+  const runtimeRoot = mkdtempSync(join(tmpdir(), 'manager-control-cmd-'));
+  t.after(() => rmSync(runtimeRoot, { recursive: true, force: true }));
+  for (const directory of ['manager-control', 'runtime-core', 'control-kernel']) {
+    cpSync(join(import.meta.dirname, '..', 'scripts', directory), join(runtimeRoot, directory), { recursive: true });
+  }
+  writeFileSync(join(runtimeRoot, 'manager-control', 'manager-control-policy.json'), '{"schema_version":1,"allowed_git_hosts":[]}\n');
+  const entrypoint = join(runtimeRoot, 'manager-control', 'manager-control.cmd');
+  const invocation = spawnSync('pwsh.exe', [
+    '-NoProfile', '-Command',
+    '& $env:MANAGER_CONTROL_ENTRY ensure --workflow-id $env:MANAGER_CONTROL_WORKFLOW --project-name $env:MANAGER_CONTROL_PROJECT --project-mode new',
+  ], {
+    encoding: 'utf8',
+    windowsHide: true,
+    env: {
+      ...process.env,
+      MANAGER_CONTROL_ENTRY: entrypoint,
+      MANAGER_CONTROL_WORKFLOW: 'WF-Windows-Cmd-001',
+      MANAGER_CONTROL_PROJECT: 'project name with spaces',
+    },
+  });
+  assert.equal(invocation.status, 0, invocation.stderr);
+  assert.match(JSON.parse(invocation.stdout).projectRef, /^PRJ-/u);
 });

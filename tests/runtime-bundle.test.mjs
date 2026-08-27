@@ -119,6 +119,16 @@ test('Manager runtime bundle includes the fixed manager-control entrypoint', () 
   } finally { rmSync(runtime, { recursive: true, force: true }); }
 });
 
+test('Manager workspace requires quote-safe manager-control arguments', () => {
+  const workspace = ['AGENTS.md', 'TOOLS.md']
+    .map((name) => readFileSync(join(ROOT, 'agents', 'manager-agent', 'workspace', name), 'utf8')).join('\n');
+  assert.match(workspace, /--project-name/u);
+  assert.match(workspace, /--project-mode/u);
+  assert.match(workspace, /--authorization-summary/u);
+  assert.doesNotMatch(workspace, /--project-json/u);
+  assert.doesNotMatch(workspace, /--authorization-json/u);
+});
+
 test('all worker packages receive the result hash and same-session JSON regeneration protocol', () => {
   const protocol = readFileSync(join(ROOT, 'agents', 'common', 'CONTEXT_PROTOCOL.md'), 'utf8');
   assert.match(protocol, /artifact_manifest_hash/u);

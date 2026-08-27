@@ -32,3 +32,7 @@ pwsh -NoProfile -File scripts/reinstall-agents.ps1 -Apply -Yes -GatewayStopped -
 3. 新增或移除 Agent package、修改 Agent 同步范围后，更新命令必须保持可用，并运行对应 dry-run/validate 测试。
 4. 如果本次修改触发上述同步条件，最终回复应先说明“需要更新已安装 Agent”，再给出 Windows/Linux 命令及是否需要停止 Gateway。
 5. 日常源码变更不触及上述范围时，不要无依据要求用户重装 Agent。
+
+## 计划文档
+
+用户要求的设计或实施计划可以保存在当前工作区，供后续审阅和执行；除非用户明确要求，不得自动提交、推送或以其他方式上传计划文档。
