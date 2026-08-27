@@ -74,7 +74,13 @@ function fixture() {
 }
 
 function createStager(workspace) {
-  return createTestSandboxStager({ projectRoot: ROOT, workspaceRoot: workspace, inspectSandbox: () => SANDBOX_PROFILE });
+  return createTestSandboxStager({
+    projectRoot: ROOT,
+    workspaceRoot: workspace,
+    inspectSandbox: () => SANDBOX_PROFILE,
+    platform: 'linux',
+    acquireLease: async () => ({ async release() {} }),
+  });
 }
 
 async function waitForFile(path) {
@@ -176,7 +182,11 @@ test('OS-backed TEST lease serializes physical workspace aliases', async (t) => 
   const workspace = join(root, 'workspace');
   const alias = join(root, 'workspace-alias');
   mkdirSync(workspace, { recursive: true });
-  symlinkSync(workspace, alias, 'dir');
+  try { symlinkSync(workspace, alias, 'dir'); }
+  catch (error) {
+    if (error.code === 'EPERM') { t.skip('creating directory symlinks requires Windows Developer Mode or elevated permission'); return; }
+    throw error;
+  }
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const lease = await acquireTestSandboxLease(workspace);
   let unexpectedAliasLease = null;
@@ -203,14 +213,14 @@ test('staging exposes only the assigned input and repository clone', async (t) =
   assert.equal(staged.executionWorktreeAbs, join(value.workspace, '.task-sandbox', 'repo'));
   assert.equal(staged.executionInputRootAbs, join(value.workspace, '.task-sandbox', 'input'));
   assert.equal(readFileSync(join(staged.executionInputRootAbs, 'user-request.md'), 'utf8'), 'Test only this repository.\n');
-  assert.equal(readFileSync(join(staged.executionWorktreeAbs, 'app.js'), 'utf8'), 'export const value = 1;\n');
+  assert.equal(readFileSync(join(staged.executionWorktreeAbs, 'app.js'), 'utf8').replaceAll('\r\n', '\n'), 'export const value = 1;\n');
   const executionManifest = JSON.parse(readFileSync(staged.executionContextManifestPathAbs, 'utf8'));
   assert.equal(staged.containerWorktreeAbs, '/workspace/.task-sandbox/repo');
   assert.equal(executionManifest.worktree_path_abs, staged.containerWorktreeAbs);
   assert.equal(executionManifest.execution_raw_output_path_abs, staged.containerRawOutputPath);
   assert.equal(executionManifest.target_project_root_abs, staged.containerWorktreeAbs);
   assert.equal(executionManifest.artifact_root_abs, staged.containerRootAbs);
-  assert.deepEqual(executionManifest.input_files.map((file) => file.path_abs), [join(staged.containerInputRootAbs, 'task.json')]);
+  assert.deepEqual(executionManifest.input_files.map((file) => file.path_abs), [`${staged.containerInputRootAbs}/task.json`]);
   assert.deepEqual(executionManifest.input_files.map((file) => file.sha256), [sha256File(join(staged.executionInputRootAbs, 'task.json'))]);
   assert.deepEqual(executionManifest.expected_output_paths_abs, [staged.containerRawOutputPath]);
   assert.deepEqual(executionManifest.result_identity, {
@@ -305,6 +315,7 @@ test('staging permissions let configured image UID 10001 write repo/output/logs 
 });
 
 test('Docker configured image can use a real staged bind without writing immutable input', { timeout: 30_000 }, async (t) => {
+  if (process.platform !== 'linux') return t.skip('requires a native Linux Docker Engine host to verify bind-mount immutability');
   const daemon = spawnSync('docker', ['version', '--format', '{{.Server.Version}}'], { encoding: 'utf8', shell: false });
   const image = SANDBOX_PROFILE.docker.image;
   const inspected = spawnSync('docker', ['image', 'inspect', image], { encoding: 'utf8', shell: false });
@@ -338,6 +349,7 @@ test('Docker configured image can use a real staged bind without writing immutab
 });
 
 test('cleanup handles restrictive container-owned staging and releases the OS lease', { timeout: 30_000 }, async (t) => {
+  if (process.platform !== 'linux') return t.skip('requires a native Linux Docker Engine host to verify container-owned file cleanup');
   const daemon = spawnSync('docker', ['version', '--format', '{{.Server.Version}}'], { encoding: 'utf8', shell: false });
   const image = SANDBOX_PROFILE.docker.image;
   const inspected = spawnSync('docker', ['image', 'inspect', image], { encoding: 'utf8', shell: false });
@@ -406,7 +418,7 @@ test('validated TEST commit is imported into the canonical assigned worktree bef
   assert.deepEqual(imported.changedPaths, ['tests/new.test.js']);
   assert.equal(git(value.task.worktreePathAbs, ['rev-parse', 'HEAD']), outputCommit);
   assert.equal(git(value.task.worktreePathAbs, ['status', '--porcelain=v1', '--untracked-files=all']), '');
-  assert.equal(readFileSync(join(value.task.worktreePathAbs, 'tests', 'new.test.js'), 'utf8'), 'assert.equal(1, 1);\n');
+  assert.equal(readFileSync(join(value.task.worktreePathAbs, 'tests', 'new.test.js'), 'utf8').replaceAll('\r\n', '\n'), 'assert.equal(1, 1);\n');
   await sandbox.cleanup(staged);
   assert.equal(git(value.task.worktreePathAbs, ['cat-file', '-t', outputCommit]), 'commit');
 });

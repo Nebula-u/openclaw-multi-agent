@@ -28,6 +28,15 @@ test('TEST task messages use staged sandbox paths without host command paths', (
   assert.doesNotMatch(message, /\/host\/runtime\//u);
 });
 
+test('TEST task messages reject a dispatch that has no prepared sandbox staging', () => {
+  assert.throws(() => service.taskMessage({
+    kind: 'TEST', workflowId: 'WF-stage', taskId: 'TASK-stage', runId: 'RUN-stage', stepId: 'test', agentId: 'test-agent', attempt: 1,
+    worktreePathAbs: 'F:/runtime/worktrees/task/repo', artifactRootAbs: 'F:/runtime/artifacts/task',
+    contextManifestPathAbs: 'F:/runtime/artifacts/task/input/context-manifest.json', contextManifestSha256: 'a'.repeat(64),
+    rawOutputPath: 'F:/runtime/artifacts/task/.agent-raw/result.json.raw',
+  }), (error) => error.code === 'TEST_SANDBOX_STAGING_REQUIRED');
+});
+
 test('HR launch can explicitly disable its own thinking output', () => {
   const args = buildOpenClawAgentArgs({ agentId: 'hr-agent', sessionId: 'hr-one', messagePath: 'F:/message.md', thinking: 'off' });
   assert.deepEqual(args.slice(args.indexOf('--thinking'), args.indexOf('--thinking') + 2), ['--thinking', 'off']);

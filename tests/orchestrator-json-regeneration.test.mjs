@@ -98,6 +98,8 @@ test('结果缺少字段时在同一 Session 内只重生成 JSON', async (t) =>
     } else {
       assert.match(message, /缺少必填字段：artifact_manifest_hash/u);
       assert.match(message, /不得重新执行任务/u);
+      assert.match(message, /"input_commit": "1{40}"/u);
+      assert.match(message, /"worktree_path_abs":/u);
       const repaired = JSON.stringify(resultFrom(initialMessage, rawOutputPath));
       return { exitCode: 0, stdout: JSON.stringify({ status: 'ok', result: { payloads: [{ text: repaired }], finalAssistantVisibleText: repaired } }), stderr: '' };
     }

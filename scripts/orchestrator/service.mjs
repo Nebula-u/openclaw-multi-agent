@@ -37,6 +37,12 @@ function approvalRequest(task, result = null, step = null) {
 
 export function taskMessage(task) {
   const staging = task.testSandbox ?? null;
+  if (task.kind === 'TEST' && (!staging?.containerWorktreeAbs || !staging?.containerContextManifestPathAbs || !staging?.containerRawOutputPath)) {
+    throw Object.assign(new Error('TEST task dispatch requires prepared container staging paths'), {
+      code: 'TEST_SANDBOX_STAGING_REQUIRED',
+      details: { task_id: task.taskId, attempt: task.attempt },
+    });
+  }
   const executionWorktree = staging?.containerWorktreeAbs ?? staging?.executionWorktreeAbs ?? task.worktreePathAbs;
   const executionManifest = staging?.containerContextManifestPathAbs ?? staging?.executionContextManifestPathAbs ?? task.contextManifestPathAbs;
   const executionOutput = staging?.containerRawOutputPath ?? staging?.executionRawOutputPath ?? task.rawOutputPath;

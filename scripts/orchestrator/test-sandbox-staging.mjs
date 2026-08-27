@@ -222,12 +222,12 @@ export async function acquireTestSandboxLease(workspaceRoot, { platform = proces
 }
 
 export function createTestSandboxStager({ workspaceRoot: workspaceRootInput, runGit = defaultGit, inspectSandbox = defaultInspectSandbox,
-  clock = () => new Date(), platform = process.platform } = {}) {
+  clock = () => new Date(), platform = process.platform, acquireLease = acquireTestSandboxLease } = {}) {
   const paths = buildTestSandboxPaths({ workspaceRoot: workspaceRootInput });
   let active = null;
   let lease = null;
 
-  async function acquire() { lease = await acquireTestSandboxLease(paths.workspaceRoot, { platform }); }
+  async function acquire() { lease = await acquireLease(paths.workspaceRoot, { platform }); }
   async function release() { const owned = lease; lease = null; await owned?.release(); }
   function normalizeContainerOwnedModes(image) {
     const command = [

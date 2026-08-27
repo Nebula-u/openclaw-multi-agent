@@ -162,6 +162,22 @@ test('固定重生成提示明确指出缺失字段并禁止重新执行任务',
   assert.match(prompt, /F:\/artifact\/\.agent-raw\/result\.json\.raw/u);
 });
 
+test('结果修复提示提供可直接复用的身份字段和最小结果契约', () => {
+  const prompt = buildJsonRepairPrompt({
+    classification: 'SCHEMA_DRIFT', retryNumber: 1, errors: [], contextManifestSha256: 'a'.repeat(64),
+    resultIdentity: {
+      workflow_id: 'WF-repair', task_id: 'TASK-repair', run_id: 'RUN-repair', agent_id: 'test-agent', attempt: 2,
+      worktree_path_abs: 'F:/worktrees/task/repo', artifact_root_abs: 'F:/artifacts/task', input_commit: 'b'.repeat(40),
+    },
+  });
+  assert.match(prompt, /最小 result 对象契约/u);
+  assert.match(prompt, /"schema_version": 1/u);
+  assert.match(prompt, /"input_commit": "b{40}"/u);
+  assert.match(prompt, /"output_commit": "b{40}"/u);
+  assert.match(prompt, /"preflight_passed": false/u);
+  assert.match(prompt, /"status": "FAIL"/u);
+});
+
 test('固定重生成提示明确指出字段路径和格式约束', () => {
   const prompt = buildJsonRepairPrompt({
     classification: 'TYPE_VIOLATION',
