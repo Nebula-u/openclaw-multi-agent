@@ -129,6 +129,7 @@ test('Manager workspace requires quote-safe manager-control arguments', () => {
   assert.doesNotMatch(workspace, /--authorization-json/u);
 });
 test('bundled test-agent instructions use only the staged Docker execution paths', () => {
+  
   const runtime = mkdtempSync(join(tmpdir(), 'runtime-bundle-test-agent-'));
   try {
     const bundle = buildBundle(ROOT, runtime, { agentIds: ['test-agent'] });
