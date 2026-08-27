@@ -274,7 +274,11 @@ test('TEST workflow imports a validated staged commit before snapshot acceptance
 test('TEST runner error cleans staged workspace and releases its execution lease', async (t) => {
   const stageRoot = join(ROOT, 'runtime', 'test-sandbox-stage-runner-error', `${Date.now()}-${Math.random().toString(16).slice(2)}`);
   const calls = { prepare: 0, collect: 0, cleanup: 0, runner: 0 };
-  const staging = { executionWorktreeAbs: join(stageRoot, 'repo'), executionContextManifestPathAbs: join(stageRoot, 'input', 'execution-context-manifest.json'), executionRawOutputPath: join(stageRoot, 'output', 'result.json.raw') };
+  const staging = {
+    executionWorktreeAbs: join(stageRoot, 'repo'), executionContextManifestPathAbs: join(stageRoot, 'input', 'execution-context-manifest.json'),
+    executionRawOutputPath: join(stageRoot, 'output', 'result.json.raw'), containerWorktreeAbs: '/workspace/.task-sandbox/repo',
+    containerContextManifestPathAbs: '/workspace/.task-sandbox/input/execution-context-manifest.json', containerRawOutputPath: '/workspace/.task-sandbox/output/result.json.raw',
+  };
   t.after(() => rmSync(stageRoot, { recursive: true, force: true }));
   const { workflowId, orchestrator } = await createTestWorkflow(t, {
     testSandboxStager: {

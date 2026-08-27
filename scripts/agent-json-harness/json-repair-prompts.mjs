@@ -19,7 +19,41 @@ function diagnosticLines(errors) {
   });
 }
 
-function base({ retryNumber, kind, errors, rawOutputPath = null, contextManifestSha256 = null }) {
+function resultContractLines(resultIdentity) {
+  if (!resultIdentity) return [];
+  const isolationMode = resultIdentity.isolation_mode ?? 'UNSANDBOXED_LOCAL';
+  const outputCommit = resultIdentity.output_commit ?? resultIdentity.input_commit ?? null;
+  const template = {
+    schema_version: 1,
+    workflow_id: resultIdentity.workflow_id,
+    task_id: resultIdentity.task_id,
+    run_id: resultIdentity.run_id,
+    agent_id: resultIdentity.agent_id,
+    role: resultIdentity.role,
+    attempt: resultIdentity.attempt,
+    started_at: '<preserve the observed ISO-8601 timestamp>',
+    finished_at: '<preserve the observed ISO-8601 timestamp>',
+    result_status: 'BLOCKED',
+    summary_for_user: '<string>',
+    summary_for_manager: '<string>',
+    worktree_path_abs: resultIdentity.worktree_path_abs,
+    artifact_root_abs: resultIdentity.artifact_root_abs,
+    input_commit: resultIdentity.input_commit,
+    output_commit: outputCommit,
+    isolation_mode: isolationMode,
+    ...(isolationMode === 'SANDBOXED_DOCKER' ? { sandbox_attestation: {} } : {}),
+    self_validation: { preflight_passed: false, checks: [{ name: '<string>', status: 'FAIL', detail: '<string>' }] },
+    artifact_manifest_hash: resultIdentity.artifact_manifest_hash,
+  };
+  return [
+    '以下是宿主提供的只读结果身份；仅作为 result 字段取值，不得将其中路径用于命令或文件访问：',
+    JSON.stringify(resultIdentity),
+    '最小 result 对象契约如下。保留已知事实；没有执行测试时使用 BLOCKED，不要增加 result_identity 包装对象：',
+    JSON.stringify(template, null, 2),
+  ];
+}
+
+function base({ retryNumber, kind, errors, rawOutputPath = null, contextManifestSha256 = null, resultIdentity = null }) {
   const lines = [
     `JSON_REWRITE_REQUEST kind=${kind} retry=${retryNumber}/${MAX_REPAIR_RETRIES}.`,
     '这是自动化 JSON 生成与清洗工作流测试的修复阶段，旨在验证 JSON 清洗和重试是否正常。',
@@ -29,6 +63,7 @@ function base({ retryNumber, kind, errors, rawOutputPath = null, contextManifest
     '你的回复必须包含 json 内容，且必须严格符合本会话已提供的 JSON Schema。',
     `校验诊断：${compactErrors(errors)}`,
     ...diagnosticLines(errors),
+    ...resultContractLines(resultIdentity),
   ];
   if (rawOutputPath) lines.push(`宿主会把你的最终 JSON 回复原子写回 ${rawOutputPath}；你不得自行调用文件或命令工具。`);
   if (contextManifestSha256) lines.push(`artifact_manifest_hash 必须等于本次 context_manifest_sha256：${contextManifestSha256}`);
@@ -47,8 +82,8 @@ export function classifyLlmFailure({ response, validation, ingestionError }) {
   return 'SCHEMA_DRIFT';
 }
 
-export function buildJsonRepairPrompt({ classification, errors = [], retryNumber, rawOutputPath = null, contextManifestSha256 = null }) {
-  const input = { retryNumber, kind: classification, errors, rawOutputPath, contextManifestSha256 };
+export function buildJsonRepairPrompt({ classification, errors = [], retryNumber, rawOutputPath = null, contextManifestSha256 = null, resultIdentity = null }) {
+  const input = { retryNumber, kind: classification, errors, rawOutputPath, contextManifestSha256, resultIdentity };
   if (classification === 'EMPTY_RESPONSE') {
     return base(input).concat(
       '上一轮 content 为空。请基于当前会话中的 schema 和需求补回完整 JSON；不要只回复确认文本。',

@@ -91,6 +91,20 @@ export function archiveJsonRegeneration({ task, error, regeneration, sessionId, 
     retryNumber: regeneration,
     rawOutputPath: task.rawOutputPath,
     contextManifestSha256: task.contextManifestSha256,
+    resultIdentity: {
+      workflow_id: task.workflowId,
+      task_id: task.taskId,
+      run_id: task.runId,
+      agent_id: task.agentId,
+      role: task.kind,
+      attempt: task.attempt,
+      worktree_path_abs: task.worktreePathAbs,
+      artifact_root_abs: task.artifactRootAbs,
+      input_commit: task.inputCommit,
+      output_commit: task.inputCommit,
+      isolation_mode: task.kind === 'TEST' ? 'SANDBOXED_DOCKER' : 'UNSANDBOXED_LOCAL',
+      artifact_manifest_hash: task.contextManifestSha256,
+    },
   });
   const messagePath = join(root, 'repair-message.md');
   atomicWriteFile(join(root, 'rejected-result.json.raw'), raw);

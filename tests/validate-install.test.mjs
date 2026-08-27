@@ -361,7 +361,7 @@ for (const [name, command, available] of [
     assert.match(result.stdout, /workspaceAccess.*rw/u);
     assert.match(result.stdout, /\.task-sandbox\/repo/u);
     assert.doesNotMatch(result.stdout, /docker\.binds/u);
-    assert.match(result.stdout, /network=none.*readOnlyRoot=true.*capDrop=ALL/u);
+    assert.match(result.stdout, /network=none.*readOnlyRoot=true.*capDrop=ALL/iu);
     assert.match(calls, /^config get agents\.list --json$/mu);
     assert.match(calls, /^config validate --json$/mu);
     assert.match(calls, /^skills info skill-creator --agent manager-agent --json$/mu);
