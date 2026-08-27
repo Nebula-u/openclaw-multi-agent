@@ -15,6 +15,7 @@ import { ingestTaskOutput, writeFailureReceipt } from './output-ingestion.mjs';
 import { archiveJsonRegeneration, archiveOutputBoundaryFailure, isJsonRegenerable, isOutputBoundaryFailure, MAX_JSON_REGENERATIONS } from './json-regeneration.mjs';
 import { extractFinalAssistantText, runOpenClawAgent } from './openclaw-runner.mjs';
 import { compileRoutePlan, GATE_CHECKS_BY_KIND } from './route-policy.mjs';
+import { createTestSandboxStager } from './test-sandbox-staging.mjs';
 
 function now(clock) { const value = clock(); return value instanceof Date ? value.toISOString() : value; }
 function taskRoot(runtimeRoot, workflowId, taskId) { return join(runtimeRoot, 'artifacts', workflowId, taskId); }
@@ -35,7 +36,28 @@ function approvalRequest(task, result = null, step = null) {
 }
 
 export function taskMessage(task) {
-  return `# Orchestrator task\n\n- workflow_id: ${task.workflowId}\n- task_id: ${task.taskId}\n- run_id: ${task.runId}\n- step_id: ${task.stepId}\n- assigned_agent: ${task.agentId}\n- attempt: ${task.attempt}\n- worktree_path_abs: ${task.worktreePathAbs}\n- context_manifest_path_abs: ${task.contextManifestPathAbs}\n- context_manifest_sha256: ${task.contextManifestSha256}\n\nComplete only this assigned step. Read the immutable context manifest. Do not communicate with other Agents, alter route or approval records, write to the Control Kernel, or call Monitor controls. Write exactly one result.schema.json object only to:\n\n${task.rawOutputPath}\n\nThe Orchestrator will validate and publish it. Do not write final outputs directly.\n`;
+  const staging = task.testSandbox ?? null;
+  const executionWorktree = staging?.containerWorktreeAbs ?? staging?.executionWorktreeAbs ?? task.worktreePathAbs;
+  const executionManifest = staging?.containerContextManifestPathAbs ?? staging?.executionContextManifestPathAbs ?? task.contextManifestPathAbs;
+  const executionOutput = staging?.containerRawOutputPath ?? staging?.executionRawOutputPath ?? task.rawOutputPath;
+  const executionFields = staging
+    ? `- execution_worktree_path_abs: ${executionWorktree}\n- execution_context_manifest_path_abs: ${executionManifest}\n`
+    : `- worktree_path_abs: ${executionWorktree}\n- context_manifest_path_abs: ${executionManifest}\n`;
+  return `# Orchestrator task\n\n- workflow_id: ${task.workflowId}\n- task_id: ${task.taskId}\n- run_id: ${task.runId}\n- step_id: ${task.stepId}\n- assigned_agent: ${task.agentId}\n- attempt: ${task.attempt}\n${executionFields}- context_manifest_sha256: ${task.contextManifestSha256}\n\nComplete only this assigned step. Read the immutable context manifest. Do not communicate with other Agents, alter route or approval records, write to the Control Kernel, or call Monitor controls. ${staging ? 'Use only execution_* paths for file and command access; copy result_identity values from the execution manifest verbatim into the result object.' : ''} Write exactly one result.schema.json object only to:\n\n${executionOutput}\n\nThe Orchestrator will validate and publish it. Do not write final outputs directly.\n`;
+}
+
+function stagingPreparationBlockedResult(task, error, occurredAt) {
+  return {
+    schema_version: 1, workflow_id: task.workflowId, task_id: task.taskId, run_id: task.runId, agent_id: task.agentId,
+    role: 'orchestrator', attempt: task.attempt, started_at: occurredAt, finished_at: occurredAt,
+    result_status: 'BLOCKED', summary_for_user: 'The isolated TEST workspace could not be prepared.',
+    summary_for_manager: `TEST sandbox preparation failed: ${error.code ?? 'TEST_SANDBOX_PREPARE_FAILED'}.`,
+    worktree_path_abs: task.worktreePathAbs, artifact_root_abs: task.artifactRootAbs,
+    input_commit: task.inputCommit, output_commit: task.inputCommit, isolation_mode: 'UNSANDBOXED_LOCAL',
+    self_validation: { preflight_passed: false, checks: [{ name: 'test_sandbox_preparation', status: 'FAIL', detail: error.code ?? 'TEST_SANDBOX_PREPARE_FAILED' }] },
+    artifact_manifest_hash: task.contextManifestSha256,
+    known_limitations: ['The TEST Agent was not dispatched because staging failed.'],
+  };
 }
 
 function retryExhaustedApprovalRequest(task) {
@@ -67,7 +89,7 @@ export async function runWithLeaseHeartbeat({ lease, executionId, run, signal = 
   const lost = (cause = null) => Object.assign(new Error(`execution lease was lost: ${executionId}`), {
     code: 'EXECUTION_LEASE_LOST', details: { execution_id: executionId, cause: cause ? { code: cause.code ?? null, message: cause.message } : null },
   });
-  const schedule = () => { if (!stopped) { timer = setTimeout(renew, heartbeatIntervalMs); timer.unref?.(); } };
+  const schedule = () => { if (!stopped) timer = setTimeout(renew, heartbeatIntervalMs); };
   const renew = async () => {
     if (stopped) return;
     try {
@@ -105,7 +127,7 @@ export function openClawAgentExitError(result) {
 }
 
 export function createOrchestrator({ projectRoot: projectRootInput, database = null, kernel = null, repository = null, worktrees = null, snapshots = null,
-  runtimeRoot: runtimeRootInput = null, projectControl = null, runner = runOpenClawAgent, notificationRunner = runOpenClawAgent, hr = null, clock = () => new Date(), maxAttempts = 3, timeoutSeconds = 900, signal = null } = {}) {
+  runtimeRoot: runtimeRootInput = null, projectControl = null, runner = runOpenClawAgent, notificationRunner = runOpenClawAgent, testSandboxStager = null, hr = null, clock = () => new Date(), maxAttempts = 3, timeoutSeconds = 900, signal = null } = {}) {
   const projectRoot = resolve(projectRootInput ?? process.cwd());
   const runtimeRoot = resolve(runtimeRootInput ?? process.env.OPENCLAW_RUNTIME_ROOT ?? join(projectRoot, 'runtime'));
   const ownedDatabase = !database && !kernel && !repository;
@@ -116,6 +138,7 @@ export function createOrchestrator({ projectRoot: projectRootInput, database = n
   const selectedWorktrees = worktrees ?? createGitWorktreeManager({ projectRoot });
   const selectedProjectControl = projectControl ?? createManagerControl({ projectRoot, runtimeRoot, clock });
   const selectedSnapshots = snapshots ?? createSnapshotService({ repository: selectedRepository, worktrees: selectedWorktrees });
+  const selectedTestSandboxStager = testSandboxStager ?? createTestSandboxStager({ workspaceRoot: join(runtimeRoot, 'agents', 'test-agent', 'workspace') });
   const registry = loadActiveAgentRegistry(projectRoot);
   const approvalCommands = createApprovalCommandQueue({ projectRoot, runtimeRoot, resolve: resolveApprovalCommand });
   let hrService = hr;
@@ -286,14 +309,29 @@ export function createOrchestrator({ projectRoot: projectRootInput, database = n
         error: { code: error.code ?? 'TASK_EXECUTION_FAILED', message: error.message } });
       return selectedRepository.getTask(task.taskId);
     };
-    await announce(run, 'TASK_STARTED', { task_id: task.taskId, agent_id: task.agentId, step_id: task.stepId }, task.taskId);
-    await assertExecutionLease('DISPATCHING');
-    const dispatchRoot = join(task.artifactRootAbs, '.orchestrator'); mkdirSync(dispatchRoot, { recursive: true });
-    const messagePath = join(dispatchRoot, `attempt-${task.attempt}.message.md`); atomicWriteFile(messagePath, taskMessage(task));
-    atomicWriteJson(join(dispatchRoot, `attempt-${task.attempt}.dispatch.json`), { schema_version: 1, execution_id: execution.executionId, session_id: sessionId, message_path_abs: messagePath, started_at: now(clock) });
+    let testSandbox = null;
+    let testSandboxCollection = null;
     let taskSnapshot = null;
     try {
-      const executionOutcome = await runWithLeaseHeartbeat({ lease: selectedKernel.lease, executionId: execution.executionId, signal,
+      let executionOutcome = null;
+      if (task.kind === 'TEST') {
+        try {
+          testSandbox = await selectedTestSandboxStager.prepare(task);
+          task.testSandbox = testSandbox;
+        } catch (error) {
+          const occurredAt = now(clock);
+          atomicWriteFile(task.rawOutputPath, `${JSON.stringify(stagingPreparationBlockedResult(task, error, occurredAt))}\n`);
+          executionOutcome = { result: { exitCode: 1, stdout: '', stderr: error.message, failureCode: error.code ?? 'TEST_SANDBOX_PREPARE_FAILED' },
+            ingested: ingestTaskOutput({ projectRoot, task, occurredAt, testSandboxPreparationFailure: true }) };
+        }
+      }
+      if (!executionOutcome) {
+        await announce(run, 'TASK_STARTED', { task_id: task.taskId, agent_id: task.agentId, step_id: task.stepId }, task.taskId);
+        await assertExecutionLease('DISPATCHING');
+        const dispatchRoot = join(task.artifactRootAbs, '.orchestrator'); mkdirSync(dispatchRoot, { recursive: true });
+        const messagePath = join(dispatchRoot, `attempt-${task.attempt}.message.md`); atomicWriteFile(messagePath, taskMessage(task));
+        atomicWriteJson(join(dispatchRoot, `attempt-${task.attempt}.dispatch.json`), { schema_version: 1, execution_id: execution.executionId, session_id: sessionId, message_path_abs: messagePath, started_at: now(clock) });
+        executionOutcome = await runWithLeaseHeartbeat({ lease: selectedKernel.lease, executionId: execution.executionId, signal,
         run: async (heartbeatSignal) => {
           let activeMessagePath = messagePath;
           let regeneration = current.jsonRegenerations ?? 0;
@@ -305,6 +343,7 @@ export function createOrchestrator({ projectRoot: projectRootInput, database = n
             processLog(task, `attempt-${task.attempt}${logSuffix}.stdout.log`, result.stdout);
             processLog(task, `attempt-${task.attempt}${logSuffix}.stderr.log`, result.stderr);
             if (result.exitCode !== 0) throw openClawAgentExitError(result);
+            if (!regeneration && testSandbox) testSandboxCollection = selectedTestSandboxStager.collect(task, testSandbox);
             if (regeneration) {
               if (heartbeatSignal.aborted) throw Object.assign(new Error('execution lease was lost before JSON repair could be accepted'), { code: 'EXECUTION_LEASE_LOST' });
               const held = await selectedKernel.lease.heartbeat({ executionId: execution.executionId, phase: 'JSON_REGENERATION_VALIDATION' });
@@ -318,7 +357,9 @@ export function createOrchestrator({ projectRoot: projectRootInput, database = n
               atomicWriteFile(task.rawOutputPath, `${extractFinalAssistantText(result.stdout).trim()}\n`);
             }
             try {
-              return { result, ingested: ingestTaskOutput({ projectRoot, task, occurredAt: now(clock) }) };
+              return { result, ingested: ingestTaskOutput({ projectRoot, task, occurredAt: now(clock), sandboxContext: testSandbox ? {
+                attestation: testSandbox.attestation, referencePathMappings: testSandboxCollection?.referencePathMappings ?? [],
+              } : null }) };
             } catch (error) {
               if (!isJsonRegenerable(error)) {
                 if (isOutputBoundaryFailure(error)) {
@@ -348,7 +389,11 @@ export function createOrchestrator({ projectRoot: projectRootInput, database = n
             }
           }
         } });
+      }
       const { result, ingested } = executionOutcome;
+      if (testSandbox && selectedTestSandboxStager.integrateCommit) {
+        selectedTestSandboxStager.integrateCommit(task, testSandbox, ingested.value.output_commit ?? task.inputCommit);
+      }
       const snapshotInput = { runId: run.runId, taskId: task.taskId, executionId: execution.executionId,
         attempt: task.attempt, agentId: task.agentId, sessionId, inputCommit: task.inputCommit,
         worktreePathAbs: task.worktreePathAbs, targetProjectRootAbs: task.targetProjectRootAbs };
@@ -415,6 +460,8 @@ export function createOrchestrator({ projectRoot: projectRootInput, database = n
       await announce(run, 'TASK_FAILED', { task_id: task.taskId, agent_id: task.agentId, error: failed.lastError }, task.taskId);
       await queueDailyReport(run, failed, 'FAILED');
       return { state: 'FAILED', task: failed };
+    } finally {
+      if (testSandbox) await selectedTestSandboxStager.cleanup(testSandbox);
     }
   }
 
