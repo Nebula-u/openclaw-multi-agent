@@ -34,6 +34,9 @@ test('local dashboard opens without a build step and contains no external runtim
   assert.match(script, /approval-card/u);
   assert.match(script, /approval-primary-actions/u);
   assert.match(script, /approval-other-actions/u);
+  assert.match(script, /openApprovalDetails/u);
+  assert.match(script, /openApprovalDetails\.has\(key\)/u);
+  assert.match(script, /querySelector\('\.approval-other-actions'\)[\s\S]{0,120}addEventListener\('toggle'/u);
   assert.match(script, /确认/u);
   assert.match(script, /拒绝/u);
   assert.match(script, /其他/u);

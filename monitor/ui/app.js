@@ -3,7 +3,7 @@
 
   const sameOrigin = window.location.protocol !== 'file:';
   const defaultApi = window.MONITOR_CONFIG?.apiUrl || (sameOrigin ? window.location.origin : 'http://127.0.0.1:4319');
-  const state = { apiUrl: defaultApi.replace(/\/$/u, ''), workflows: [], snapshot: null, selectedWorkflowId: localStorage.getItem('openclaw.monitor.workflow') || null, selectedSessionKey: localStorage.getItem('openclaw.monitor.session') || null, source: null, sessionCache: new Map(), dirtySessionKeys: new Set(), visibleSessionKey: null, sessionRequestVersion: 0, sessionLoadingKey: null, queuedApprovals: new Map() };
+  const state = { apiUrl: defaultApi.replace(/\/$/u, ''), workflows: [], snapshot: null, selectedWorkflowId: localStorage.getItem('openclaw.monitor.workflow') || null, selectedSessionKey: localStorage.getItem('openclaw.monitor.session') || null, source: null, sessionCache: new Map(), dirtySessionKeys: new Set(), visibleSessionKey: null, sessionRequestVersion: 0, sessionLoadingKey: null, queuedApprovals: new Map(), openApprovalDetails: new Set() };
   const $ = (id) => document.getElementById(id);
   const escapeHtml = (value) => String(value ?? '').replace(/[&<'"]/gu, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[char]));
   const selected = () => state.workflows.find((item) => item.workflow_id === state.selectedWorkflowId) || null;
@@ -100,24 +100,26 @@
     if (!option) return `<button type="button" class="approval-action ${tone}" disabled><span>${label}</span><small>当前审批未提供此操作</small></button>`;
     return `<button type="button" class="approval-action ${tone}" data-approval-choice="${escapeHtml(option.option_id)}"${queued ? ' disabled' : ''}><span>${label}</span><small>${escapeHtml(option.description || option.option_id)}</small></button>`;
   }
-  function approvalCard(approval, requestValue, options, queued) {
+  function approvalCard(approval, requestValue, options, queued, key) {
     const confirm = options.find((item) => CONFIRM_CHOICES.has(item.option_id));
     const reject = options.find((item) => REJECT_CHOICES.has(item.option_id));
     const other = options.filter((item) => item !== confirm && item !== reject);
     const decisionId = approval.decisionId ?? approval.decision_id;
     const queueStatus = queued ? `<div class="approval-status" role="status"><i></i><span>${queued.commandId ? `审批命令已提交：${escapeHtml(queued.commandId)}` : '正在安全提交审批…'}</span></div>` : '';
     const otherActions = other.length ? other.map((item) => approvalAction(item, item.option_id === 'REWORK' ? '返工后重试' : item.description || item.option_id, 'other', queued)).join('') : '<p class="approval-empty">当前审批没有其他可选操作</p>';
-    return `<article class="approval-card"><div class="approval-card-head"><span class="approval-kicker">需要你的决定</span><code>${escapeHtml(decisionId)}</code></div><p class="approval-summary">${escapeHtml(requestValue.summary || approval.trigger || '需要人工决定')}</p>${queueStatus}<div class="approval-primary-actions" role="group" aria-label="主要审批操作">${approvalAction(confirm, '确认', 'confirm', queued)}${approvalAction(reject, '拒绝', 'reject', queued)}</div><details class="approval-other-actions"><summary>其他</summary><div>${otherActions}</div></details><p class="approval-manager-note">也可在与 Manager 的对话中明确授权，由 Manager 转交相同审批。</p></article>`;
+    return `<article class="approval-card"><div class="approval-card-head"><span class="approval-kicker">需要你的决定</span><code>${escapeHtml(decisionId)}</code></div><p class="approval-summary">${escapeHtml(requestValue.summary || approval.trigger || '需要人工决定')}</p>${queueStatus}<div class="approval-primary-actions" role="group" aria-label="主要审批操作">${approvalAction(confirm, '确认', 'confirm', queued)}${approvalAction(reject, '拒绝', 'reject', queued)}</div><details class="approval-other-actions"${state.openApprovalDetails.has(key) ? ' open' : ''}><summary>其他</summary><div>${otherActions}</div></details><p class="approval-manager-note">也可在与 Manager 的对话中明确授权，由 Manager 转交相同审批。</p></article>`;
   }
   function renderNotices(workflow) {
     const notices = (state.snapshot?.notifications || []).filter((item) => item.runId === workflow?.run_id).slice(0, 8); const root = $('notification-list');
     root.innerHTML = notices.length ? notices.map((item) => `<article class="notice ${escapeHtml(String(item.status).toLowerCase())}"><b>${escapeHtml(item.status)}</b><span>${escapeHtml(item.type)}</span><small>${escapeHtml(time(item.createdAt))}</small></article>`).join('') : '<p class="empty-note">没有待转达信息</p>';
     const approval = workflow?.pending_approval; const approvalRoot = $('approval-view');
-    if (!approval) { for (const key of state.queuedApprovals.keys()) if (key.startsWith(`${workflow?.workflow_id}:`)) state.queuedApprovals.delete(key); approvalRoot.textContent = '没有待审批事项'; return; }
+    if (!approval) { for (const key of state.queuedApprovals.keys()) if (key.startsWith(`${workflow?.workflow_id}:`)) state.queuedApprovals.delete(key); for (const key of state.openApprovalDetails) if (key.startsWith(`${workflow?.workflow_id}:`)) state.openApprovalDetails.delete(key); approvalRoot.textContent = '没有待审批事项'; return; }
     const requestValue = approval.request || {}; const options = Array.isArray(requestValue.options) ? requestValue.options : [];
-    const queued = state.queuedApprovals.get(approvalKey(workflow, approval));
-    approvalRoot.innerHTML = approvalCard(approval, requestValue, options, queued);
+    const key = approvalKey(workflow, approval); const queued = state.queuedApprovals.get(key);
+    for (const openKey of state.openApprovalDetails) if (openKey.startsWith(`${workflow.workflow_id}:`) && openKey !== key) state.openApprovalDetails.delete(openKey);
+    approvalRoot.innerHTML = approvalCard(approval, requestValue, options, queued, key);
     approvalRoot.querySelectorAll('[data-approval-choice]').forEach((button) => button.addEventListener('click', () => { void submitApproval(workflow, approval, button.dataset.approvalChoice); }));
+    approvalRoot.querySelector('.approval-other-actions').addEventListener('toggle', (event) => { if (event.currentTarget.open) state.openApprovalDetails.add(key); else state.openApprovalDetails.delete(key); });
   }
   function renderHr(workflow) {
     const alerts = (state.snapshot?.hr_alerts || []).filter((item) => !workflow || item.workflow_id === workflow.workflow_id || item.workflowId === workflow.workflow_id); $('alert-count').textContent = alerts.length;
