@@ -270,4 +270,11 @@ test('foreground status keeps a live fresh process active but expires an old hea
   });
   assert.equal(stale.state, 'STALE');
   assert.equal(stale.stale_reason, 'HEARTBEAT_EXPIRED');
+
+  const stop = requestForegroundServiceStop(projectRoot, {
+    clock: () => new Date('2026-08-22T00:00:20.000Z'), isProcessAlive: () => true,
+  });
+  assert.equal(stop.requested, true);
+  assert.equal(stop.instance_id, 'instance-live');
+  assert.equal(existsSync(join(projectRoot, 'runtime', 'orchestrator', 'service', 'foreground.stop.json')), true);
 });
