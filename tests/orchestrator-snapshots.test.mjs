@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, relative } from 'node:path';
 import test from 'node:test';
 import { createGitWorktreeManager } from '../scripts/orchestrator/git-worktree.mjs';
 import { createSnapshotService } from '../scripts/orchestrator/snapshot-service.mjs';
@@ -12,7 +12,7 @@ function repository(t) {
   const root = mkdtempSync(join(tmpdir(), 'snapshot-repo-'));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   git(root, 'init'); git(root, 'config', 'user.name', 'Snapshot Test'); git(root, 'config', 'user.email', 'snapshot@example.invalid');
-  writeFileSync(join(root, '.gitignore'), 'runtime/\n'); writeFileSync(join(root, 'app.txt'), 'base\n');
+  writeFileSync(join(root, '.gitignore'), 'work/\n'); writeFileSync(join(root, 'app.txt'), 'base\n');
   git(root, 'add', '.'); git(root, 'commit', '-m', 'base');
   return { root, base: git(root, 'rev-parse', 'HEAD') };
 }
@@ -33,6 +33,16 @@ test('retry attempts use different deterministic worktree paths', (t) => {
   const repo = repository(t); const worktrees = createGitWorktreeManager({ projectRoot: repo.root });
   const common = { workflowId: 'WF-retry', taskId: 'TASK-retry', runId: 'RUN-retry' };
   assert.notEqual(worktrees.pathFor({ ...common, attempt: 1 }), worktrees.pathFor({ ...common, attempt: 2 }));
+});
+
+test('task worktree is created in a readable project work directory', (t) => {
+  const repo = repository(t); const worktrees = createGitWorktreeManager({ projectRoot: repo.root });
+  const prepared = worktrees.prepare({ workflowId: 'WF-readable', taskId: 'TASK-readable', runId: 'RUN-readable', attempt: 1,
+    title: 'Add login flow', inputCommit: repo.base, targetProjectRootAbs: repo.root });
+
+  assert.equal(relative(join(repo.root, 'work'), prepared.worktreePathAbs).startsWith('..'), false);
+  assert.match(prepared.worktreePathAbs, /work[\\/]snapshot-repo-[^\\/]+-add-login-flow[\\/]repo$/u);
+  assert.doesNotMatch(prepared.worktreePathAbs, /runtime[\\/]worktrees/u);
 });
 
 test('host verifies output commit, computes changes and pins an accepted snapshot', async (t) => {

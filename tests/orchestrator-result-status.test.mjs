@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, join, relative, resolve } from 'node:path';
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import test from 'node:test';
@@ -116,10 +116,12 @@ function hostSandboxAttestation(task) {
 test('human-decision output keeps the run waiting and records a recovery snapshot', async (t) => {
   const workflowId = `WF-Human-${Date.now()}`;
   const artifactRoot = join(ROOT, 'runtime', 'artifacts', workflowId);
+  let generatedArtifactRoot = null;
   const database = openKernelDatabase({ databasePath: ':memory:' });
   t.after(() => {
     database.close();
     rmSync(artifactRoot, { recursive: true, force: true });
+    if (generatedArtifactRoot) rmSync(generatedArtifactRoot, { recursive: true, force: true });
   });
 
   const snapshots = [];
@@ -206,6 +208,9 @@ test('human-decision output keeps the run waiting and records a recovery snapsho
   assert.equal(task.state, 'WAITING_HUMAN', diagnostic);
   assert.equal(task.payload.snapshot.snapshotKind, 'NO_CHANGE');
   assert.equal(snapshots.length, 1);
+  generatedArtifactRoot = task.payload.artifact_root_abs;
+  assert.equal(relative(join(ROOT, 'work'), generatedArtifactRoot).startsWith('..'), false);
+  assert.doesNotMatch(generatedArtifactRoot, /runtime[\\/]artifacts/u);
 });
 
 test('TEST workflow dispatches only staged paths, collects staged output, and records BLOCKED with host identity', async (t) => {

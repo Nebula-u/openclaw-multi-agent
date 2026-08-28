@@ -8,6 +8,7 @@ import { createWorkflowRepository } from '../control-kernel/workflow-repository.
 import { assertOrchestratorWorker, loadActiveAgentRegistry } from './agent-registry.mjs';
 import { createContextManifest, inputRootForAttempt } from './context-manifest.mjs';
 import { createGitWorktreeManager } from './git-worktree.mjs';
+import { createTaskWorkspaceManager } from './task-workspace.mjs';
 import { createManagerControl } from '../manager-control/service.mjs';
 import { createSnapshotService } from './snapshot-service.mjs';
 import { createApprovalCommandQueue } from './approval-command-queue.mjs';
@@ -19,7 +20,6 @@ import { compileRoutePlan, GATE_CHECKS_BY_KIND } from './route-policy.mjs';
 import { createTestSandboxStager } from './test-sandbox-staging.mjs';
 
 function now(clock) { const value = clock(); return value instanceof Date ? value.toISOString() : value; }
-function taskRoot(runtimeRoot, workflowId, taskId) { return join(runtimeRoot, 'artifacts', workflowId, taskId); }
 function taskSession(task) { return `orc-${task.runId.toLowerCase()}-${task.taskId.toLowerCase()}-a${task.attempt}`.slice(0, 120); }
 function processLog(task, name, content) { const path = join(task.artifactRootAbs, 'logs', name); mkdirSync(join(task.artifactRootAbs, 'logs'), { recursive: true }); atomicWriteFile(path, String(content ?? '')); return path; }
 function notificationMessage(notification, run) {
@@ -148,6 +148,7 @@ export function createOrchestrator({ projectRoot: projectRootInput, database = n
   const selectedKernel = kernel ?? createKernel({ database: selectedDatabase, workerId: config.workerId, leaseSeconds: config.leaseSeconds, clock });
   const selectedRepository = repository ?? createWorkflowRepository({ database: selectedDatabase, clock });
   const selectedWorktrees = worktrees ?? createGitWorktreeManager({ projectRoot });
+  const taskWorkspaces = createTaskWorkspaceManager({ projectRoot });
   const selectedProjectControl = projectControl ?? createManagerControl({ projectRoot, runtimeRoot, clock });
   const selectedSnapshots = snapshots ?? createSnapshotService({ repository: selectedRepository, worktrees: selectedWorktrees });
   const selectedTestSandboxStager = testSandboxStager ?? createTestSandboxStager({ workspaceRoot: join(runtimeRoot, 'agents', 'test-agent', 'workspace') });
@@ -252,10 +253,17 @@ export function createOrchestrator({ projectRoot: projectRootInput, database = n
     let stored = prior.find((task) => task.stepId === step.step_id);
     if (!stored) stored = await selectedRepository.createTask({ runId: run.runId, step, agentId: step.agent_id, inputCommit: run.candidateCommit ?? run.baseCommit, maxAttempts, payload: { step, prior_artifacts: prior.filter((task) => task.state === 'SUCCEEDED').map((task) => task.payload?.published_output_path_abs).filter(Boolean) } });
     if (stored.state !== 'READY') return { stored, task: null };
-    const artifactRootAbs = taskRoot(runtimeRoot, run.workflowId, stored.taskId);
+    const storedWorkspace = stored.payload?.workspace_root_abs && stored.payload?.worktree_path_abs && stored.payload?.artifact_root_abs
+      && stored.payload?.workspace_attempt === stored.attempt
+      ? { workspaceRootAbs: stored.payload.workspace_root_abs, worktreePathAbs: stored.payload.worktree_path_abs, artifactRootAbs: stored.payload.artifact_root_abs }
+      : null;
+    const allocation = storedWorkspace ?? taskWorkspaces.reserve({ targetProjectRootAbs: run.targetProjectRootAbs, title: stored.title });
+    const artifactRootAbs = allocation.artifactRootAbs ?? allocation.workspaceRootAbs;
     mkdirSync(artifactRootAbs, { recursive: true });
-    const prepared = selectedWorktrees.prepare({ workflowId: run.workflowId, taskId: stored.taskId, runId: run.runId, attempt: stored.attempt,
-      inputCommit: stored.inputCommit, targetProjectRootAbs: run.targetProjectRootAbs });
+    const prepared = storedWorkspace
+      ? { worktreePathAbs: storedWorkspace.worktreePathAbs, inputCommit: stored.inputCommit }
+      : selectedWorktrees.prepare({ workflowId: run.workflowId, taskId: stored.taskId, runId: run.runId, attempt: stored.attempt,
+        title: stored.title, workspaceRootAbs: allocation.workspaceRootAbs, inputCommit: stored.inputCommit, targetProjectRootAbs: run.targetProjectRootAbs });
     const task = { workflowId: run.workflowId, runId: run.runId, taskId: stored.taskId, stepId: stored.stepId, kind: stored.kind, title: stored.title,
       agentId: stored.agentId, attempt: stored.attempt, routeHash: stored.routeHash, inputCommit: stored.inputCommit,
       originalRequest: run.request?.original_request ?? null,
@@ -268,7 +276,8 @@ export function createOrchestrator({ projectRoot: projectRootInput, database = n
     if (!task.contextManifestPathAbs || !existsSync(task.contextManifestPathAbs) || !existsSync(originalRequestPath)) {
       const context = createContextManifest({ projectRoot, task, priorArtifacts: stored.payload?.prior_artifacts ?? [] });
       task.contextManifestPathAbs = context.path; task.contextManifestSha256 = context.sha256;
-      stored = await selectedRepository.updateTask(stored.taskId, { contextManifest: { path_abs: context.path, sha256: context.sha256 }, payload: { ...(stored.payload ?? {}), artifact_root_abs: artifactRootAbs, worktree_path_abs: prepared.worktreePathAbs } }, { eventType: 'TASK_CONTEXT_PREPARED', eventPayload: { context_manifest_sha256: context.sha256 } });
+      stored = await selectedRepository.updateTask(stored.taskId, { contextManifest: { path_abs: context.path, sha256: context.sha256 }, payload: { ...(stored.payload ?? {}),
+        workspace_root_abs: allocation.workspaceRootAbs, workspace_attempt: stored.attempt, artifact_root_abs: artifactRootAbs, worktree_path_abs: prepared.worktreePathAbs } }, { eventType: 'TASK_CONTEXT_PREPARED', eventPayload: { context_manifest_sha256: context.sha256 } });
     }
     task.rawOutputPath = join(artifactRootAbs, '.agent-raw', 'result.json.raw');
     return { stored, task };
@@ -288,7 +297,8 @@ export function createOrchestrator({ projectRoot: projectRootInput, database = n
         return { state: 'WAITING_HUMAN', run: waiting };
       }
       const retry = await selectedRepository.updateTask(current.taskId, { state: 'READY', attempt: current.attempt + 1,
-        jsonRegenerations: 0, executionRound: current.executionRound + 1, lastError: current.lastError, contextManifest: {} },
+        jsonRegenerations: 0, executionRound: current.executionRound + 1, lastError: current.lastError, contextManifest: {},
+        payload: { ...(current.payload ?? {}), workspace_root_abs: null, workspace_attempt: null, artifact_root_abs: null, worktree_path_abs: null } },
       { eventType: 'TASK_RETRY_READY', eventPayload: { next_attempt: current.attempt + 1 } });
       await announce(run, 'TASK_RETRY_READY', { task_id: retry.taskId, attempt: retry.attempt }, retry.taskId);
       return { state: 'READY', task: retry };
