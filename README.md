@@ -37,7 +37,78 @@ Monitor ── SQLite facts + redacted Sessions
 - 已安装并可运行的 OpenClaw。
 - Windows PowerShell 7，或 Linux Bash。
 
-不需要 PostgreSQL、Redis、Docker 数据库容器或额外 SQLite npm 包。`TEST` 任务例外：它必须部署在原生 Linux 服务器上，并使用可由 OpenClaw 访问的 Linux Docker Engine。Windows 仍可用于安装、管理和非 TEST 工作流，但原生 Windows 上的 TEST staging 会明确 fail closed，不会退回宿主执行。原因是 Docker Desktop 的单一可写 workspace bind 无法可靠强制 `.task-sandbox/input` 不可写；在 OpenClaw 提供 per-run 只读 submount 前，不支持 Windows TEST 执行。
+不需要 PostgreSQL、Redis、Docker 数据库容器或额外 SQLite npm 包。`TEST` 任务例外：它必须部署在原生 Linux 服务器或 WSL2 Linux 发行版上，并使用可由 OpenClaw 访问的 Linux Docker Engine。Windows 仍可用于安装、管理和非 TEST 工作流，但原生 Windows 上的 TEST staging 会明确 fail closed，不会退回宿主执行。原因是 Docker Desktop 的单一可写 workspace bind 无法可靠强制 `.task-sandbox/input` 不可写；在 OpenClaw 提供 per-run 只读 submount 前，不支持 Windows TEST 执行。
+
+### 为 TEST 准备 WSL2 Linux 沙箱（Windows 主机）
+
+`TEST_SANDBOX_NATIVE_LINUX_REQUIRED` 不是 Agent 输出错误；它表示 Orchestrator 仍运行在 Windows（`process.platform=win32`）。不要继续重试同一任务。以下命令把 **Orchestrator、OpenClaw 和项目目录** 迁移到 WSL2 Linux 环境；仅在 Windows 上启动 Docker Desktop 或只把 test-agent 配成 Docker 都不能满足要求。
+
+1. 在**管理员 PowerShell**安装 WSL2 Ubuntu；若系统提示，重启 Windows 后再继续：
+
+```powershell
+wsl --install -d Ubuntu
+wsl --status
+wsl -d Ubuntu
+```
+
+2. 在 Ubuntu 终端启用 systemd、安装 Docker Engine、Git 和 Node.js 22。执行完第一段后退出 Ubuntu；随后回到 PowerShell 执行 `wsl --shutdown`，再重新打开 Ubuntu，才能使用 `systemctl`：
+
+```bash
+sudo tee /etc/wsl.conf >/dev/null <<'EOF'
+[boot]
+systemd=true
+EOF
+exit
+```
+
+```powershell
+wsl --shutdown
+wsl -d Ubuntu
+```
+
+```bash
+sudo apt-get update
+sudo apt-get install -y ca-certificates curl git docker.io
+curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
+sudo apt-get install -y nodejs
+sudo usermod -aG docker "$USER"
+sudo systemctl enable --now docker
+exit
+```
+
+再次从 PowerShell 打开 Ubuntu（使新的 `docker` 用户组生效），并确认 Linux、Docker 与 Node 都可用：
+
+```powershell
+wsl -d Ubuntu
+```
+
+```bash
+node --version
+docker version
+docker run --rm hello-world
+```
+
+3. 把项目放到 WSL 的 Linux 文件系统（例如 `/home/<user>/src/`），**不能**直接从 `/mnt/f/...` 启动 Orchestrator。若当前代码尚未推送远端，可从 Windows 工作目录复制；已有远端仓库时也可以改用 `git clone`：
+
+```bash
+mkdir -p ~/src
+cp -a /mnt/f/MicroConnect/project/openclaw-multi-agent ~/src/
+cd ~/src/openclaw-multi-agent
+pwd
+npm install
+```
+
+`pwd` 必须显示 `/home/...`，而不是 `/mnt/f/...`。在此 Linux 环境中单独安装/登录 OpenClaw；本项目不提供 OpenClaw 安装命令。先确认 `openclaw --version` 可运行，再继续：
+
+```bash
+openclaw --version
+docker build --tag openclaw-test-node:22-slim --file deploy/sandbox/Dockerfile.test-node .
+docker image inspect openclaw-test-node:22-slim
+bash scripts/install.sh --apply --yes --runtime-root runtime
+npm run orchestrator:start
+```
+
+迁移前先在 Windows 项目目录执行 `npm run orchestrator:stop`，确保同一 workflow 不会同时被 Windows 与 Linux 两个 Orchestrator 写入。Monitor 也必须从同一个 WSL Linux 项目目录启动，不能让 Windows 跨文件系统读取 Linux SQLite；Windows 浏览器可直接访问 WSL Monitor 监听的 `http://127.0.0.1:4319/`。
 
 首次启用 TEST 前，在项目根目录构建 test-agent 镜像：
 
