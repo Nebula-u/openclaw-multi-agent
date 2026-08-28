@@ -27,6 +27,11 @@ test('local dashboard opens without a build step and contains no external runtim
   assert.match(script, /api\/approvals\/resolve/u);
   assert.match(script, /method:\s*'POST'/u);
   assert.match(script, /api\/approval-commands\//u);
+  assert.match(script, /api\/workflows\/control/u);
+  assert.match(script, /api\/workflow-control-commands\//u);
+  assert.match(script, /action === 'PAUSE'/u);
+  assert.match(script, /'RESUME'/u);
+  assert.match(html, /id="workflow-control"/u);
   assert.match(script, /queuedApprovals/u);
   assert.match(html, /id="session-window"/u);
   assert.match(html, /id="alert-list"/u);

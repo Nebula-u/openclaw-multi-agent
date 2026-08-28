@@ -15,6 +15,7 @@ import { createSessionCatalog } from './session-catalog.mjs';
 import { createHealthClassifier } from './health-classifier.mjs';
 import { redactValue } from './redactor.mjs';
 import { createApprovalCommandQueue } from '../scripts/orchestrator/approval-command-queue.mjs';
+import { createWorkflowControlCommandQueue } from '../scripts/orchestrator/workflow-control-command-queue.mjs';
 
 function isLoopback(address = '') { return address === '127.0.0.1' || address === '::1' || address === '::ffff:127.0.0.1'; }
 function sendJson(response, status, value, headers = {}) {
@@ -64,6 +65,7 @@ export function createKernelMonitorServer(config, { database: providedDatabase =
   const telemetryDatabase = providedTelemetryDatabase ?? openTelemetryDatabase(config.monitorDatabasePath ?? ':memory:');
   const telemetry = createTelemetryRepository(config.projectRoot, telemetryDatabase);
   const approvalCommands = createApprovalCommandQueue({ projectRoot: config.projectRoot, runtimeRoot: config.runtimeRoot, contractsRoot: config.projectRoot });
+  const workflowControlCommands = createWorkflowControlCommandQueue({ projectRoot: config.projectRoot, runtimeRoot: config.runtimeRoot, contractsRoot: config.projectRoot });
   const hub = providedHub ?? new MonitorEventHub({ retention: config.sseRetention });
   const catalog = createSessionCatalog({ sessionRoot: config.sessionRoot ?? config.projectRoot, projectRoot: config.projectRoot });
   let snapshot = { schema_version: 1, source: 'SQLITE_CONTROL_KERNEL', kernel_reachable: false, generated_at: new Date().toISOString(), workflows: [], snapshots: [], hr_alerts: [], hr_jobs: [], notifications: [] };
@@ -148,10 +150,23 @@ export function createKernelMonitorServer(config, { database: providedDatabase =
           choice: input.choice, actor: 'human:monitor', notes: typeof input.notes === 'string' ? input.notes : '', submitted_at: new Date().toISOString() });
         return sendJson(response, 202, { ok: true, ...queued }, headers);
       }
+      if (request.method === 'POST' && path === '/api/workflows/control') {
+        const input = await readJsonBody(request);
+        for (const key of ['workflow_id', 'run_id', 'action']) if (typeof input?.[key] !== 'string' || !input[key]) throw Object.assign(new Error(`${key} is required`), { code: 'WORKFLOW_CONTROL_COMMAND_REQUEST_INVALID' });
+        if (!['PAUSE', 'RESUME'].includes(input.action)) throw Object.assign(new Error('action must be PAUSE or RESUME'), { code: 'WORKFLOW_CONTROL_COMMAND_REQUEST_INVALID' });
+        const queued = workflowControlCommands.enqueue({ schema_version: 1, command_id: `WFC-${randomUUID().replaceAll('-', '').slice(0, 20)}`,
+          workflow_id: input.workflow_id, run_id: input.run_id, action: input.action, actor: 'human:monitor', notes: typeof input.notes === 'string' ? input.notes : '', submitted_at: new Date().toISOString() });
+        return sendJson(response, 202, { ok: true, ...queued }, headers);
+      }
       const approvalCommand = path.match(/^\/api\/approval-commands\/(CMD-[A-Za-z0-9][A-Za-z0-9-]*)$/u);
       if (request.method === 'GET' && approvalCommand) {
         const receipt = approvalCommands.readReceipt(`${approvalCommand[1]}.json`);
         return sendJson(response, receipt ? 200 : 404, receipt ? { ok: true, receipt } : { ok: false, error: 'APPROVAL_COMMAND_RECEIPT_NOT_FOUND' }, headers);
+      }
+      const workflowControlCommand = path.match(/^\/api\/workflow-control-commands\/(WFC-[A-Za-z0-9][A-Za-z0-9-]*)$/u);
+      if (request.method === 'GET' && workflowControlCommand) {
+        const receipt = workflowControlCommands.readReceipt(`${workflowControlCommand[1]}.json`);
+        return sendJson(response, receipt ? 200 : 404, receipt ? { ok: true, receipt } : { ok: false, error: 'WORKFLOW_CONTROL_COMMAND_RECEIPT_NOT_FOUND' }, headers);
       }
       if (request.method === 'GET' && path === '/api/snapshots') { await refresh(); return sendJson(response, 200, { ok: true, snapshots: snapshot.snapshots }, headers); }
       const gitSnapshotDiff = path.match(/^\/api\/snapshots\/([^/]+)\/diff$/u); if (request.method === 'GET' && gitSnapshotDiff) { const value = await snapshotService.diff(decodeURIComponent(gitSnapshotDiff[1])); return sendJson(response, 200, { ok: true, ...value }, headers); }
@@ -163,7 +178,7 @@ export function createKernelMonitorServer(config, { database: providedDatabase =
       return sendJson(response, 404, { ok: false, error: 'NOT_FOUND' }, headers);
     } catch (error) { return sendJson(response, error.statusCode ?? 400, { ok: false, error: error.code ?? 'MONITOR_REQUEST_FAILED', message: error.message }, headers); }
   });
-  return { server, kernel, repository, telemetry, hub, approvalCommands, snapshot: () => snapshot, refresh, sessionCatalog: catalog, async start() { await refresh(); await new Promise((resolveStart, reject) => { server.once('error', reject); server.listen(config.port, config.host, () => { server.off('error', reject); resolveStart(); }); }); return server.address(); }, async close() { clearInterval(timer); if (server.listening) await new Promise((resolveClose, reject) => server.close((error) => error ? reject(error) : resolveClose())); if (ownedDatabase) database.close(); if (!providedTelemetryDatabase) telemetryDatabase.close(); } };
+  return { server, kernel, repository, telemetry, hub, approvalCommands, workflowControlCommands, snapshot: () => snapshot, refresh, sessionCatalog: catalog, async start() { await refresh(); await new Promise((resolveStart, reject) => { server.once('error', reject); server.listen(config.port, config.host, () => { server.off('error', reject); resolveStart(); }); }); return server.address(); }, async close() { clearInterval(timer); if (server.listening) await new Promise((resolveClose, reject) => server.close((error) => error ? reject(error) : resolveClose())); if (ownedDatabase) database.close(); if (!providedTelemetryDatabase) telemetryDatabase.close(); } };
 }
 function publicHrJob(job) {
   return { jobId: job.jobId, reviewKey: job.reviewKey, runId: job.runId, taskId: job.taskId,

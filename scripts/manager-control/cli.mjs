@@ -2,16 +2,17 @@
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createManagerControl } from './service.mjs';
-import { readOrchestratorStatus, submitOrchestratorApproval } from './orchestrator-state.mjs';
+import { readOrchestratorStatus, submitOrchestratorApproval, submitWorkflowControl } from './orchestrator-state.mjs';
 
 function fail(message) { throw Object.assign(new Error(message), { code: 'MANAGER_CONTROL_USAGE' }); }
 function parse(argv) {
   const [action, ...tokens] = argv;
-  if (!['ensure', 'resolve', 'fetch', 'orchestrator-status', 'orchestrator-approve'].includes(action)) fail('action is not supported');
+  if (!['ensure', 'resolve', 'fetch', 'orchestrator-status', 'orchestrator-approve', 'orchestrator-control'].includes(action)) fail('action is not supported');
   const allowedByAction = {
     ensure: new Set(['workflow-id', 'project-name', 'project-mode', 'remote-url']), resolve: new Set(['workflow-id', 'project-ref']), fetch: new Set(['workflow-id', 'project-ref']),
     'orchestrator-status': new Set(['workflow-id', 'manager-session-id', 'manager-session-key']),
     'orchestrator-approve': new Set(['workflow-id', 'manager-session-id', 'manager-session-key', 'decision-id', 'choice', 'authorization-summary', 'notes']),
+    'orchestrator-control': new Set(['workflow-id', 'manager-session-id', 'manager-session-key', 'action', 'authorization-summary', 'notes']),
   };
   const allowed = allowedByAction[action];
   const options = {};
@@ -59,11 +60,17 @@ export function run(argv, output = process.stdout, { runtimeRoot = installedRunt
   } else if (action === 'orchestrator-status') {
     if (!options['workflow-id'] || !options['manager-session-id'] || !options['manager-session-key']) fail('orchestrator-status requires workflow and Manager session binding');
     result = readOrchestratorStatus({ runtimeRoot, workflowId: options['workflow-id'], managerSessionId: options['manager-session-id'], managerSessionKey: options['manager-session-key'] });
-  } else {
+  } else if (action === 'orchestrator-approve') {
     if (!options['workflow-id'] || !options['manager-session-id'] || !options['manager-session-key'] || !options['decision-id'] || !options.choice) fail('orchestrator-approve requires workflow, Manager session, decision, and choice');
     const authorization = authorizationFromOptions(options);
     result = submitOrchestratorApproval({ runtimeRoot, workflowId: options['workflow-id'], managerSessionId: options['manager-session-id'], managerSessionKey: options['manager-session-key'],
       decisionId: options['decision-id'], choice: options.choice, authorization, notes: options.notes ?? '' });
+  } else {
+    if (!options['workflow-id'] || !options['manager-session-id'] || !options['manager-session-key'] || !options.action) fail('orchestrator-control requires workflow, Manager session, and action');
+    if (!['PAUSE', 'RESUME'].includes(options.action)) fail('orchestrator-control action must be PAUSE or RESUME');
+    const authorization = authorizationFromOptions(options);
+    result = submitWorkflowControl({ runtimeRoot, workflowId: options['workflow-id'], managerSessionId: options['manager-session-id'], managerSessionKey: options['manager-session-key'],
+      action: options.action, authorization, notes: options.notes ?? '' });
   }
   output.write(`${JSON.stringify(result)}\n`);
   return result;

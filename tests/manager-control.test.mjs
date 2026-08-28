@@ -109,6 +109,26 @@ test('manager control reads the bound pending approval and writes a matching dec
     '--decision-id', status.pending_approval.decision_id, '--choice', 'APPROVE', '--authorization-summary', '   '], output, { runtimeRoot }), (error) => error.code === 'MANAGER_CONTROL_USAGE');
 });
 
+test('manager control queues a session-bound user-authorized pause command', async (t) => {
+  const runtimeRoot = mkdtempSync(join(tmpdir(), 'manager-control-pause-'));
+  const database = openKernelDatabase({ databasePath: join(runtimeRoot, 'control', 'kernel.db') });
+  t.after(() => { database.close(); rmSync(runtimeRoot, { recursive: true, force: true }); });
+  const repository = createWorkflowRepository({ database });
+  const run = await repository.createRun({ workflowId: 'WF-manager-pause', request: {}, targetProjectRootAbs: runtimeRoot, baseCommit: '1'.repeat(40),
+    managerSessionId: 'manager-session', managerSessionKey: 'manager-key', routePlan: { steps: [], route_hash: 'a'.repeat(64) } });
+  const output = { value: '', write(value) { this.value += value; } };
+
+  const submitted = runManagerControl(['orchestrator-control', '--workflow-id', run.workflowId,
+    '--manager-session-id', 'manager-session', '--manager-session-key', 'manager-key', '--action', 'PAUSE',
+    '--authorization-summary', '用户要求暂停当前流程'], output, { runtimeRoot });
+
+  assert.equal(submitted.status, 'QUEUED');
+  assert.equal(JSON.parse(readFileSync(submitted.command_path, 'utf8')).action, 'PAUSE');
+  assert.throws(() => runManagerControl(['orchestrator-control', '--workflow-id', run.workflowId,
+    '--manager-session-id', 'manager-session', '--manager-session-key', 'manager-key', '--action', 'PAUSE',
+    '--authorization-summary', '  '], output, { runtimeRoot }), (error) => error.code === 'MANAGER_CONTROL_USAGE');
+});
+
 test('Windows manager-control.cmd preserves semantic project arguments from PowerShell', (t) => {
   if (process.platform !== 'win32') { t.skip('Windows-only PowerShell and .cmd integration test'); return; }
   const runtimeRoot = mkdtempSync(join(tmpdir(), 'manager-control-cmd-'));

@@ -46,3 +46,18 @@ export function submitOrchestratorApproval({ runtimeRoot: runtimeRootInput, work
   atomicWriteJson(requestPath, request);
   return { request_id: requestId, request_path: requestPath, status: 'QUEUED' };
 }
+
+export function submitWorkflowControl({ runtimeRoot: runtimeRootInput, workflowId, managerSessionId, managerSessionKey, action, authorization, notes = '' }) {
+  const runtimeRoot = resolve(runtimeRootInput);
+  const status = readOrchestratorStatus({ runtimeRoot, workflowId, managerSessionId, managerSessionKey });
+  if (!['PAUSE', 'RESUME'].includes(action)) fail('WORKFLOW_CONTROL_ACTION_INVALID', 'workflow control action is invalid');
+  if (!authorization || authorization.confirmed !== true || !/^human:[A-Za-z0-9._-]+$/u.test(authorization.actor ?? '') || typeof authorization.message !== 'string' || !authorization.message) {
+    fail('MANAGER_REQUEST_AUTH_INVALID', 'authorization must contain an explicit human confirmation');
+  }
+  const commandId = `WFC-${randomUUID().replaceAll('-', '')}`;
+  const command = { schema_version: 1, command_id: commandId, workflow_id: workflowId, run_id: status.run_id, action,
+    actor: authorization.actor, notes: String(notes ?? ''), submitted_at: new Date().toISOString() };
+  const commandPath = join(runtimeRoot, 'orchestrator', 'workflow-control-commands', 'commands', `${commandId}.json`);
+  atomicWriteJson(commandPath, command);
+  return { command_id: commandId, command_path: commandPath, status: 'QUEUED' };
+}

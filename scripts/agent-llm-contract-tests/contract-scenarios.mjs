@@ -35,6 +35,9 @@ export const INTERNAL_CONTRACTS = new Set([
   // Local Monitor approval commands are consumed by the Orchestrator; they are
   // not emitted by an LLM Agent.
   'approval-command.schema.json',
+  // Workflow pause/resume commands are emitted by bounded Manager/Monitor
+  // control code and consumed by the Orchestrator, never by an LLM Agent.
+  'workflow-control-command.schema.json',
   // Control Kernel 事实表投影：由 scripts/control-kernel/repository.mjs 直接
   // 从 SQLite Kernel 行映射产出，不经过任何 Agent。
   'kernel-run.schema.json',
