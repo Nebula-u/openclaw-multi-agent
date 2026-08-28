@@ -101,6 +101,28 @@ test('Kernel Monitor queues a local approval command without mutating the Kernel
   } finally { await monitor.close(); }
 });
 
+test('Kernel Monitor queues a workflow pause command without mutating the Kernel', async (t) => {
+  const runtimeRoot = mkdtempSync(join(tmpdir(), 'kernel-monitor-pause-'));
+  t.after(() => rmSync(runtimeRoot, { recursive: true, force: true }));
+  const run = { runId: 'RUN-monitor-pause', workflowId: 'WF-monitor-pause', state: 'ACTIVE', outcome: null, statusReason: null,
+    routeHash: 'a'.repeat(64), routePlan: { display_title: 'Pause', summary: 'Pause', steps: [], skipped_stages: [] }, currentStepIndex: 0,
+    managerSessionId: 'manager-session', managerDelivery: null, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
+  const kernel = { listRuns: async () => [run], listTasks: async () => [], listExecutions: async () => [] };
+  const repository = { listHrJobs: async () => [], listNotifications: async () => [], listSnapshots: async () => [], listApprovals: async () => [] };
+  const monitor = createKernelMonitorServer({ projectRoot: ROOT, runtimeRoot, sessionRoot: runtimeRoot, monitorDatabasePath: ':memory:', host: '127.0.0.1', port: 0, allowedOrigins: ['null'], reconcileIntervalMs: 1000 }, { kernel, repository, snapshots: { list: async () => [] } });
+  const address = await monitor.start();
+  try {
+    const base = `http://127.0.0.1:${address.port}`;
+    const response = await fetch(`${base}/api/workflows/control`, { method: 'POST', headers: { origin: 'null', 'content-type': 'application/json' }, body: JSON.stringify({ workflow_id: run.workflowId, run_id: run.runId, action: 'PAUSE', notes: '' }) });
+    assert.equal(response.status, 202);
+    const body = await response.json();
+    assert.equal(body.status, 'QUEUED');
+    assert.equal(existsSync(join(runtimeRoot, 'orchestrator', 'workflow-control-commands', 'commands', `${body.command_id}.json`)), true);
+    const receipt = await fetch(`${base}/api/workflow-control-commands/${body.command_id}`, { headers: { origin: 'null' } });
+    assert.equal(receipt.status, 404);
+  } finally { await monitor.close(); }
+});
+
 test('Kernel Monitor uses its explicit configured database path', (t) => {
   const runtimeRoot = mkdtempSync(join(tmpdir(), 'kernel-monitor-runtime-'));
   const projectRoot = ROOT;

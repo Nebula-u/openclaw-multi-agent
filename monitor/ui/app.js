@@ -3,7 +3,7 @@
 
   const sameOrigin = window.location.protocol !== 'file:';
   const defaultApi = window.MONITOR_CONFIG?.apiUrl || (sameOrigin ? window.location.origin : 'http://127.0.0.1:4319');
-  const state = { apiUrl: defaultApi.replace(/\/$/u, ''), workflows: [], snapshot: null, selectedWorkflowId: localStorage.getItem('openclaw.monitor.workflow') || null, selectedSessionKey: localStorage.getItem('openclaw.monitor.session') || null, source: null, sessionCache: new Map(), dirtySessionKeys: new Set(), visibleSessionKey: null, sessionRequestVersion: 0, sessionLoadingKey: null, queuedApprovals: new Map(), openApprovalDetails: new Set() };
+  const state = { apiUrl: defaultApi.replace(/\/$/u, ''), workflows: [], snapshot: null, selectedWorkflowId: localStorage.getItem('openclaw.monitor.workflow') || null, selectedSessionKey: localStorage.getItem('openclaw.monitor.session') || null, source: null, sessionCache: new Map(), dirtySessionKeys: new Set(), visibleSessionKey: null, sessionRequestVersion: 0, sessionLoadingKey: null, queuedApprovals: new Map(), queuedControls: new Map(), openApprovalDetails: new Set() };
   const $ = (id) => document.getElementById(id);
   const escapeHtml = (value) => String(value ?? '').replace(/[&<'"]/gu, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[char]));
   const selected = () => state.workflows.find((item) => item.workflow_id === state.selectedWorkflowId) || null;
@@ -96,6 +96,38 @@
   }
   const CONFIRM_CHOICES = new Set(['APPROVE', 'ACCEPT', 'CONTINUE', 'RETRY_SAME_AGENT']);
   const REJECT_CHOICES = new Set(['REJECT', 'REJECTED', 'CANCEL', 'ABORT']);
+  async function waitForWorkflowControlReceipt(commandId, workflowId, attempts = 0) {
+    try {
+      const value = await request(`/api/workflow-control-commands/${encodeURIComponent(commandId)}`);
+      state.queuedControls.set(workflowId, { commandId, status: value.receipt.status, error: value.receipt.error });
+      void reload();
+    } catch (error) {
+      if (attempts < 20 && /WORKFLOW_CONTROL_COMMAND_RECEIPT_NOT_FOUND|HTTP 404/u.test(error.message)) setTimeout(() => { void waitForWorkflowControlReceipt(commandId, workflowId, attempts + 1); }, 1000);
+      else state.queuedControls.set(workflowId, { commandId, status: 'FAILED', error: { message: error.message } });
+    }
+  }
+  async function submitWorkflowControl(workflow, action) {
+    if (state.queuedControls.has(workflow.workflow_id)) return;
+    state.queuedControls.set(workflow.workflow_id, { status: 'SUBMITTING' }); render();
+    try {
+      const result = await post('/api/workflows/control', { workflow_id: workflow.workflow_id, run_id: workflow.run_id, action, notes: '' });
+      state.queuedControls.set(workflow.workflow_id, { commandId: result.command_id, status: 'QUEUED' }); render();
+      void waitForWorkflowControlReceipt(result.command_id, workflow.workflow_id);
+    } catch (error) { state.queuedControls.set(workflow.workflow_id, { status: 'FAILED', error: { message: error.message } }); render(); }
+  }
+  function renderWorkflowControl(workflow) {
+    const root = $('workflow-control');
+    if (!workflow || !['ACTIVE', 'HOLD'].includes(workflow.state)) { root.innerHTML = ''; return; }
+    const action = workflow.state === 'ACTIVE' ? 'PAUSE' : 'RESUME';
+    const label = action === 'PAUSE' ? '暂停本轮' : '恢复流程';
+    const queued = state.queuedControls.get(workflow.workflow_id);
+    if (queued?.status === 'ACCEPTED') { state.queuedControls.delete(workflow.workflow_id); return renderWorkflowControl(workflow); }
+    const status = queued
+      ? `<small>${escapeHtml(queued.status === 'FAILED' ? `操作失败：${queued.error?.message || '未知错误'}` : queued.commandId ? `命令已提交：${queued.commandId}` : '正在提交流程控制…')}</small>`
+      : `<small>${action === 'PAUSE' ? '当前任务会安全完成；后续步骤和重试不会派发。' : '按当前任务状态继续。'}</small>`;
+    root.innerHTML = `<button type="button" data-workflow-control="${action}"${queued ? ' disabled' : ''}>${label}</button>${status}`;
+    root.querySelector('[data-workflow-control]').addEventListener('click', () => { void submitWorkflowControl(workflow, action); });
+  }
   function approvalAction(option, label, tone, queued) {
     if (!option) return `<button type="button" class="approval-action ${tone}" disabled><span>${label}</span><small>当前审批未提供此操作</small></button>`;
     return `<button type="button" class="approval-action ${tone}" data-approval-choice="${escapeHtml(option.option_id)}"${queued ? ' disabled' : ''}><span>${label}</span><small>${escapeHtml(option.description || option.option_id)}</small></button>`;
@@ -134,7 +166,7 @@
     $('snapshot-list').innerHTML = values.length ? values.map((item) => `<article class="review" title="只读查看；恢复请使用 snapshot-restore，撤销请使用 snapshot-revert"><b>${escapeHtml(item.snapshotKind)}</b><span>${escapeHtml(item.agentId)}</span><small>${escapeHtml(item.sessionId || 'NO SESSION')} · ${escapeHtml(String(item.outputCommit || '').slice(0, 12))}</small><p class="review-text">+${escapeHtml(item.changeSummary?.added?.length || 0)} ~${escapeHtml(item.changeSummary?.modified?.length || 0)} -${escapeHtml(item.changeSummary?.deleted?.length || 0)}</p></article>`).join('') : '<p class="empty-note">暂无代码快照</p>';
   }
   function render() {
-    const workflow = selected(); renderWorkflows(); $('workflow-title').textContent = workflow?.title || '等待工作流'; $('workflow-summary').textContent = workflow?.status_reason || workflow?.route_plan?.summary || '选择工作流以查看任务、会话和审查记录。'; $('workflow-state').textContent = workflow?.state || 'UNKNOWN'; $('workflow-state').className = `state-pill ${String(workflow?.state || 'unknown').toLowerCase()}`; $('workflow-step').textContent = workflow ? `STEP ${(workflow.current_step_index ?? 0) + 1}/${workflow.route_plan?.steps?.length ?? 0}` : 'STEP --'; renderTaskList(workflow); renderNotices(workflow); renderSnapshots(workflow); renderHr(workflow); void renderSession(workflow);
+    const workflow = selected(); renderWorkflows(); $('workflow-title').textContent = workflow?.title || '等待工作流'; $('workflow-summary').textContent = workflow?.status_reason || workflow?.route_plan?.summary || '选择工作流以查看任务、会话和审查记录。'; $('workflow-state').textContent = workflow?.state || 'UNKNOWN'; $('workflow-state').className = `state-pill ${String(workflow?.state || 'unknown').toLowerCase()}`; $('workflow-step').textContent = workflow ? `STEP ${(workflow.current_step_index ?? 0) + 1}/${workflow.route_plan?.steps?.length ?? 0}` : 'STEP --'; renderWorkflowControl(workflow); renderTaskList(workflow); renderNotices(workflow); renderSnapshots(workflow); renderHr(workflow); void renderSession(workflow);
   }
   function applySnapshot(snapshot) { state.snapshot = snapshot; state.workflows = snapshot.workflows || []; if (!state.workflows.some((item) => item.workflow_id === state.selectedWorkflowId)) state.selectedWorkflowId = state.workflows[0]?.workflow_id || null; render(); $('sync-state').textContent = time(snapshot.generated_at); setConnection(true, snapshot.kernel_reachable ? 'KERNEL CONNECTED' : 'KERNEL DEGRADED'); }
   function stream() {

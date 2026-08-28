@@ -116,6 +116,8 @@ test('Manager workspace documents the current request queue protocol', () => {
   assert.doesNotMatch(managerTools, /\.agent-raw\/route-plan\.json\.raw/u);
   assert.doesNotMatch(managerTools, /validate-request/u);
   assert.match(managerTools, /orchestrator-approve/u);
+  assert.match(managerTools, /orchestrator-control/u);
+  assert.match(managerRules, /暂停/u);
   assert.match(managerTemplates, /manager-request\.change\.json/u);
   assert.match(managerTemplates, /manager-request\.decision\.json/u);
 });

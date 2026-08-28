@@ -11,6 +11,7 @@ import { createGitWorktreeManager } from './git-worktree.mjs';
 import { createManagerControl } from '../manager-control/service.mjs';
 import { createSnapshotService } from './snapshot-service.mjs';
 import { createApprovalCommandQueue } from './approval-command-queue.mjs';
+import { createWorkflowControlCommandQueue } from './workflow-control-command-queue.mjs';
 import { ingestTaskOutput, writeFailureReceipt } from './output-ingestion.mjs';
 import { archiveJsonRegeneration, archiveOutputBoundaryFailure, isJsonRegenerable, isOutputBoundaryFailure, MAX_JSON_REGENERATIONS } from './json-regeneration.mjs';
 import { extractFinalAssistantText, runOpenClawAgent } from './openclaw-runner.mjs';
@@ -149,6 +150,7 @@ export function createOrchestrator({ projectRoot: projectRootInput, database = n
   const selectedTestSandboxStager = testSandboxStager ?? createTestSandboxStager({ workspaceRoot: join(runtimeRoot, 'agents', 'test-agent', 'workspace') });
   const registry = loadActiveAgentRegistry(projectRoot);
   const approvalCommands = createApprovalCommandQueue({ projectRoot, runtimeRoot, resolve: resolveApprovalCommand });
+  const workflowControlCommands = createWorkflowControlCommandQueue({ projectRoot, runtimeRoot, resolve: resolveWorkflowControlCommand });
   let hrService = hr;
 
   async function announce(run, type, payload, taskId = null) {
@@ -423,6 +425,11 @@ export function createOrchestrator({ projectRoot: projectRootInput, database = n
       });
       await selectedRepository.registerArtifact({ runId: run.runId, taskId: task.taskId, executionId: execution.executionId, kind: 'RESULT', uri: ingested.outputPath, sha256: sha256File(ingested.outputPath), sizeBytes: 0, mediaType: 'application/json' });
       await selectedRepository.registerArtifact({ runId: run.runId, taskId: task.taskId, executionId: execution.executionId, kind: 'INGESTION_RECEIPT', uri: ingested.receiptPath, sha256: sha256File(ingested.receiptPath), sizeBytes: 0, mediaType: 'application/json' });
+      const latestRun = await selectedRepository.getRunById(run.runId);
+      if (latestRun?.state === 'HOLD') {
+        await queueDailyReport(latestRun, completed, 'PAUSED');
+        return { state: 'HOLD', run: latestRun, task: completed };
+      }
       if (ingested.value.result_status === 'HUMAN_DECISION_REQUIRED') {
         const request = approvalRequest(task, ingested.value);
         await selectedRepository.createApproval({ runId: run.runId, taskId: task.taskId, stepId: task.stepId, trigger: request.trigger, request });
@@ -486,6 +493,7 @@ export function createOrchestrator({ projectRoot: projectRootInput, database = n
 
   async function tickAll() {
     await approvalCommands.scan();
+    await workflowControlCommands.scan();
     const runs = await selectedRepository.listRuns(); const results = [];
     for (const run of runs) if (run.state === 'ACTIVE') results.push(await tick(run.workflowId));
     await deliverNotifications(); return results;
@@ -546,6 +554,34 @@ export function createOrchestrator({ projectRoot: projectRootInput, database = n
     return resolveDecision({ run, decisionId: command.decision_id, choice: command.choice, notes: command.notes, actor: command.actor });
   }
 
+  async function pauseRun({ workflowId, runId, actor, notes = '' }) {
+    const run = await selectedRepository.getRun(workflowId);
+    if (!run || run.runId !== runId) throw Object.assign(new Error('workflow control command does not match a current workflow run'), { code: 'WORKFLOW_CONTROL_RUN_MISMATCH' });
+    if (run.state === 'TERMINAL') throw Object.assign(new Error('terminal workflows cannot be paused'), { code: 'WORKFLOW_CONTROL_TERMINAL' });
+    if (run.state === 'HOLD') return run;
+    if (run.state !== 'ACTIVE') throw Object.assign(new Error('workflow cannot be paused in its current state'), { code: 'WORKFLOW_CONTROL_PAUSE_INVALID_STATE' });
+    const held = await selectedRepository.updateRun(run.runId, { state: 'HOLD', statusReason: 'paused by explicit human request' }, { eventType: 'WORKFLOW_PAUSED', eventPayload: { actor, notes } });
+    await announce(held, 'WORKFLOW_PAUSED', { actor, notes });
+    return held;
+  }
+
+  async function resumeRun({ workflowId, runId, actor, notes = '' }) {
+    const run = await selectedRepository.getRun(workflowId);
+    if (!run || run.runId !== runId) throw Object.assign(new Error('workflow control command does not match a current workflow run'), { code: 'WORKFLOW_CONTROL_RUN_MISMATCH' });
+    if (run.state === 'TERMINAL') throw Object.assign(new Error('terminal workflows cannot be resumed'), { code: 'WORKFLOW_CONTROL_TERMINAL' });
+    if (run.state === 'ACTIVE') return run;
+    if (run.state !== 'HOLD') throw Object.assign(new Error('workflow can be resumed only from HOLD'), { code: 'WORKFLOW_CONTROL_RESUME_INVALID_STATE' });
+    const active = await selectedRepository.updateRun(run.runId, { state: 'ACTIVE', statusReason: 'resumed by explicit human request' }, { eventType: 'WORKFLOW_RESUMED_FROM_HOLD', eventPayload: { actor, notes } });
+    await announce(active, 'WORKFLOW_RESUMED_FROM_HOLD', { actor, notes });
+    return active;
+  }
+
+  async function resolveWorkflowControlCommand(command) {
+    if (command.action === 'PAUSE') return pauseRun({ workflowId: command.workflow_id, runId: command.run_id, actor: command.actor, notes: command.notes });
+    if (command.action === 'RESUME') return resumeRun({ workflowId: command.workflow_id, runId: command.run_id, actor: command.actor, notes: command.notes });
+    throw Object.assign(new Error('workflow control action is invalid'), { code: 'WORKFLOW_CONTROL_ACTION_INVALID' });
+  }
+
   async function decide(request) {
     const run = await selectedRepository.getRun(request.workflow_id);
     if (!run) throw Object.assign(new Error(`workflow not found: ${request.workflow_id}`), { code: 'WORKFLOW_NOT_FOUND' });
@@ -555,5 +591,5 @@ export function createOrchestrator({ projectRoot: projectRootInput, database = n
 
   async function close() { if (ownedDatabase) selectedDatabase.close(); }
   function attachHrService(value) { hrService = value; return hrService; }
-  return { projectRoot, runtimeRoot, repository: selectedRepository, kernel: selectedKernel, snapshots: selectedSnapshots, approvalCommands, createRun, reviseRun, decide, resolveApprovalCommand, tick, tickAll, deliverNotifications, attachHrService, close };
+  return { projectRoot, runtimeRoot, repository: selectedRepository, kernel: selectedKernel, snapshots: selectedSnapshots, approvalCommands, workflowControlCommands, createRun, reviseRun, decide, resolveApprovalCommand, resolveWorkflowControlCommand, pauseRun, resumeRun, tick, tickAll, deliverNotifications, attachHrService, close };
 }

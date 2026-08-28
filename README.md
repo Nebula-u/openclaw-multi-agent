@@ -248,6 +248,12 @@ node scripts/orchestrator-cli.mjs hr-run-pending --project-root .
 
 `hr-review` 默认入队后立即执行；加 `--enqueue-only true` 只入队。
 
+### 安全暂停工作流
+
+在 Monitor 中，运行中的 workflow 可选择“暂停本轮”；暂停请求由 Orchestrator 消费后将 workflow 置为 `HOLD`。已经运行的 Agent 不会被中断，其结果仍会保存，但不会派发下一步骤或继续自动重试。`HOLD` 状态可在 Monitor 选择“恢复流程”，按当前已保存的任务状态继续。
+
+Manager 也可在用户任何时点明确要求暂停或恢复后，通过受限的 `manager-control orchestrator-control` 动作提交同一控制请求；Manager 不得自行暂停，也不得承诺立即中断正在执行的 Agent。
+
 日期必须是有效的 `YYYY-MM-DD`，按 UTC 匹配 snapshot 创建日期。同一 `snapshot + Agent Session` 在 manual/task/daily 之间共享去重键。
 
 自动接口通过 `OPENCLAW_HR_AUTO_MODE` 控制：
