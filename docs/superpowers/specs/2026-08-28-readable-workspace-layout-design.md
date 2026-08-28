@@ -32,7 +32,8 @@ work/
     repo/
     input/
       task.json
-      context.json
+      context.md
+      context-manifest.json
       user-request.md
     output/
       result.json

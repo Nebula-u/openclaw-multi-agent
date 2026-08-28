@@ -1,5 +1,6 @@
 # ---- Runtime & artifacts (generated at install / run time) ----
 /runtime/
+/work/
 /artifacts/
 .stategraph/
 *.local.yaml

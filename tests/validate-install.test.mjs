@@ -446,6 +446,7 @@ exit /b 0
       assert.equal(manifest.schema_version, 2);
       assert.equal(manifest.project_root_abs, ROOT);
       assert.equal(manifest.artifact_access_control.applied, false);
+      assert.equal(manifest.artifact_access_control.path_abs, join(ROOT, 'work'));
       assert.ok(manifest.agents.every((agent) => agent.context_window_tokens === 200000));
       assert.ok(manifest.agents.every((agent) => agent.max_output_tokens === 32000));
       assert.ok(manifest.agents.every((agent) => agent.max_tokens_field === 'max_output_tokens'));
@@ -467,6 +468,8 @@ test(
     const root = mkdtempSync(join(tmpdir(), 'openclaw-install-apply-'));
     const bin = join(root, 'bin');
     const runtime = join(root, 'runtime');
+    const work = join(ROOT, 'work');
+    const workExisted = existsSync(work);
     const config = join(root, 'openclaw.json');
     const agents = join(root, 'agents.json');
     const calls = join(root, 'openclaw-calls.txt');
@@ -518,12 +521,16 @@ test(
       assert.equal(result.status, 0, result.stdout + result.stderr);
       assert.equal(existsSync(join(runtime, 'manager-control', 'manager-control-policy.json')), true);
       assert.equal(existsSync(join(runtime, 'control', 'runtime-bundle.json')), true);
+      assert.equal(existsSync(work), true);
+      assert.equal(existsSync(join(runtime, 'worktrees')), false);
+      assert.equal(existsSync(join(runtime, 'artifacts')), false);
       const callsText = readFileSync(calls, 'utf8');
       assert.match(callsText, /^approvals get --json$/mu);
       assert.match(callsText, /^approvals set --file /mu);
       assert.doesNotMatch(callsText, /^approvals (get|set) --gateway/mu);
     } finally {
       rmSync(root, { recursive: true, force: true });
+      if (!workExisted) rmSync(work, { recursive: true, force: true });
     }
   },
 );

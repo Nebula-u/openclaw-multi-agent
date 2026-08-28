@@ -123,6 +123,7 @@ assert_abs() {
 RUNTIME_ROOT_ABS="$(normpath "$RUNTIME_ROOT")"
 assert_abs "$PROJECT_ROOT" "PROJECT_ROOT"
 assert_abs "$RUNTIME_ROOT_ABS" "RUNTIME_ROOT"
+WORK_ROOT="$PROJECT_ROOT/work"
 
 MODE="DRYRUN"; [ "$APPLY" -eq 1 ] && MODE="APPLY"
 case "$(uname -s)" in
@@ -364,8 +365,6 @@ RUNTIME_DIRS=(
   "$RUNTIME_ROOT_ABS/control/config-snapshots"
   "$RUNTIME_ROOT_ABS/control/component-requests"
   "$RUNTIME_ROOT_ABS/control/component-builds"
-  "$RUNTIME_ROOT_ABS/worktrees"
-  "$RUNTIME_ROOT_ABS/artifacts"
 )
 for id in "${AGENT_IDS[@]}"; do
   RUNTIME_DIRS+=("${WS[$id]}" "${DIR[$id]}")
@@ -450,7 +449,7 @@ write_manifest() {
   "config_file": "$ecfg",
   "project_root_abs": "$epr",
   "runtime_root_abs": "$err",
-  "artifact_access_control": {"path_abs":"$(json_escape "$(native_path "$RUNTIME_ROOT_ABS/artifacts")")","applied":$([ "$APPLY" -eq 1 ] && printf true || printf false),"protected":$([ "$APPLY" -eq 1 ] && printf true || printf false),"mode":"$ARTIFACT_ACL_MODE"},
+  "artifact_access_control": {"path_abs":"$(json_escape "$(native_path "$WORK_ROOT")")","applied":$([ "$APPLY" -eq 1 ] && printf true || printf false),"protected":$([ "$APPLY" -eq 1 ] && printf true || printf false),"mode":"$ARTIFACT_ACL_MODE"},
   "config_backup": ${backup},
   "package_catalog_root_abs": "$(json_escape "$(native_path "$PROJECT_ROOT/agents/packages")")",
   "agents": [ $agents_json ]
@@ -495,8 +494,9 @@ fi
 
 # 7.1 创建 runtime 目录
 for d in "${RUNTIME_DIRS[@]}"; do mkdir -p "$d"; done
+mkdir -p "$WORK_ROOT"
 
-ARTIFACT_ROOT="$RUNTIME_ROOT_ABS/artifacts"
+ARTIFACT_ROOT="$WORK_ROOT"
 case "$(uname -s)" in
   MINGW*|MSYS*|CYGWIN*)
     command -v pwsh >/dev/null 2>&1 || { echo "Windows 上设置 artifact DACL 需要 pwsh" >&2; exit 1; }

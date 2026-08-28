@@ -15,7 +15,7 @@ Node Orchestrator ───── OpenClaw Agent Sessions
         │   runs / tasks / executions / artifacts
         │   approvals / notifications / hr_jobs / snapshots
         ├─ Git: worktree + commit + refs/openclaw/snapshots/*
-        └─ artifacts: runtime/artifacts/*
+        └─ task files: work/<project>-<task>/{repo,input,output,logs}
 
 Monitor ── SQLite facts + redacted Sessions
 ```
@@ -27,6 +27,7 @@ Monitor ── SQLite facts + redacted Sessions
 - Git 是代码版本、差异和回滚的唯一引擎；SQLite `snapshots` 只保存索引。
 - 没有事件哈希链、数据库 revision CAS 或 artifact 内容寻址副本。
 - 本版本从空 SQLite 开始，不迁移 PostgreSQL 或旧 StateGraph 历史数据。
+- 后续任务文件位于项目根的 `work/`，名称采用目标项目与任务摘要；已有 `runtime/artifacts/` 与 `runtime/worktrees/` 不会迁移或重命名。
 
 详细说明见 [架构](docs/architecture.md)、[Git 快照](docs/git-worktree-strategy.md)、[HR 审查](docs/hr-review.md) 和 [监控](docs/monitoring.md)。
 
@@ -300,7 +301,7 @@ Kernel 备份前先停止 Orchestrator，让数据库连接关闭并完成 WAL �
 runtime/control/kernel.db
 ```
 
-Git 快照内容位于目标项目自己的 `.git` object database 和 `refs/openclaw/snapshots/*`；只备份 SQLite 不能恢复代码。服务器备份必须同时覆盖目标 Git 仓库和 `runtime/artifacts/`。
+Git 快照内容位于目标项目自己的 `.git` object database 和 `refs/openclaw/snapshots/*`；只备份 SQLite 不能恢复代码。服务器备份必须同时覆盖目标 Git 仓库和 `work/`。
 
 不要把旧 PostgreSQL 数据导入新库。需要重新开始时，停止 Orchestrator，确认目标路径是 `runtime/control/kernel.db` 后，由运维人员备份或移走该文件，再重新执行 `npm run kernel:schema`。
 

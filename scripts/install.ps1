@@ -352,9 +352,10 @@ foreach ($p in $RegisteredPackages) {
 if ($conflicts.Count -gt 0) { throw "发现同名 Agent 冲突，不会覆盖用户 Agent：`n$($conflicts -join "`n")" }
 
 $RuntimeDirs = [System.Collections.Generic.List[string]]::new()
-foreach ($relative in @('control\v2','control\config-snapshots','control\component-requests','control\component-builds','worktrees','artifacts')) {
+foreach ($relative in @('control\v2','control\config-snapshots','control\component-requests','control\component-builds')) {
   $RuntimeDirs.Add((Join-Path $RuntimeRootAbs $relative))
 }
+$WorkRoot = Join-Path $ProjectRoot 'work'
 foreach ($p in $RegisteredPackages) {
   $RuntimeDirs.Add($p.workspace)
   $RuntimeDirs.Add($p.agentDir)
@@ -377,7 +378,7 @@ $Manifest = [ordered]@{
   project_root_abs = $ProjectRoot
   runtime_root_abs = $RuntimeRootAbs
   package_catalog_root_abs = (Join-Path $ProjectRoot 'agents\packages')
-  artifact_access_control = [ordered]@{ path_abs = (Join-Path $RuntimeRootAbs 'artifacts'); applied = $false; protected = $false; mode = if ($IsWindows) { 'protected-dacl' } else { '0700' } }
+  artifact_access_control = [ordered]@{ path_abs = $WorkRoot; applied = $false; protected = $false; mode = if ($IsWindows) { 'protected-dacl' } else { '0700' } }
   agents = @()
   config_backup = $null
   config_changes = @()
@@ -432,7 +433,8 @@ if (-not $Yes) {
 }
 
 foreach ($dir in $RuntimeDirs) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }
-$artifactAcl = Set-RawArtifactAccessControl -Path (Join-Path $RuntimeRootAbs 'artifacts')
+New-Item -ItemType Directory -Force -Path $WorkRoot | Out-Null
+$artifactAcl = Set-RawArtifactAccessControl -Path $WorkRoot
 $Manifest.artifact_access_control = [ordered]@{ path_abs = $artifactAcl.path_abs; applied = $true; protected = $artifactAcl.protected; platform = $artifactAcl.platform; mode = $artifactAcl.mode }
 $snapshotDir = Join-Path $RuntimeRootAbs 'control\config-snapshots'
 $backupPath = $null
