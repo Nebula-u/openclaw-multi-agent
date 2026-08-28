@@ -37,6 +37,20 @@ test('TEST task messages reject a dispatch that has no prepared sandbox staging'
   }), (error) => error.code === 'TEST_SANDBOX_STAGING_REQUIRED');
 });
 
+test('unsandboxed TEST task messages require a null sandbox attestation', () => {
+  const message = service.taskMessage({
+    kind: 'TEST', testSandboxEnabled: false,
+    workflowId: 'WF-local', taskId: 'TASK-local', runId: 'RUN-local', stepId: 'test', agentId: 'test-agent', attempt: 1,
+    worktreePathAbs: 'F:/runtime/worktrees/task/repo', artifactRootAbs: 'F:/runtime/artifacts/task',
+    contextManifestPathAbs: 'F:/runtime/artifacts/task/input/context-manifest.json', contextManifestSha256: 'a'.repeat(64),
+    rawOutputPath: 'F:/runtime/artifacts/task/.agent-raw/result.json.raw',
+  });
+
+  assert.match(message, /"isolation_mode": "UNSANDBOXED_LOCAL"/u);
+  assert.match(message, /"sandbox_attestation": null/u);
+  assert.match(message, /must not be omitted or replaced with an object/u);
+});
+
 test('HR launch can explicitly disable its own thinking output', () => {
   const args = buildOpenClawAgentArgs({ agentId: 'hr-agent', sessionId: 'hr-one', messagePath: 'F:/message.md', thinking: 'off' });
   assert.deepEqual(args.slice(args.indexOf('--thinking'), args.indexOf('--thinking') + 2), ['--thinking', 'off']);

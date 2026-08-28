@@ -50,7 +50,10 @@ export function taskMessage(task) {
   const executionFields = staging
     ? `- execution_worktree_path_abs: ${executionWorktree}\n- execution_context_manifest_path_abs: ${executionManifest}\n`
     : `- worktree_path_abs: ${executionWorktree}\n- context_manifest_path_abs: ${executionManifest}\n`;
-  return `# Orchestrator task\n\n- workflow_id: ${task.workflowId}\n- task_id: ${task.taskId}\n- run_id: ${task.runId}\n- step_id: ${task.stepId}\n- assigned_agent: ${task.agentId}\n- attempt: ${task.attempt}\n${executionFields}- context_manifest_sha256: ${task.contextManifestSha256}\n\nComplete only this assigned step. Read the immutable context manifest. Do not communicate with other Agents, alter route or approval records, write to the Control Kernel, or call Monitor controls. ${staging ? 'Use only execution_* paths for file and command access; copy result_identity values from the execution manifest verbatim into the result object.' : ''} Write exactly one result.schema.json object only to:\n\n${executionOutput}\n\nThe Orchestrator will validate and publish it. Do not write final outputs directly.\n`;
+  const isolationRequirement = task.kind === 'TEST' && !sandboxRequired
+    ? ' This is an unsandboxed local TEST task. The result must contain exactly `"isolation_mode": "UNSANDBOXED_LOCAL"` and `"sandbox_attestation": null`; `sandbox_attestation` must not be omitted or replaced with an object.'
+    : '';
+  return `# Orchestrator task\n\n- workflow_id: ${task.workflowId}\n- task_id: ${task.taskId}\n- run_id: ${task.runId}\n- step_id: ${task.stepId}\n- assigned_agent: ${task.agentId}\n- attempt: ${task.attempt}\n${executionFields}- context_manifest_sha256: ${task.contextManifestSha256}\n\nComplete only this assigned step. Read the immutable context manifest. Do not communicate with other Agents, alter route or approval records, write to the Control Kernel, or call Monitor controls. ${staging ? 'Use only execution_* paths for file and command access; copy result_identity values from the execution manifest verbatim into the result object.' : ''}${isolationRequirement} Write exactly one result.schema.json object only to:\n\n${executionOutput}\n\nThe Orchestrator will validate and publish it. Do not write final outputs directly.\n`;
 }
 
 function stagingPreparationBlockedResult(task, error, occurredAt) {
