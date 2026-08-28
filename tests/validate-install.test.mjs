@@ -61,6 +61,11 @@ test('installers replace the complete Manager exec allowlist with the fixed cont
   const powershell = readFileSync(join(ROOT, 'scripts', 'install.ps1'), 'utf8');
   const bash = readFileSync(join(ROOT, 'scripts', 'install.sh'), 'utf8');
   assert.match(powershell, /'approvals','get','--json'/u);
+  assert.match(powershell, /function Get-OpenClawJsonWithRetry/u);
+  assert.match(
+    powershell,
+    /Get-OpenClawJsonWithRetry -OcArgs @\('approvals','get','--json'\) -Description 'Manager exec approvals'/u,
+  );
   assert.doesNotMatch(powershell, /'approvals','get','--gateway','--json'/u);
   assert.match(powershell, /autoAllowSkills = \$false/u);
   assert.match(bash, /approvals get --json/u);

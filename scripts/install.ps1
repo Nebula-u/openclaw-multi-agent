@@ -52,6 +52,32 @@ function Invoke-OpenClawMutation {
   }
 }
 
+function Get-OpenClawJsonWithRetry {
+  param(
+    [Parameter(Mandatory)][string[]]$OcArgs,
+    [Parameter(Mandatory)][string]$Description,
+    [int]$MaxAttempts = 6
+  )
+  $lastDiagnostic = ''
+  for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
+    $result = Invoke-OpenClaw $OcArgs
+    if ($result.ExitCode -eq 0) {
+      try {
+        return ConvertFrom-OpenClawJsonOutput -Output $result.Output -Description $Description
+      } catch {
+        $lastDiagnostic = $_.Exception.Message
+      }
+    } else {
+      $lastDiagnostic = $result.Output
+    }
+    if ($attempt -lt $MaxAttempts) {
+      Write-Host "$Description 暂未返回完整 JSON，正在重读 ($attempt/$MaxAttempts)..." -ForegroundColor Yellow
+      Start-Sleep -Milliseconds (350 * $attempt)
+    }
+  }
+  throw "$Description 连续 $MaxAttempts 次未返回可验证 JSON：$lastDiagnostic"
+}
+
 function Get-OpenClawJsonListWithRetry {
   param(
     [Parameter(Mandatory)][string[]]$OcArgs,
@@ -530,9 +556,7 @@ try {
   $managerEntrypoint = Join-Path $RuntimeRootAbs $(if ($IsWindows) { 'manager-control\manager-control.cmd' } else { 'manager-control/manager-control' })
   if (-not $IsWindows) { & chmod 755 $managerEntrypoint }
   if (-not (Test-Path -LiteralPath $managerEntrypoint -PathType Leaf)) { throw "缺少 Manager 受控执行入口：$managerEntrypoint" }
-  $approvalSnapshot = Invoke-OpenClaw @('approvals','get','--json')
-  if ($approvalSnapshot.ExitCode -ne 0) { throw "读取 Manager exec approvals 失败：$($approvalSnapshot.Output)" }
-  $approvalFile = (ConvertFrom-OpenClawJsonOutput -Output $approvalSnapshot.Output -Description 'Manager exec approvals').file
+  $approvalFile = (Get-OpenClawJsonWithRetry -OcArgs @('approvals','get','--json') -Description 'Manager exec approvals').file
   if (-not $approvalFile) { throw 'Manager exec approvals 返回中缺少 approvals 文件。' }
   if (-not ($approvalFile.PSObject.Properties.Name -contains 'agents') -or -not $approvalFile.agents) {
     $approvalFile | Add-Member -NotePropertyName agents -NotePropertyValue ([pscustomobject]@{}) -Force
