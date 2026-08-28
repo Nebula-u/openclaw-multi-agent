@@ -102,7 +102,7 @@ export function archiveJsonRegeneration({ task, error, regeneration, sessionId, 
       artifact_root_abs: task.artifactRootAbs,
       input_commit: task.inputCommit,
       output_commit: task.inputCommit,
-      isolation_mode: task.kind === 'TEST' ? 'SANDBOXED_DOCKER' : 'UNSANDBOXED_LOCAL',
+      isolation_mode: task.kind === 'TEST' && task.testSandboxEnabled !== false ? 'SANDBOXED_DOCKER' : 'UNSANDBOXED_LOCAL',
       artifact_manifest_hash: task.contextManifestSha256,
     },
   });

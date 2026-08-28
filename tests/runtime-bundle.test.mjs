@@ -128,7 +128,7 @@ test('Manager workspace requires quote-safe manager-control arguments', () => {
   assert.doesNotMatch(workspace, /--project-json/u);
   assert.doesNotMatch(workspace, /--authorization-json/u);
 });
-test('bundled test-agent instructions use only the staged Docker execution paths', () => {
+test('bundled test-agent instructions distinguish staged Docker and assigned local execution paths', () => {
   
   const runtime = mkdtempSync(join(tmpdir(), 'runtime-bundle-test-agent-'));
   try {
@@ -153,6 +153,8 @@ test('bundled test-agent instructions use only the staged Docker execution paths
     assert.match(testAgents, /\/workspace\/\.task-sandbox\/input/u);
     assert.match(testAgents, /\/workspace\/\.task-sandbox\/output/u);
     assert.match(testAgents, /\/workspace\/\.task-sandbox\/raw-logs/u);
+    assert.match(testAgents, /worktree_path_abs/u);
+    assert.match(testAgents, /UNSANDBOXED_LOCAL/u);
     for (const instructions of [testAgents, testTools]) {
       assert.doesNotMatch(instructions, /(?:^|[\s`"'])\/(?:worktree|input|agent-raw|raw-logs)(?:\/|`|\b)/u);
     }

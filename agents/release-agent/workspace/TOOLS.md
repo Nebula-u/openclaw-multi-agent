@@ -33,4 +33,4 @@
 - **不执行破坏性命令**（`git reset --hard`、`git clean -fdx`、递归删除等）。
 - **不修改**全局 Git 配置、OpenClaw 配置、其他 Agent 的 workspace/agentDir、其他任务 input、历史 run 目录。
 - **不执行本项目新建的任何 Python 编排脚本**（本系统无 Python 控制平面）；校验和用原生工具计算。
-- TEST 必须具备宿主校验的 `SANDBOXED_DOCKER` attestation。关键构建/测试/安全证据无法验证或 attestation 缺失 → 不 GO。
+- TEST 必须与该 run 的 `isolation_mode` 一致：`SANDBOXED_DOCKER` 必须具备宿主校验 attestation；`UNSANDBOXED_LOCAL` 必须明确披露本地执行限制，且不得因不存在 Docker attestation 自动拒绝。关键构建/测试/安全证据无法验证 → 不 GO。

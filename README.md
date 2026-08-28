@@ -37,11 +37,11 @@ Monitor ── SQLite facts + redacted Sessions
 - 已安装并可运行的 OpenClaw。
 - Windows PowerShell 7，或 Linux Bash。
 
-不需要 PostgreSQL、Redis、Docker 数据库容器或额外 SQLite npm 包。`TEST` 任务例外：它必须部署在原生 Linux 服务器或 WSL2 Linux 发行版上，并使用可由 OpenClaw 访问的 Linux Docker Engine。Windows 仍可用于安装、管理和非 TEST 工作流，但原生 Windows 上的 TEST staging 会明确 fail closed，不会退回宿主执行。原因是 Docker Desktop 的单一可写 workspace bind 无法可靠强制 `.task-sandbox/input` 不可写；在 OpenClaw 提供 per-run 只读 submount 前，不支持 Windows TEST 执行。
+不需要 PostgreSQL、Redis、Docker 数据库容器或额外 SQLite npm 包。`TEST` Docker sandbox 默认开启（`OPENCLAW_TEST_SANDBOX_ENABLED=true`），此模式必须部署在原生 Linux 服务器或 WSL2 Linux 发行版上，并使用可由 OpenClaw 访问的 Linux Docker Engine；Docker Desktop 的单一可写 workspace bind 无法可靠提供 per-run 只读 submount。Windows 上若 Docker sandbox 无法使用，可在 `.env` 设置 `OPENCLAW_TEST_SANDBOX_ENABLED=false`；TEST 会改在分配的本地 worktree 执行并明确记录 `UNSANDBOXED_LOCAL`，不再要求 Docker staging 或 attestation。此本地模式隔离较弱，仍禁止联网、安装依赖、访问凭证、启动服务及系统配置修改。
 
 ### 为 TEST 准备 WSL2 Linux 沙箱（Windows 主机）
 
-`TEST_SANDBOX_NATIVE_LINUX_REQUIRED` 不是 Agent 输出错误；它表示 Orchestrator 仍运行在 Windows（`process.platform=win32`）。不要继续重试同一任务。以下命令把 **Orchestrator、OpenClaw 和项目目录** 迁移到 WSL2 Linux 环境；仅在 Windows 上启动 Docker Desktop 或只把 test-agent 配成 Docker 都不能满足要求。
+`TEST_SANDBOX_NATIVE_LINUX_REQUIRED` 只会在 `OPENCLAW_TEST_SANDBOX_ENABLED=true` 时出现；它表示 Orchestrator 仍运行在 Windows（`process.platform=win32`）。可选择按以下命令迁移到 WSL2 Linux，或在 Windows 的 `.env` 设置 `OPENCLAW_TEST_SANDBOX_ENABLED=false` 后重新安装 Agent，以本地模式运行 TEST。
 
 1. 在**管理员 PowerShell**安装 WSL2 Ubuntu；若系统提示，重启 Windows 后再继续：
 
@@ -116,9 +116,9 @@ npm run orchestrator:start
 docker build --tag openclaw-test-node:22-slim --file deploy/sandbox/Dockerfile.test-node .
 ```
 
-镜像构建可联网下载基础镜像和系统包；实际 TEST 容器始终使用 `network: none`。若 Docker daemon、镜像或 OpenClaw sandbox workspace 不可用，TEST 必须 fail closed，不会退回宿主执行。
+镜像构建可联网下载基础镜像和系统包；实际 TEST 容器始终使用 `network: none`。当 sandbox 开启时，Docker daemon、镜像或 OpenClaw sandbox workspace 不可用会使 TEST fail closed；设置 `OPENCLAW_TEST_SANDBOX_ENABLED=false` 后则改走受限的本地 worktree 模式。
 
-TEST staging 是全局强制串行的：同一时刻只允许一个 TEST 任务使用 test-agent 的 `.task-sandbox` workspace。后续 TEST 必须等待当前任务清理完成，不能并行执行或复用前一任务目录。
+Docker 模式的 TEST staging 是全局强制串行的：同一时刻只允许一个 TEST 任务使用 test-agent 的 `.task-sandbox` workspace。未启用 Docker sandbox 时不创建该 staging workspace。
 
 ## 首次安装
 

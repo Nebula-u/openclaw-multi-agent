@@ -23,6 +23,15 @@ done
 SCRIPT_DIR="$(cd -P "$(dirname "$SOURCE")" >/dev/null 2>&1 && pwd -P)"
 PROJECT_ROOT="$(cd -P "$SCRIPT_DIR/.." >/dev/null 2>&1 && pwd -P)"
 
+if [ -z "${OPENCLAW_TEST_SANDBOX_ENABLED+x}" ] && [ -f "$PROJECT_ROOT/.env" ]; then
+  OPENCLAW_TEST_SANDBOX_ENABLED="$(sed -n 's/^[[:space:]]*OPENCLAW_TEST_SANDBOX_ENABLED[[:space:]]*=[[:space:]]*//p' "$PROJECT_ROOT/.env" | head -n 1 | tr -d '\r' | tr -d '\"')"
+fi
+case "$(printf '%s' "${OPENCLAW_TEST_SANDBOX_ENABLED:-true}" | tr '[:upper:]' '[:lower:]')" in
+  true|1|yes|on) TEST_SANDBOX_ENABLED=1 ;;
+  false|0|no|off) TEST_SANDBOX_ENABLED=0 ;;
+  *) TEST_SANDBOX_ENABLED=1 ;;
+esac
+
 native_path() {
   if command -v cygpath >/dev/null 2>&1; then cygpath -w "$1"; else printf '%s' "$1"; fi
 }
@@ -51,6 +60,11 @@ check_installed_test_agent_sandbox() {
     check "已安装 test-agent sandbox 工作目录为任务暂存 repo" FAIL "test-agent sandbox 不存在或重复"
     check "已安装 test-agent sandbox 不含外部 bind 挂载" FAIL "test-agent sandbox 不存在或重复"
     check "已安装 test-agent sandbox Docker 加固" FAIL "test-agent sandbox 不存在或重复"
+    return
+  fi
+
+  if [ "$TEST_SANDBOX_ENABLED" -eq 0 ]; then
+    [ "$(printf '%s' "$sandbox" | jq -r '.mode // ""')" = off ] && check "已安装 test-agent sandbox 已禁用" PASS || check "已安装 test-agent sandbox 已禁用" FAIL
     return
   fi
 

@@ -64,6 +64,14 @@ function Test-ProjectEnvironmentKey {
   return (($null -ne $processValue -and $processValue -ne '') -or ($DotEnv.ContainsKey($Name) -and [string]$DotEnv[$Name] -ne ''))
 }
 
+function Get-TestSandboxEnabled {
+  param([Parameter(Mandatory)][hashtable]$DotEnv)
+  $value = (Get-ProjectEnvironmentValue -DotEnv $DotEnv -Name 'OPENCLAW_TEST_SANDBOX_ENABLED' -Default 'true').Trim().ToLowerInvariant()
+  if ($value -in @('true','1','yes','on')) { return $true }
+  if ($value -in @('false','0','no','off')) { return $false }
+  throw 'OPENCLAW_TEST_SANDBOX_ENABLED 必须为 true 或 false。'
+}
+
 function Set-DirectoryDaclOnly {
   param(
     [Parameter(Mandatory)][string]$Path,
@@ -211,6 +219,7 @@ function Get-AgentPackages {
 
   $modelOverrides = $null
   $dotEnv = Read-DotEnv -ProjectRoot $projectAbs
+  $testSandboxEnabled = Get-TestSandboxEnabled -DotEnv $dotEnv
   if ($ModelConfig) {
     $modelPath = if ([System.IO.Path]::IsPathRooted($ModelConfig)) {
       Get-NormalizedPath $ModelConfig
@@ -311,6 +320,11 @@ function Get-AgentPackages {
     if ($m.PSObject.Properties.Name -contains 'sandbox_mode' -and $null -ne $m.sandbox_mode) { $sandbox = [string]$m.sandbox_mode }
     $sandboxConfig = if ($m.PSObject.Properties.Name -contains 'sandbox_config') { $m.sandbox_config } else { $null }
     $toolsConfig = if ($m.PSObject.Properties.Name -contains 'tools_config') { $m.tools_config } else { $null }
+    if ($id -eq 'test-agent' -and -not $testSandboxEnabled) {
+      $sandbox = 'off'
+      $sandboxConfig = [ordered]@{ mode = 'off' }
+      $toolsConfig = [ordered]@{ exec = [ordered]@{ host = 'gateway' }; elevated = [ordered]@{ enabled = $false } }
+    }
     $skills = @()
     if ($m.PSObject.Properties.Name -contains 'skills') { $skills = @($m.skills | ForEach-Object { [string]$_ }) }
 

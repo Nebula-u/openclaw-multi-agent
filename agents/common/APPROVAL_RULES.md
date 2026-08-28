@@ -18,7 +18,7 @@
 9. 需要改变已批准的需求或架构。
 10. 第三方代码 / 许可证 / 版权来源不明确。
 11. 严重安全问题需要风险接受。
-12. 失败测试、UNKNOWN 安全结果或 Docker sandbox attestation 不完整。
+12. 失败测试、UNKNOWN 安全结果，或在 Docker 模式下 sandbox attestation 不完整。
 13. release-agent 给出 `HOLD`，用户希望继续。
 14. 超过最大重做次数（默认 3）。
 15. 任何破坏性、不可逆或可能影响其他项目的操作。

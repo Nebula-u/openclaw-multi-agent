@@ -22,7 +22,7 @@ function testRoute(workflowId) {
   };
 }
 
-async function createTestWorkflow(t, { runner, testSandboxStager, snapshots = null }) {
+async function createTestWorkflow(t, { runner, testSandboxStager, snapshots = null, testSandboxEnabled = true }) {
   const workflowId = `WF-TestSandbox-${Date.now()}-${Math.random().toString(16).slice(2)}`;
   const runtimeRoot = join(ROOT, 'runtime', 'test-sandbox-workflows', workflowId);
   const database = openKernelDatabase({ databasePath: ':memory:' });
@@ -31,7 +31,7 @@ async function createTestWorkflow(t, { runner, testSandboxStager, snapshots = nu
     rmSync(runtimeRoot, { recursive: true, force: true });
   });
   const orchestrator = createOrchestrator({
-    projectRoot: ROOT, runtimeRoot, database, runner, testSandboxStager,
+    projectRoot: ROOT, runtimeRoot, database, runner, testSandboxStager, testSandboxEnabled,
     worktrees: {
       inspectTarget(targetProjectRootAbs) { return { targetProjectRootAbs, headCommit: '1'.repeat(40) }; },
       prepare() { return { worktreePathAbs: ROOT, inputCommit: '1'.repeat(40) }; },
@@ -60,6 +60,45 @@ function blockedTestResult(task, { inputCommit = task.inputCommit } = {}) {
     self_validation: { preflight_passed: false, checks: [] }, artifact_manifest_hash: task.contextManifestSha256,
   };
 }
+
+test('disabled TEST sandbox dispatches the assigned local worktree without staging or attestation', async (t) => {
+  const calls = { prepare: 0, collect: 0, cleanup: 0, runner: 0 };
+  const { workflowId, orchestrator } = await createTestWorkflow(t, {
+    testSandboxEnabled: false,
+    testSandboxStager: {
+      prepare() { calls.prepare += 1; throw new Error('sandbox must not be prepared when disabled'); },
+      collect() { calls.collect += 1; },
+      cleanup() { calls.cleanup += 1; },
+    },
+    runner: async ({ messagePath }) => {
+      calls.runner += 1;
+      const message = readFileSync(messagePath, 'utf8');
+      assert.equal(field(message, 'worktree_path_abs'), ROOT);
+      assert.equal(field(message, 'context_manifest_path_abs')?.endsWith('context-manifest.json'), true);
+      assert.doesNotMatch(message, /execution_worktree_path_abs|\.task-sandbox|result_identity/u);
+      const rawOutputPath = message.match(/Write exactly one result\.schema\.json object only to:\r?\n\r?\n([^\r\n]+)/u)?.[1];
+      assert.ok(rawOutputPath);
+      mkdirSync(dirname(rawOutputPath), { recursive: true });
+      writeFileSync(rawOutputPath, `${JSON.stringify({
+        ...blockedTestResult({
+          workflowId: field(message, 'workflow_id'), taskId: field(message, 'task_id'), runId: field(message, 'run_id'), agentId: field(message, 'assigned_agent'),
+          attempt: Number(field(message, 'attempt')), worktreePathAbs: field(message, 'worktree_path_abs'), artifactRootAbs: dirname(dirname(rawOutputPath)),
+          inputCommit: '1'.repeat(40), contextManifestSha256: field(message, 'context_manifest_sha256'),
+        }),
+        isolation_mode: 'UNSANDBOXED_LOCAL', sandbox_attestation: null,
+      })}\n`);
+      return { exitCode: 0, stdout: '', stderr: '' };
+    },
+  });
+
+  const result = await orchestrator.tick(workflowId);
+  const run = await orchestrator.repository.getRun(workflowId);
+  const [task] = await orchestrator.repository.listTasks({ runId: run.runId });
+  assert.equal(result.state, 'FAILED');
+  assert.deepEqual(calls, { prepare: 0, collect: 0, cleanup: 0, runner: 1 });
+  assert.equal(task.payload.result.isolation_mode, 'UNSANDBOXED_LOCAL');
+  assert.equal(task.payload.result.sandbox_attestation, null);
+});
 
 function hostSandboxAttestation(task) {
   const receiptPathAbs = join(task.artifactRootAbs, '.orchestrator', 'test-sandbox-attestation.receipt.json');

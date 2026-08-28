@@ -37,7 +37,8 @@ function approvalRequest(task, result = null, step = null) {
 
 export function taskMessage(task) {
   const staging = task.testSandbox ?? null;
-  if (task.kind === 'TEST' && (!staging?.containerWorktreeAbs || !staging?.containerContextManifestPathAbs || !staging?.containerRawOutputPath)) {
+  const sandboxRequired = task.kind === 'TEST' && task.testSandboxEnabled !== false;
+  if (sandboxRequired && (!staging?.containerWorktreeAbs || !staging?.containerContextManifestPathAbs || !staging?.containerRawOutputPath)) {
     throw Object.assign(new Error('TEST task dispatch requires prepared container staging paths'), {
       code: 'TEST_SANDBOX_STAGING_REQUIRED',
       details: { task_id: task.taskId, attempt: task.attempt },
@@ -133,11 +134,12 @@ export function openClawAgentExitError(result) {
 }
 
 export function createOrchestrator({ projectRoot: projectRootInput, database = null, kernel = null, repository = null, worktrees = null, snapshots = null,
-  runtimeRoot: runtimeRootInput = null, projectControl = null, runner = runOpenClawAgent, notificationRunner = runOpenClawAgent, testSandboxStager = null, hr = null, clock = () => new Date(), maxAttempts = 3, timeoutSeconds = 900, signal = null } = {}) {
+  runtimeRoot: runtimeRootInput = null, projectControl = null, runner = runOpenClawAgent, notificationRunner = runOpenClawAgent, testSandboxStager = null, testSandboxEnabled: testSandboxEnabledInput = null, hr = null, clock = () => new Date(), maxAttempts = 3, timeoutSeconds = 900, signal = null } = {}) {
   const projectRoot = resolve(projectRootInput ?? process.cwd());
   const runtimeRoot = resolve(runtimeRootInput ?? process.env.OPENCLAW_RUNTIME_ROOT ?? join(projectRoot, 'runtime'));
   const ownedDatabase = !database && !kernel && !repository;
   const config = resolveKernelConfig({ projectRoot, runtimeRoot });
+  const testSandboxEnabled = testSandboxEnabledInput ?? config.testSandboxEnabled;
   const selectedDatabase = database ?? kernel?.database ?? (repository ? null : openKernelDatabase(config));
   const selectedKernel = kernel ?? createKernel({ database: selectedDatabase, workerId: config.workerId, leaseSeconds: config.leaseSeconds, clock });
   const selectedRepository = repository ?? createWorkflowRepository({ database: selectedDatabase, clock });
@@ -320,7 +322,8 @@ export function createOrchestrator({ projectRoot: projectRootInput, database = n
     let taskSnapshot = null;
     try {
       let executionOutcome = null;
-      if (task.kind === 'TEST') {
+      task.testSandboxEnabled = testSandboxEnabled;
+      if (task.kind === 'TEST' && testSandboxEnabled) {
         try {
           testSandbox = await selectedTestSandboxStager.prepare(task);
           task.testSandbox = testSandbox;
@@ -363,7 +366,7 @@ export function createOrchestrator({ projectRoot: projectRootInput, database = n
               atomicWriteFile(task.rawOutputPath, `${extractFinalAssistantText(result.stdout).trim()}\n`);
             }
             try {
-              return { result, ingested: ingestTaskOutput({ projectRoot, task, occurredAt: now(clock), sandboxContext: testSandbox ? {
+              return { result, ingested: ingestTaskOutput({ projectRoot, task, occurredAt: now(clock), testSandboxEnabled, sandboxContext: testSandbox ? {
                 attestation: testSandbox.attestation, referencePathMappings: testSandboxCollection?.referencePathMappings ?? [],
               } : null }) };
             } catch (error) {

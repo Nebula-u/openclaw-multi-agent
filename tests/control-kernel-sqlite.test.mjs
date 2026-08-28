@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -70,6 +70,11 @@ test('SQLite kernel config defaults below runtime/control and has no PostgreSQL 
   const config = resolveKernelConfig({ projectRoot });
   assert.equal(config.databasePath, join(projectRoot, 'runtime', 'control', 'kernel.db'));
   assert.equal(config.busyTimeoutMs, 5000);
+  assert.equal(config.testSandboxEnabled, true);
+  writeFileSync(join(projectRoot, '.env'), 'OPENCLAW_TEST_SANDBOX_ENABLED=false\n');
+  assert.equal(resolveKernelConfig({ projectRoot }).testSandboxEnabled, false);
+  assert.throws(() => resolveKernelConfig({ projectRoot, testSandboxEnabled: 'sometimes' }),
+    (error) => error.code === 'ENVIRONMENT_BOOLEAN_INVALID');
   assert.equal('url' in config, false);
   assert.equal('kernelSchema' in config, false);
   assert.equal(resolveKernelConfig({ projectRoot, databasePath: 'custom/kernel.db' }).databasePath,

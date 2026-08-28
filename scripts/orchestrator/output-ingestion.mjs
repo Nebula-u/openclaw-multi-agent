@@ -75,8 +75,14 @@ function mappedReferences(value, mappings = []) {
   return mapped;
 }
 
-function attachHostSandboxAttestation(task, value, sandboxContext, testSandboxPreparationFailure) {
+function attachHostSandboxAttestation(task, value, sandboxContext, testSandboxPreparationFailure, testSandboxEnabled) {
   if (task.agentId !== 'test-agent') return value;
+  if (!testSandboxEnabled) {
+    if (sandboxContext || value.isolation_mode !== 'UNSANDBOXED_LOCAL' || value.sandbox_attestation != null) {
+      throw new OutputBoundaryError('TEST_SANDBOX_ISOLATION_MISMATCH', 'TEST output must report UNSANDBOXED_LOCAL when the sandbox is disabled');
+    }
+    return value;
+  }
   if (testSandboxPreparationFailure) {
     if (sandboxContext || value.isolation_mode !== 'UNSANDBOXED_LOCAL' || value.role !== 'orchestrator'
       || value.result_status !== 'BLOCKED' || value.self_validation?.preflight_passed !== false) {
@@ -121,7 +127,7 @@ function attachHostSandboxAttestation(task, value, sandboxContext, testSandboxPr
   };
 }
 
-export function ingestTaskOutput({ projectRoot, task, occurredAt = new Date().toISOString(), sandboxContext = null, testSandboxPreparationFailure = false }) {
+export function ingestTaskOutput({ projectRoot, task, occurredAt = new Date().toISOString(), sandboxContext = null, testSandboxPreparationFailure = false, testSandboxEnabled = true }) {
   const rawPath = rawOutputPath(task); const rawResult = readRegularFileNoFollow(rawPath);
   if (!rawResult.available) throw new OutputBoundaryError('AGENT_OUTPUT_MISSING', `required file must be a single-link regular file: ${rawPath}`);
   const raw = rawResult.text;
@@ -130,7 +136,7 @@ export function ingestTaskOutput({ projectRoot, task, occurredAt = new Date().to
   catch (error) { throw new OutputBoundaryError('AGENT_OUTPUT_JSON_INVALID', error.message, { diagnostic: error.diagnostic ?? 'JSON_PARSE_ERROR' }); }
   validateResult(projectRoot, ingestion.value);
   const mapped = mappedReferences(ingestion.value, sandboxContext?.referencePathMappings);
-  const value = attachHostSandboxAttestation(task, mapped, sandboxContext, testSandboxPreparationFailure);
+  const value = attachHostSandboxAttestation(task, mapped, sandboxContext, testSandboxPreparationFailure, testSandboxEnabled);
   assertIdentity(task, value);
   const boundaryTransformations = [];
   if (JSON.stringify(mapped) !== JSON.stringify(ingestion.value)) boundaryTransformations.push('container_references_mapped');

@@ -45,10 +45,10 @@ Manager 不使用 `sessions_spawn` 或 `sessions_send` 派发 Worker。即使 Op
 
 ## Sandbox
 
-当前只有 test-agent 显式配置 `sandbox.mode=all` 和 Docker backend。Manager 使用无沙箱 gateway exec，但该能力受 OpenClaw per-Agent allowlist 和受安装器校验的 `manager-control` 入口双重约束：
+`OPENCLAW_TEST_SANDBOX_ENABLED` 默认开启；开启时只有 test-agent 显式配置 `sandbox.mode=all` 和 Docker backend，关闭时安装器为它写入 `sandbox.mode=off` 与 gateway exec。Manager 使用无沙箱 gateway exec，但该能力受 OpenClaw per-Agent allowlist 和受安装器校验的 `manager-control` 入口双重约束：
 
 - Manager：只允许该固定入口执行受控项目初始化、Git 初始化、已批准远程 clone/fetch 与本地 Git 生命周期；入口只从其安装路径解析 runtime，不接受调用方传入的项目目录。安装器完整替换 Manager 的审批项为这一条精确入口，禁止 raw shell、解释器、push 和破坏性 Git 操作；`project_ref` 与创建它的 workflow 强绑定。
-- test-agent：`workspaceAccess=none`、`exec.host=sandbox`、network none、只读 rootfs、drop ALL capabilities、资源限制。
+- test-agent：Docker 模式使用 `workspaceAccess=rw`、`exec.host=sandbox`、network none、只读 rootfs、drop ALL capabilities、资源限制；本地模式只允许在分配的 worktree 中执行，并报告 `UNSANDBOXED_LOCAL`。
 
 Docker 镜像由部署环境预先提供。安装器不会自动安装 Docker，但配置和验证不会把缺失的 sandbox 描述为安全隔离已成立。
 

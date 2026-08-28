@@ -24,7 +24,7 @@
 
 ## 与 test-agent 特别相关的规则
 
-- `SECURITY_RULES.md` 第 6 节与 `EVIDENCE_RULES.md` 第 5 节是核心约束：`isolation_mode = SANDBOXED_DOCKER`，每次执行必须记录并核对 container/image/mount/network/rootfs/capability/resource attestation，禁止回退到宿主执行。
+- `SECURITY_RULES.md` 第 6 节与 `EVIDENCE_RULES.md` 第 5 节是核心约束：由 `OPENCLAW_TEST_SANDBOX_ENABLED` 和任务路径决定隔离模式。Docker 模式必须记录并核对 attestation；本地模式必须诚实记录 `UNSANDBOXED_LOCAL`，不得伪称容器隔离。
 - 命令来源限制（用户配置 / 项目自身构建配置 / 已批准测试策略）与"重试保留第一次失败、标记潜在 flaky"是硬性要求。
 
 ## 说明

@@ -75,6 +75,13 @@ if [ -f "$PROJECT_ROOT/.env" ]; then
   done < "$PROJECT_ROOT/.env"
 fi
 
+TEST_SANDBOX_ENABLED_RAW="${OPENCLAW_TEST_SANDBOX_ENABLED:-true}"
+case "$(printf '%s' "$TEST_SANDBOX_ENABLED_RAW" | tr '[:upper:]' '[:lower:]')" in
+  true|1|yes|on) TEST_SANDBOX_ENABLED=1 ;;
+  false|0|no|off) TEST_SANDBOX_ENABLED=0 ;;
+  *) echo 'OPENCLAW_TEST_SANDBOX_ENABLED 必须为 true 或 false。' >&2; exit 2 ;;
+esac
+
 # 规范化可能不存在的路径（不依赖 realpath -m，保证 macOS 兼容）
 normpath() {
   local path="$1" abs seg res="" IFS='/'
@@ -217,6 +224,9 @@ for mf in "${PACKAGE_MANIFESTS[@]}"; do
   MODEL[$id]="$(jq_clean -r '.model // ""' "$mf_jq")"; ROLE[$id]="$role"; ORIGIN[$id]="$origin"; PROTECTED[$id]="$protected"
   REGISTER[$id]="$register"; ACTIVE[$id]="$active"; CALLABLE[$id]="$(jq_clean -r '.delegation.callable_by_manager' "$mf_jq")"
   ALLOW_JSON[$id]="$(jq_clean -c '.delegation.allow_agents // []' "$mf_jq")"; SANDBOX[$id]="$(jq_clean -r '.sandbox_mode // ""' "$mf_jq")"; SANDBOX_JSON[$id]="$(jq_clean -c '.sandbox_config // null' "$mf_jq")"; TOOLS_JSON[$id]="$(jq_clean -c '.tools_config // null' "$mf_jq")"
+  if [ "$id" = 'test-agent' ] && [ "$TEST_SANDBOX_ENABLED" -eq 0 ]; then
+    SANDBOX[$id]='off'; SANDBOX_JSON[$id]='{"mode":"off"}'; TOOLS_JSON[$id]='{"exec":{"host":"gateway"},"elevated":{"enabled":false}}'
+  fi
   INCLUDE_COMMON[$id]="$(jq_clean -r '.assembly.include_common_rules' "$mf_jq")"; INCLUDE_TEMPLATES[$id]="$(jq_clean -r '.assembly.include_templates' "$mf_jq")"
   if [ "$register" = "true" ]; then AGENT_IDS+=("$id"); fi
 done

@@ -35,11 +35,11 @@
 - 按进程名或通配条件批量终止进程（如终止全部 `node` 进程）属于破坏性操作；Agent 必须返回 `HUMAN_DECISION_REQUIRED`，不得执行。
 - 默认选择非破坏性替代方案。
 
-## 6. TEST 强制 Docker sandbox
+## 6. TEST sandbox 开关
 
-- test-agent 只能在代码准备并校验的 Docker sandbox 中执行，`isolation_mode=SANDBOXED_DOCKER`。
-- sandbox 必须满足：network none、只读 rootfs、drop ALL capabilities、非 root、PID/CPU/内存限制。由于 OpenClaw 当前版本不支持 per-run bind mount，Orchestrator 必须在 test-agent 的独占 staging workspace 中仅保留当前任务的 `/workspace/.task-sandbox/{repo,input,output,raw-logs}`；不得暴露宿主 runtime 路径或其他任务内容。
-- 每次执行必须保存由宿主交叉验证的 container/image/mount/network/rootfs/capability/resource attestation；缺失或不一致时 fail closed。
+- `OPENCLAW_TEST_SANDBOX_ENABLED` 默认 `true`。开启时，test-agent 只能在代码准备并校验的 Docker sandbox 中执行，`isolation_mode=SANDBOXED_DOCKER`。
+- Docker 模式必须满足：network none、只读 rootfs、drop ALL capabilities、非 root、PID/CPU/内存限制。由于 OpenClaw 当前版本不支持 per-run bind mount，Orchestrator 必须在 test-agent 的独占 staging workspace 中仅保留当前任务的 `/workspace/.task-sandbox/{repo,input,output,raw-logs}`；不得暴露宿主 runtime 路径或其他任务内容。每次执行必须保存由宿主交叉验证的 attestation；缺失或不一致时 fail closed。
+- 设置为 `false` 时，test-agent 只能在分配的本地 worktree 执行，`isolation_mode=UNSANDBOXED_LOCAL`。这不是 Docker 等价物：不得声称或要求 Docker attestation，仍禁止联网、安装依赖、访问凭证、启动服务或修改系统配置。
 - test-agent 不得修改 sandbox 配置、外部 bind、Docker daemon 或宿主 OpenClaw 配置。
 
 ## 7. 最小权限与最小上下文

@@ -71,7 +71,7 @@
   - 在 `agents.defaults.sandbox` 与 `agents.list[].sandbox` 两处均存在。
 - `agents.list[]` 条目含 `workspace`（string）与 `agentDir`（string）。
 
-这些字段在探测版本中存在。当前项目使用所有 Agent 的空 `subagents.allowAgents`，Manager 由 Node Orchestrator 间接派发；Manager 与 test-agent 均使用 package 定义的 Docker `sandbox.mode=all`。每个 Agent 继续使用绝对 `workspace` / `agentDir`。
+这些字段在探测版本中存在。当前项目使用所有 Agent 的空 `subagents.allowAgents`，Manager 由 Node Orchestrator 间接派发；test-agent 是否使用 package 定义的 Docker `sandbox.mode=all` 由 `OPENCLAW_TEST_SANDBOX_ENABLED` 控制，关闭时安装器写入 `sandbox.mode=off`。每个 Agent 继续使用绝对 `workspace` / `agentDir`。
 
 ## 5. `config validate` 与 `doctor --lint`
 

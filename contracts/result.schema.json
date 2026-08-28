@@ -46,7 +46,7 @@
     "decisions_required": { "type": "array", "items": { "type": "object" } },
     "recommended_next_action": { "type": "string" },
     "git_status_after_completion": { "type": ["string", "null"] },
-    "isolation_mode": { "type": "string", "enum": ["UNSANDBOXED_LOCAL", "SANDBOXED_DOCKER"], "description": "实际执行隔离级别；TEST 任务由代码强制要求 SANDBOXED_DOCKER。" },
+    "isolation_mode": { "type": "string", "enum": ["UNSANDBOXED_LOCAL", "SANDBOXED_DOCKER"], "description": "实际执行隔离级别；当 OPENCLAW_TEST_SANDBOX_ENABLED=true 时 TEST 必须为 SANDBOXED_DOCKER，否则必须为 UNSANDBOXED_LOCAL。" },
     "sandbox_attestation": { "type": ["object", "null"] },
     "self_validation": {
       "type": "object",

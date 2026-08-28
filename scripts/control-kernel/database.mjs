@@ -29,6 +29,14 @@ function positiveInteger(value, fallback) {
   return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
 }
 
+function enabledBoolean(value, name, fallback = true) {
+  if (value === undefined || value === null || value === '') return fallback;
+  const normalized = String(value).trim().toLowerCase();
+  if (['true', '1', 'yes', 'on'].includes(normalized)) return true;
+  if (['false', '0', 'no', 'off'].includes(normalized)) return false;
+  throw Object.assign(new Error(`${name} must be true or false`), { code: 'ENVIRONMENT_BOOLEAN_INVALID' });
+}
+
 export function resolveKernelConfig(options = {}) {
   const projectRoot = resolve(options.projectRoot ?? process.env.OPENCLAW_PROJECT_ROOT ?? process.cwd());
   const local = readEnvironmentFile(join(projectRoot, '.env'));
@@ -46,6 +54,7 @@ export function resolveKernelConfig(options = {}) {
     busyTimeoutMs: positiveInteger(options.busyTimeoutMs ?? env('OPENCLAW_KERNEL_BUSY_TIMEOUT_MS'), 5000),
     leaseSeconds: positiveInteger(options.leaseSeconds ?? env('OPENCLAW_KERNEL_LEASE_SECONDS'), 120),
     workerId: options.workerId ?? env('OPENCLAW_WORKER_ID') ?? `worker-${process.pid}`,
+    testSandboxEnabled: enabledBoolean(options.testSandboxEnabled ?? env('OPENCLAW_TEST_SANDBOX_ENABLED'), 'OPENCLAW_TEST_SANDBOX_ENABLED'),
   };
 }
 

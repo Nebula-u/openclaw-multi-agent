@@ -23,14 +23,16 @@
 - **人工审批**：破坏性/不可逆/影响其他项目的操作必须人工审批（见 docs/human-approval.md）。
 - **证据记录**：所有关键命令保存真实 stdout/stderr/退出码/哈希。
 
-## 3. 已知安全限制：无沙箱测试
+## 3. TEST sandbox 与本地模式
 
-本阶段**明确不实现测试沙箱**。`test-agent` 在被分配的本地 Git worktree 中**直接**执行测试命令（`isolation_mode=UNSANDBOXED_LOCAL`）。这意味着：
+`OPENCLAW_TEST_SANDBOX_ENABLED` 默认 `true`。开启时，`test-agent` 使用受限 Docker sandbox（network none、只读 rootfs、drop ALL capabilities、非 root 和资源限制）并报告 `SANDBOXED_DOCKER`；在 Windows 上请通过 WSL2/Linux Docker Engine 运行该模式。
+
+在 Windows Docker sandbox 不可用时可设为 `false`，此时 `test-agent` 在被分配的本地 Git worktree 中直接执行测试命令（`isolation_mode=UNSANDBOXED_LOCAL`）。这意味着：
 
 - 测试命令以当前用户权限在宿主机上运行，进程隔离弱于容器/沙箱。
 - 因此默认禁止网络、依赖安装、系统配置修改、服务启动、注册表/计划任务修改与访问凭证目录。
 - 对来源不可信、可能执行任意安装/破坏性行为的测试，必须先人工审批。
-- **不得**把当前状态描述为"完全隔离"。未来运维/加固阶段可另行加入 sandbox。
+- **不得**把本地模式描述为"完全隔离"，也不得伪造 Docker attestation。
 
 历史威胁分析见 [docs/archive/legacy/unsandboxed-test-policy.md](docs/archive/legacy/unsandboxed-test-policy.md) 与 [docs/archive/legacy/threat-model.md](docs/archive/legacy/threat-model.md)；当前运行边界以本文、README 与 `docs/architecture.md` 为准。
 

@@ -338,7 +338,7 @@ function runInstalledSandboxValidator(command, agents) {
     const result = spawnSync(command[0], command.slice(1), {
       cwd: ROOT,
       encoding: 'utf8',
-      env: { ...process.env, ...env, PATH: `${bin}${delimiter}${process.env.PATH}` },
+      env: { ...process.env, ...env, OPENCLAW_TEST_SANDBOX_ENABLED: 'true', PATH: `${bin}${delimiter}${process.env.PATH}` },
     });
     return { result, calls: readFileSync(callsPath, 'utf8') };
   } finally {
@@ -351,6 +351,21 @@ function runInstalledSandboxValidator(command, agents) {
     rmSync(root, { recursive: true, force: true });
   }
 }
+
+test('PowerShell package loading disables the test-agent sandbox and uses gateway exec when configured', {
+  skip: PWSH_AVAILABLE ? false : 'pwsh unavailable in this environment',
+}, () => {
+  const result = spawnSync('pwsh', ['-NoProfile', '-Command', [
+    `. '${join(ROOT, 'scripts', 'component-lib.ps1')}'`,
+    `$packages = Get-AgentPackages -ProjectRoot '${ROOT}' -RuntimeRootAbs '${join(ROOT, 'runtime')}'`,
+    '$packages | Where-Object id -eq "test-agent" | Select-Object sandbox_mode,sandbox_config,tools_config | ConvertTo-Json -Depth 8 -Compress',
+  ].join('; ')], { cwd: ROOT, encoding: 'utf8', env: { ...process.env, OPENCLAW_TEST_SANDBOX_ENABLED: 'false' } });
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  const testAgent = JSON.parse(result.stdout.trim());
+  assert.equal(testAgent.sandbox_mode, 'off');
+  assert.equal(testAgent.sandbox_config.mode, 'off');
+  assert.equal(testAgent.tools_config.exec.host, 'gateway');
+});
 
 for (const [name, command, available] of [
   ['Bash', ['bash', VALIDATOR], BASH_AVAILABLE],

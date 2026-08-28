@@ -36,7 +36,7 @@ function Get-OptionalPropertyValue($Object, [string]$Name) {
   if ($null -ne $Object -and $Object.PSObject.Properties.Name -contains $Name) { return $Object.$Name }
   return $null
 }
-function Add-InstalledTestAgentSandboxChecks([object[]]$Agents, [string]$ErrorDetail = '') {
+function Add-InstalledTestAgentSandboxChecks([object[]]$Agents, [bool]$SandboxEnabled, [string]$ErrorDetail = '') {
   $testAgents = @($Agents | Where-Object { [string]$_.id -eq 'test-agent' })
   $sandbox = if ($testAgents.Count -eq 1) { Get-OptionalPropertyValue $testAgents[0] 'sandbox' } else { $null }
   if ($null -eq $sandbox) {
@@ -45,6 +45,11 @@ function Add-InstalledTestAgentSandboxChecks([object[]]$Agents, [string]$ErrorDe
     Add-Check '已安装 test-agent sandbox 工作目录为任务暂存 repo' $false $detail
     Add-Check '已安装 test-agent sandbox 不含外部 bind 挂载' $false $detail
     Add-Check '已安装 test-agent sandbox Docker 加固' $false $detail
+    return
+  }
+
+  if (-not $SandboxEnabled) {
+    Add-Check '已安装 test-agent sandbox 已禁用' ([string](Get-OptionalPropertyValue $sandbox 'mode') -eq 'off') ([string](Get-OptionalPropertyValue $sandbox 'mode'))
     return
   }
 
@@ -92,6 +97,7 @@ if ($Packages.Count -gt 0) {
   Add-Check 'manager allowAgents 由 active/callable packages 计算' ($allow.Count -eq @($Packages | Where-Object { $_.role -ne 'manager' -and $_.register -and $_.active -and $_.callable_by_manager }).Count) ($allow -join ',')
   Add-Check '工作 Agent 默认不派生' (@($Packages | Where-Object { $_.role -ne 'manager' -and @($_.allow_agents).Count -ne 0 }).Count -eq 0)
 }
+$testSandboxEnabled = @($Packages | Where-Object id -eq 'test-agent')[0].sandbox_mode -ne 'off'
 
 $contractsDir = Join-Path $ProjectRoot 'contracts'
 Get-ChildItem -LiteralPath $contractsDir -Filter '*.json' -File | ForEach-Object { Add-Check "contracts JSON: $($_.Name)" (Test-Json $_.FullName) }
@@ -267,9 +273,9 @@ if (-not $SkipOpenClaw) {
     try {
       $installedAgentsOut = & openclaw config get agents.list --json 2>&1
       if ($LASTEXITCODE -ne 0) { throw ($installedAgentsOut -join "`n") }
-      Add-InstalledTestAgentSandboxChecks @(ConvertFrom-OpenClawJsonOutput -Output ($installedAgentsOut -join "`n") -Description '已安装 agents.list 输出')
+      Add-InstalledTestAgentSandboxChecks @(ConvertFrom-OpenClawJsonOutput -Output ($installedAgentsOut -join "`n") -Description '已安装 agents.list 输出') $testSandboxEnabled
     } catch {
-      Add-InstalledTestAgentSandboxChecks @() $_.Exception.Message
+      Add-InstalledTestAgentSandboxChecks @() $testSandboxEnabled $_.Exception.Message
     }
     $validateOut = & openclaw config validate --json 2>&1
     Add-Check 'openclaw config validate --json' ($LASTEXITCODE -eq 0) ($validateOut -join "`n")
