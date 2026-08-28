@@ -78,7 +78,8 @@ export function requestForegroundServiceStop(projectRootInput, options = {}) {
   const projectRoot = resolve(projectRootInput);
   const paths = pathsFor(projectRoot);
   const status = reconcileServiceStatus(readJson(paths.status), options);
-  if (!status || !['STARTING', 'RUNNING', 'DRAINING'].includes(status.state)) {
+  const staleButAlive = status?.state === 'STALE' && status.stale_reason === 'HEARTBEAT_EXPIRED';
+  if (!status || (!['STARTING', 'RUNNING', 'DRAINING'].includes(status.state) && !staleButAlive)) {
     throw Object.assign(new Error('the foreground Orchestrator service is not running'), { code: 'ORCHESTRATOR_NOT_RUNNING' });
   }
   atomicWriteJson(paths.stop, { schema_version: 1, requested_at: new Date().toISOString(), instance_id: status.instance_id, requested_by: 'local-cli' });
