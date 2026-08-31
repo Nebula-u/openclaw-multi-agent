@@ -130,15 +130,17 @@
   }
   function approvalAction(option, label, tone, queued) {
     if (!option) return `<button type="button" class="approval-action ${tone}" disabled><span>${label}</span><small>当前审批未提供此操作</small></button>`;
-    return `<button type="button" class="approval-action ${tone}" data-approval-choice="${escapeHtml(option.option_id)}"${queued ? ' disabled' : ''}><span>${label}</span><small>${escapeHtml(option.description || option.option_id)}</small></button>`;
+    const optionId = option.option_id ?? option.id;
+    return `<button type="button" class="approval-action ${tone}" data-approval-choice="${escapeHtml(optionId)}"${queued ? ' disabled' : ''}><span>${label}</span><small>${escapeHtml(option.description || optionId)}</small></button>`;
   }
   function approvalCard(approval, requestValue, options, queued, key) {
-    const confirm = options.find((item) => CONFIRM_CHOICES.has(item.option_id));
-    const reject = options.find((item) => REJECT_CHOICES.has(item.option_id));
+    const optionId = (item) => item.option_id ?? item.id;
+    const confirm = options.find((item) => CONFIRM_CHOICES.has(optionId(item)));
+    const reject = options.find((item) => REJECT_CHOICES.has(optionId(item)));
     const other = options.filter((item) => item !== confirm && item !== reject);
     const decisionId = approval.decisionId ?? approval.decision_id;
     const queueStatus = queued ? `<div class="approval-status" role="status"><i></i><span>${queued.commandId ? `审批命令已提交：${escapeHtml(queued.commandId)}` : '正在安全提交审批…'}</span></div>` : '';
-    const otherActions = other.length ? other.map((item) => approvalAction(item, item.option_id === 'REWORK' ? '返工后重试' : item.description || item.option_id, 'other', queued)).join('') : '<p class="approval-empty">当前审批没有其他可选操作</p>';
+    const otherActions = other.length ? other.map((item) => approvalAction(item, optionId(item) === 'REWORK' ? '返工后重试' : item.description || optionId(item), 'other', queued)).join('') : '<p class="approval-empty">当前审批没有其他可选操作</p>';
     return `<article class="approval-card"><div class="approval-card-head"><span class="approval-kicker">需要你的决定</span><code>${escapeHtml(decisionId)}</code></div><p class="approval-summary">${escapeHtml(requestValue.summary || approval.trigger || '需要人工决定')}</p>${queueStatus}<div class="approval-primary-actions" role="group" aria-label="主要审批操作">${approvalAction(confirm, '确认', 'confirm', queued)}${approvalAction(reject, '拒绝', 'reject', queued)}</div><details class="approval-other-actions"${state.openApprovalDetails.has(key) ? ' open' : ''}><summary>其他</summary><div>${otherActions}</div></details><p class="approval-manager-note">也可在与 Manager 的对话中明确授权，由 Manager 转交相同审批。</p></article>`;
   }
   function renderNotices(workflow) {

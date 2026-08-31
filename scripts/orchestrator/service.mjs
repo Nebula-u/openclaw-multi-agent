@@ -41,7 +41,8 @@ function notificationMessage(notification, run) {
 }
 function approvalRequest(task, result = null, step = null) {
   const requested = result?.decisions_required?.[0] ?? {};
-  const options = Array.isArray(requested.options) && requested.options.length ? requested.options : [{ option_id: 'APPROVE', description: 'Approve and continue' }, { option_id: 'REWORK', description: 'Request another attempt' }, { option_id: 'CANCEL', description: 'Cancel this workflow' }];
+  const sourceOptions = Array.isArray(requested.options) && requested.options.length ? requested.options : [{ option_id: 'APPROVE', description: 'Approve and continue' }, { option_id: 'REWORK', description: 'Request another attempt' }, { option_id: 'CANCEL', description: 'Cancel this workflow' }];
+  const options = sourceOptions.map((option) => ({ ...option, option_id: option.option_id ?? option.id })).filter((option) => option.option_id);
   return {
     decision_id: `DEC-${task.taskId.slice(5)}-${randomUUID().slice(0, 8)}`,
     workflow_id: task.workflowId, task_id: task.taskId, run_id: task.runId,
@@ -571,7 +572,7 @@ export function createOrchestrator({ projectRoot: projectRootInput, database = n
   async function resolveDecision({ run, decisionId, choice, notes = '', actor }) {
     const pending = (await selectedRepository.listApprovals({ runId: run.runId, status: 'PENDING' })).find((item) => item.decisionId === decisionId);
     if (!pending) throw Object.assign(new Error('approval not found or already resolved'), { code: 'APPROVAL_NOT_PENDING' });
-    const allowed = pending.request?.options?.map((option) => option.option_id).filter(Boolean) ?? [];
+    const allowed = pending.request?.options?.map((option) => option.option_id ?? option.id).filter(Boolean) ?? [];
     if (!allowed.includes(choice)) throw Object.assign(new Error('approval choice is not allowed'), { code: 'APPROVAL_OPTION_INVALID' });
     if (pending.trigger === 'TASK_RETRY_EXHAUSTED') {
       const resolved = await selectedRepository.resolveRetryExhaustedApproval({ decisionId,

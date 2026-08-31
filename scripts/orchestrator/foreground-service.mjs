@@ -115,7 +115,7 @@ export async function runForegroundService({
   const instanceId = lock.owner.nonce;
   const processor = createManagerRequestProcessor({ orchestrator, projectRoot, managerWorkspace });
   let state = 'STARTING'; let lastError = null; let cycles = 0; let stopRequestedAt = null;
-  let draining = false; let forcedShutdown = false; let drainTimer = null;
+  let draining = false; let forcedShutdown = false; let drainTimer = null; let hrRunning = false;
   const startedAt = clock().toISOString();
 
   const publish = () => atomicWriteJson(paths.status, {
@@ -137,6 +137,14 @@ export async function runForegroundService({
     if (existsSync(paths.stop)) { beginDrain(); return true; }
     return draining;
   };
+  const runHrInBackground = () => {
+    if (hr.autoMode === 'off' || hrRunning || draining) return;
+    hrRunning = true;
+    void hr.runPending().catch((error) => {
+      lastError = { code: error.code ?? 'HR_SERVICE_CYCLE_FAILED', message: error.message, at: clock().toISOString() };
+      publish();
+    }).finally(() => { hrRunning = false; });
+  };
   const stopWatcher = setInterval(() => { if (existsSync(paths.stop)) beginDrain(); }, Math.min(pollMs, 250));
   stopWatcher.unref?.();
 
@@ -147,12 +155,12 @@ export async function runForegroundService({
     while (!shouldDrain()) {
       try {
         const requests = await processor.scan();
-        const hrJobs = hr.autoMode === 'off' ? [] : await hr.runPending();
+        runHrInBackground();
         cycles += 1; lastError = null;
         publish();
         // Keep the latest cycle facts in the status file without duplicating
         // durable workflow facts outside the Kernel.
-        void requests; void hrJobs;
+        void requests;
       } catch (error) {
         cycles += 1;
         lastError = { code: error.code ?? 'ORCHESTRATOR_SERVICE_CYCLE_FAILED', message: error.message, at: clock().toISOString() };

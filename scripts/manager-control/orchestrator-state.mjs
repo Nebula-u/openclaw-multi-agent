@@ -109,7 +109,7 @@ export function submitOrchestratorApproval({ runtimeRoot: runtimeRootInput, work
   const status = readOrchestratorStatus({ runtimeRoot, workflowId, managerSessionId, managerSessionKey });
   const approval = status.pending_approval;
   if (!approval || approval.decision_id !== decisionId) fail('APPROVAL_NOT_PENDING', 'approval not found or already resolved');
-  if (!approval.options.map((option) => option.option_id).includes(choice)) fail('APPROVAL_OPTION_INVALID', 'approval choice is not allowed');
+  if (!approval.options.map((option) => option.option_id ?? option.id).includes(choice)) fail('APPROVAL_OPTION_INVALID', 'approval choice is not allowed');
   if (!authorization || authorization.confirmed !== true || !/^human:[A-Za-z0-9._-]+$/u.test(authorization.actor ?? '') || typeof authorization.message !== 'string' || !authorization.message) {
     fail('MANAGER_REQUEST_AUTH_INVALID', 'authorization must contain an explicit human confirmation');
   }

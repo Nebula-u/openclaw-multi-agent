@@ -90,6 +90,27 @@ test('orchestrator resolves a pending monitor approval and rejects an unavailabl
   assert.equal((await orchestrator.repository.listNotifications({ runId: run.runId, statuses: ['PENDING', 'DELIVERED'] })).at(-1).type, 'HUMAN_APPROVAL_RESOLVED');
 });
 
+test('orchestrator accepts a legacy approval option that uses id instead of option_id', async (t) => {
+  const database = openKernelDatabase({ databasePath: ':memory:' });
+  t.after(() => database.close());
+  const orchestrator = createOrchestrator({ projectRoot: ROOT, database, notificationRunner: async () => ({ exitCode: 0, stdout: '', stderr: '' }) });
+  const routePlan = {
+    workflow_id: 'WF-legacy-option', route_hash: 'b'.repeat(64), display_title: 'Approval', summary: 'Approval',
+    steps: [{ step_id: 'requirements', kind: 'REQUIREMENTS' }, { step_id: 'architecture', kind: 'ARCHITECTURE' }],
+  };
+  const run = await orchestrator.repository.createRun({ workflowId: routePlan.workflow_id, request: {}, routePlan, targetProjectRootAbs: ROOT,
+    baseCommit: '1'.repeat(40), managerSessionId: 'manager-session', managerSessionKey: 'manager-key' });
+  const task = await orchestrator.repository.createTask({ runId: run.runId, step: { step_id: 'requirements', kind: 'REQUIREMENTS', title: 'Requirements' }, agentId: 'requirement-agent' });
+  await orchestrator.repository.createApproval({ runId: run.runId, taskId: task.taskId, stepId: task.stepId, trigger: 'REQUIREMENT_AMBIGUITY', request: {
+    decision_id: 'DEC-legacy-option', workflow_id: run.workflowId, task_id: task.taskId, run_id: run.runId, summary: 'Approve requirements',
+    options: [{ id: 'APPROVE', description: 'Continue' }],
+  } });
+
+  const active = await orchestrator.resolveApprovalCommand({ ...command(), workflow_id: run.workflowId, run_id: run.runId,
+    task_id: task.taskId, decision_id: 'DEC-legacy-option', choice: 'APPROVE' });
+  assert.equal(active.state, 'ACTIVE');
+});
+
 test('orchestrator scans approval commands from its configured runtime root', async (t) => {
   const runtimeRoot = mkdtempSync(join(tmpdir(), 'orchestrator-approval-runtime-'));
   const database = openKernelDatabase({ databasePath: ':memory:' });

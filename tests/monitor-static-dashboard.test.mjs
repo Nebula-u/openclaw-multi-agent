@@ -46,6 +46,7 @@ test('local dashboard opens without a build step and contains no external runtim
   assert.match(script, /拒绝/u);
   assert.match(script, /其他/u);
   assert.match(script, /RETRY_SAME_AGENT/u);
+  assert.match(script, /option\.option_id\s*\?\?\s*option\.id/u);
   assert.match(script, /由 Manager 转交相同审批/u);
   assert.match(approvalCss, /\.approval-action\.confirm/u);
   assert.match(approvalCss, /\.approval-action\.reject/u);

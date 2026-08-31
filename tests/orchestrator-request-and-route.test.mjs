@@ -210,6 +210,24 @@ test('foreground service polls automatically and exits cleanly after a stop requ
   assert.throws(() => requestForegroundServiceStop(mkdtempSync(join(tmpdir(), 'orchestrator-not-running-'))), (error) => error.code === 'ORCHESTRATOR_NOT_RUNNING');
 });
 
+test('foreground service keeps polling while an HR job is still running', async () => {
+  const projectRoot = mkdtempSync(join(tmpdir(), 'orchestrator-foreground-hr-'));
+  let ticks = 0; let waits = 0; let startHr;
+  const orchestrator = { projectRoot, async tickAll() { ticks += 1; return []; } };
+  const hr = { autoMode: 'task', runPending() { return new Promise((resolveRun) => { startHr = resolveRun; }); } };
+  const completed = runForegroundService({
+    projectRoot, orchestrator, hr, pollMs: 100, shutdownTimeoutMs: 1000,
+    waitFor: async () => { waits += 1; if (waits === 2) requestForegroundServiceStop(projectRoot); },
+  });
+  const result = await Promise.race([
+    completed,
+    new Promise((_, reject) => setTimeout(() => reject(new Error('foreground loop waited for HR')), 300)),
+  ]);
+  startHr?.([]);
+  assert.equal(result.state, 'STOPPED');
+  assert.equal(ticks, 2);
+});
+
 test('Manager notification delivery receives the foreground shutdown signal', async (t) => {
   const database = openKernelDatabase({ databasePath: ':memory:' });
   t.after(() => database.close());

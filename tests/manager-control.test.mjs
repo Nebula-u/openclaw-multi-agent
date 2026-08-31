@@ -117,7 +117,7 @@ test('manager control reads the bound pending approval and writes a matching dec
     managerSessionId: 'manager-session', managerSessionKey: 'manager-key', routePlan: { steps: [], route_hash: 'a'.repeat(64) } });
   const task = await repository.createTask({ runId: run.runId, step: { step_id: 'requirements', kind: 'REQUIREMENTS', title: 'Requirements' }, agentId: 'requirement-agent' });
   await repository.createApproval({ runId: run.runId, taskId: task.taskId, stepId: task.stepId, trigger: 'REQUIREMENT_AMBIGUITY', request: {
-    decision_id: 'DEC-manager-approval-full', workflow_id: run.workflowId, run_id: run.runId, task_id: task.taskId, summary: 'Approve requirements', options: [{ option_id: 'APPROVE', description: 'Continue' }],
+    decision_id: 'DEC-manager-approval-full', workflow_id: run.workflowId, run_id: run.runId, task_id: task.taskId, summary: 'Approve requirements', options: [{ id: 'APPROVE', description: 'Continue' }],
   } });
   const output = { value: '', write(value) { this.value += value; } };
 
