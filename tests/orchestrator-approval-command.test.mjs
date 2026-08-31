@@ -111,7 +111,7 @@ test('orchestrator accepts a legacy approval option that uses id instead of opti
   assert.equal(active.state, 'ACTIVE');
 });
 
-test('an Agent decision approval re-dispatches the current task with the recorded choice', async (t) => {
+test('an Agent decision with a descriptive trigger re-dispatches the current task with the recorded choice', async (t) => {
   const database = openKernelDatabase({ databasePath: ':memory:' });
   t.after(() => database.close());
   const orchestrator = createOrchestrator({ projectRoot: ROOT, database, notificationRunner: async () => ({ exitCode: 0, stdout: '', stderr: '' }) });
@@ -123,7 +123,8 @@ test('an Agent decision approval re-dispatches the current task with the recorde
     baseCommit: '1'.repeat(40), managerSessionId: 'manager-session', managerSessionKey: 'manager-key' });
   const task = await orchestrator.repository.createTask({ runId: run.runId,
     step: { step_id: 'development', kind: 'DEVELOPMENT', title: 'Implement' }, agentId: 'developer-agent', inputCommit: run.baseCommit });
-  await orchestrator.repository.createApproval({ runId: run.runId, taskId: task.taskId, stepId: task.stepId, trigger: 'AGENT_DECISION_REQUIRED', request: {
+  const descriptiveTrigger = '需求存在影响范围或验收方式的关键歧义；实现存在明显不同取舍的方向（APPROVAL_RULES §1.1/§1.2）';
+  await orchestrator.repository.createApproval({ runId: run.runId, taskId: task.taskId, stepId: task.stepId, trigger: descriptiveTrigger, request: {
     decision_id: 'DEC-agent-decision-001', workflow_id: run.workflowId, task_id: task.taskId, run_id: run.runId, summary: 'Choose persistence',
     options: [{ option_id: 'PERSIST_SERVER_FILE', description: 'Use a server JSON file.' }],
   } });
