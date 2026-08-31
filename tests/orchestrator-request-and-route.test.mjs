@@ -181,6 +181,37 @@ test('foreground service polls automatically and exits cleanly after a stop requ
   assert.throws(() => requestForegroundServiceStop(mkdtempSync(join(tmpdir(), 'orchestrator-not-running-'))), (error) => error.code === 'ORCHESTRATOR_NOT_RUNNING');
 });
 
+test('Manager notification delivery receives the foreground shutdown signal', async (t) => {
+  const database = openKernelDatabase({ databasePath: ':memory:' });
+  t.after(() => database.close());
+  const controller = new AbortController();
+  let receivedSignal = null;
+  const orchestrator = createOrchestrator({
+    projectRoot: ROOT,
+    database,
+    signal: controller.signal,
+    notificationRunner: async ({ signal }) => {
+      receivedSignal = signal;
+      return { exitCode: 0, stdout: '', stderr: '' };
+    },
+  });
+  const run = await orchestrator.repository.createRun({
+    workflowId: 'WF-notification-shutdown-signal',
+    request: {},
+    targetProjectRootAbs: ROOT,
+    baseCommit: '1'.repeat(40),
+    managerSessionId: 'manager-session',
+    managerSessionKey: 'manager-key',
+    routePlan: { route_hash: 'a'.repeat(64), display_title: 'Notifications', summary: 'Notifications', steps: [] },
+  });
+  await orchestrator.repository.queueNotification({ runId: run.runId, type: 'TASK_PREPARATION_FAILED', payload: {} });
+
+  await orchestrator.deliverNotifications();
+
+  assert.equal(receivedSignal, controller.signal);
+  await orchestrator.close();
+});
+
 test('Manager request queue uses the Orchestrator runtime root by default', (t) => {
   const runtimeRoot = mkdtempSync(join(tmpdir(), 'orchestrator-manager-runtime-'));
   t.after(() => rmSync(runtimeRoot, { recursive: true, force: true }));

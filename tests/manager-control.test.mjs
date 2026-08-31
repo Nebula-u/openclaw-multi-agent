@@ -84,6 +84,25 @@ test('manager control CLI only exposes semantic project actions', (t) => {
   assert.throws(() => runManagerControl(['ensure', '--project-root', runtimeRoot, '--workflow-id', 'WF-CLI-004', '--project-name', 'not allowed', '--project-mode', 'new'], output, { runtimeRoot }), (error) => error.code === 'MANAGER_CONTROL_USAGE');
 });
 
+test('manager control lists any absolute directory without reading files or following links', (t) => {
+  const runtimeRoot = mkdtempSync(join(tmpdir(), 'manager-control-directory-list-runtime-'));
+  const directory = mkdtempSync(join(tmpdir(), 'manager-control-directory-list-target-'));
+  t.after(() => { rmSync(runtimeRoot, { recursive: true, force: true }); rmSync(directory, { recursive: true, force: true }); });
+  mkdirSync(join(directory, 'nested'));
+  writeFileSync(join(directory, 'top-level.txt'), 'not returned as content');
+  writeFileSync(join(directory, 'nested', 'child.txt'), 'not returned as content');
+  const output = { value: '', write(value) { this.value += value; } };
+
+  const listed = runManagerControl(['directory-list', '--path', directory, '--recursive', 'true'], output, { runtimeRoot });
+
+  assert.equal(listed.path_abs, realpathSync(directory));
+  assert.deepEqual(listed.entries.map((entry) => [entry.relative_path, entry.type]), [
+    ['nested', 'directory'], ['nested/child.txt', 'file'], ['top-level.txt', 'file'],
+  ]);
+  assert.doesNotMatch(output.value, /not returned as content/u);
+  assert.throws(() => runManagerControl(['directory-list', '--path', 'relative-directory'], output, { runtimeRoot }), (error) => error.code === 'MANAGER_CONTROL_USAGE');
+});
+
 test('manager control reads the bound pending approval and writes a matching decision request', async (t) => {
   const runtimeRoot = mkdtempSync(join(tmpdir(), 'manager-control-approval-'));
   const database = openKernelDatabase({ databasePath: join(runtimeRoot, 'control', 'kernel.db') });
@@ -107,6 +126,35 @@ test('manager control reads the bound pending approval and writes a matching dec
   assert.equal(request.user_authorized.message, 'User explicitly approved requirements');
   assert.throws(() => runManagerControl(['orchestrator-approve', '--workflow-id', run.workflowId, '--manager-session-id', 'manager-session', '--manager-session-key', 'manager-key',
     '--decision-id', status.pending_approval.decision_id, '--choice', 'APPROVE', '--authorization-summary', '   '], output, { runtimeRoot }), (error) => error.code === 'MANAGER_CONTROL_USAGE');
+});
+
+test('manager control reports the latest published task location for its bound workflow', async (t) => {
+  const runtimeRoot = mkdtempSync(join(tmpdir(), 'manager-control-result-location-'));
+  const database = openKernelDatabase({ databasePath: join(runtimeRoot, 'control', 'kernel.db') });
+  t.after(() => { database.close(); rmSync(runtimeRoot, { recursive: true, force: true }); });
+  const repository = createWorkflowRepository({ database });
+  const run = await repository.createRun({ workflowId: 'WF-manager-result-location', request: {}, targetProjectRootAbs: runtimeRoot, baseCommit: '1'.repeat(40),
+    managerSessionId: 'manager-session', managerSessionKey: 'manager-key', routePlan: { steps: [], route_hash: 'a'.repeat(64) } });
+  const task = await repository.createTask({ runId: run.runId, step: { step_id: 'development', kind: 'DEVELOPMENT', title: 'Build' }, agentId: 'developer-agent' });
+  const publishedResult = {
+    task_id: task.taskId,
+    worktree_path_abs: join(runtimeRoot, 'work', 'build', 'repo'),
+    artifact_root_abs: join(runtimeRoot, 'work', 'build'),
+    published_output_path_abs: join(runtimeRoot, 'work', 'build', 'output', 'result.json'),
+    output_commit: '2'.repeat(40),
+  };
+  await repository.updateTask(task.taskId, { state: 'SUCCEEDED', payload: {
+    workspace_root_abs: publishedResult.artifact_root_abs,
+    worktree_path_abs: publishedResult.worktree_path_abs,
+    artifact_root_abs: publishedResult.artifact_root_abs,
+    published_output_path_abs: publishedResult.published_output_path_abs,
+    snapshot: { outputCommit: publishedResult.output_commit },
+  } });
+  const output = { value: '', write(value) { this.value += value; } };
+
+  const status = runManagerControl(['orchestrator-status', '--workflow-id', run.workflowId, '--manager-session-id', 'manager-session', '--manager-session-key', 'manager-key'], output, { runtimeRoot });
+
+  assert.deepEqual(status.published_result, publishedResult);
 });
 
 test('manager control queues a session-bound user-authorized pause command', async (t) => {

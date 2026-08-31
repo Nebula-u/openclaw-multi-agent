@@ -1,5 +1,6 @@
 #!/usr/bin/env node
-import { dirname, resolve } from 'node:path';
+import { lstatSync, readdirSync, realpathSync } from 'node:fs';
+import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createManagerControl } from './service.mjs';
 import { readOrchestratorStatus, submitOrchestratorApproval, submitWorkflowControl } from './orchestrator-state.mjs';
@@ -7,9 +8,10 @@ import { readOrchestratorStatus, submitOrchestratorApproval, submitWorkflowContr
 function fail(message) { throw Object.assign(new Error(message), { code: 'MANAGER_CONTROL_USAGE' }); }
 function parse(argv) {
   const [action, ...tokens] = argv;
-  if (!['ensure', 'resolve', 'fetch', 'orchestrator-status', 'orchestrator-approve', 'orchestrator-control'].includes(action)) fail('action is not supported');
+  if (!['ensure', 'resolve', 'fetch', 'directory-list', 'orchestrator-status', 'orchestrator-approve', 'orchestrator-control'].includes(action)) fail('action is not supported');
   const allowedByAction = {
     ensure: new Set(['workflow-id', 'project-name', 'project-mode', 'remote-url']), resolve: new Set(['workflow-id', 'project-ref']), fetch: new Set(['workflow-id', 'project-ref']),
+    'directory-list': new Set(['path', 'recursive']),
     'orchestrator-status': new Set(['workflow-id', 'manager-session-id', 'manager-session-key']),
     'orchestrator-approve': new Set(['workflow-id', 'manager-session-id', 'manager-session-key', 'decision-id', 'choice', 'authorization-summary', 'notes']),
     'orchestrator-control': new Set(['workflow-id', 'manager-session-id', 'manager-session-key', 'action', 'authorization-summary', 'notes']),
@@ -43,11 +45,35 @@ function authorizationFromOptions(options) {
   return { confirmed: true, actor: 'human:manager', message: summary };
 }
 
+function listDirectory(options) {
+  if (!options.path || !isAbsolute(options.path)) fail('directory-list requires an absolute --path');
+  if (options.recursive !== undefined && !['true', 'false'].includes(options.recursive)) fail('directory-list --recursive must be true or false');
+  let rootStat;
+  try { rootStat = lstatSync(options.path); } catch { fail('directory-list path does not exist'); }
+  if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) fail('directory-list path must be a non-symlink directory');
+  const root = realpathSync.native(options.path);
+  const entries = [];
+  const visit = (directory, prefix = '') => {
+    for (const entry of readdirSync(directory, { withFileTypes: true }).sort((left, right) => left.name.localeCompare(right.name))) {
+      const absolutePath = join(directory, entry.name);
+      const relativePath = prefix ? `${prefix}/${entry.name}` : entry.name;
+      const stat = lstatSync(absolutePath);
+      const type = stat.isSymbolicLink() ? 'symbolic-link' : stat.isDirectory() ? 'directory' : stat.isFile() ? 'file' : 'other';
+      entries.push({ relative_path: relativePath, type });
+      if (options.recursive === 'true' && type === 'directory') visit(absolutePath, relativePath);
+    }
+  };
+  visit(root);
+  return { path_abs: root, recursive: options.recursive === 'true', entries };
+}
+
 export function run(argv, output = process.stdout, { runtimeRoot = installedRuntimeRoot() } = {}) {
   const { action, options } = parse(argv);
   const control = createManagerControl({ runtimeRoot: resolve(runtimeRoot) });
   let result;
-  if (action === 'ensure') {
+  if (action === 'directory-list') {
+    result = listDirectory(options);
+  } else if (action === 'ensure') {
     if (!options['workflow-id']) fail('ensure requires --workflow-id');
     const project = projectFromOptions(options);
     result = control.ensureProject({ workflowId: options['workflow-id'], project });

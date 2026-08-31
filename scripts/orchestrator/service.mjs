@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
-import { existsSync, mkdirSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { existsSync, mkdirSync, realpathSync } from 'node:fs';
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { atomicWriteFile, atomicWriteJson, sha256File } from '../runtime-core/atomic-store.mjs';
 import { createKernel } from '../control-kernel/kernel.mjs';
 import { openKernelDatabase, resolveKernelConfig } from '../control-kernel/database.mjs';
@@ -22,6 +22,20 @@ import { createTestSandboxStager } from './test-sandbox-staging.mjs';
 function now(clock) { const value = clock(); return value instanceof Date ? value.toISOString() : value; }
 function taskSession(task) { return `orc-${task.runId.toLowerCase()}-${task.taskId.toLowerCase()}-a${task.attempt}`.slice(0, 120); }
 function processLog(task, name, content) { const path = join(task.artifactRootAbs, 'logs', name); mkdirSync(join(task.artifactRootAbs, 'logs'), { recursive: true }); atomicWriteFile(path, String(content ?? '')); return path; }
+function inside(root, path) { const value = relative(resolve(root), resolve(path)); return value === '' || (value !== '..' && !value.startsWith(`..${sep}`) && !isAbsolute(value)); }
+function publishedResult(task) {
+  if (!task) return null;
+  const payload = task.payload ?? {};
+  const result = payload.result ?? {};
+  const snapshot = payload.snapshot ?? {};
+  return {
+    task_id: task.taskId,
+    worktree_path_abs: payload.worktree_path_abs ?? snapshot.worktreePathAbs ?? result.worktree_path_abs ?? null,
+    artifact_root_abs: payload.artifact_root_abs ?? result.artifact_root_abs ?? null,
+    published_output_path_abs: payload.published_output_path_abs ?? null,
+    output_commit: snapshot.outputCommit ?? result.output_commit ?? null,
+  };
+}
 function notificationMessage(notification, run) {
   return `# Orchestrator update\n\nA workflow event must be explained to the user in the current native Manager conversation. Do not make a workflow decision on the user's behalf.\n\n${JSON.stringify({ workflow_id: run.workflowId, notification_type: notification.type, task_id: notification.taskId, payload: notification.payload }, null, 2)}\n`;
 }
@@ -85,6 +99,22 @@ function retryExhaustedApprovalRequest(task) {
       { option_id: 'RETRY_SAME_AGENT', description: '确认：由同一 Agent 开启新的三次重试批次' },
       { option_id: 'ABORT', description: '拒绝：终止当前工作流' },
       { option_id: 'REWORK', description: '其他：携带用户补充说明后返工并开启新的重试批次' },
+    ],
+  };
+}
+
+function taskPreparationApprovalRequest(run, task, error) {
+  return {
+    decision_id: `DEC-${task.taskId.slice(5)}-${randomUUID().slice(0, 8)}`,
+    workflow_id: run.workflowId,
+    task_id: task.taskId,
+    run_id: run.runId,
+    summary: `任务 ${task.taskId} 无法准备隔离工作区（${error.code ?? 'TASK_PREPARATION_FAILED'}），需要用户决定重试或终止。`,
+    trigger: 'TASK_PREPARATION_FAILED',
+    error: { code: error.code ?? 'TASK_PREPARATION_FAILED', message: error.message },
+    options: [
+      { option_id: 'RETRY_SAME_AGENT', description: '恢复目标项目后，使用同一 Agent 重新准备并执行该任务' },
+      { option_id: 'ABORT', description: '终止当前工作流，保留已记录的诊断信息' },
     ],
   };
 }
@@ -186,7 +216,7 @@ export function createOrchestrator({ projectRoot: projectRootInput, database = n
       mkdirSync(root, { recursive: true });
       const messagePath = join(root, 'manager-message.md'); atomicWriteFile(messagePath, notificationMessage(notification, run));
       try {
-        const result = await notificationRunner({ agentId: 'manager-agent', sessionId: run.managerSessionId, messagePath, timeoutSeconds, deliver: run.managerDelivery });
+        const result = await notificationRunner({ agentId: 'manager-agent', sessionId: run.managerSessionId, messagePath, timeoutSeconds, deliver: run.managerDelivery, signal });
         if (result.exitCode !== 0) throw Object.assign(new Error(`Manager delivery returned ${result.exitCode}`), { code: 'MANAGER_DELIVERY_EXIT_NONZERO', details: { stderr: String(result.stderr ?? '').slice(-4000) } });
         delivered.push(await selectedRepository.updateNotification(notification.notificationId, { status: 'DELIVERED', incrementAttempts: true }));
       } catch (error) {
@@ -222,9 +252,9 @@ export function createOrchestrator({ projectRoot: projectRootInput, database = n
     return revised;
   }
 
-  async function finishRun(run, outcome, reason) {
+  async function finishRun(run, outcome, reason, task = null) {
     const finished = await selectedRepository.updateRun(run.runId, { state: 'TERMINAL', outcome, statusReason: reason, completedAt: now(clock) }, { eventType: 'RUN_TERMINAL', eventPayload: { outcome, reason } });
-    await announce(finished, 'WORKFLOW_TERMINAL', { outcome, reason });
+    await announce(finished, 'WORKFLOW_TERMINAL', { outcome, reason, published_result: publishedResult(task) });
     return finished;
   }
 
@@ -240,11 +270,12 @@ export function createOrchestrator({ projectRoot: projectRootInput, database = n
     const nextIndex = run.currentStepIndex + 1;
     if (nextIndex >= run.routePlan.steps.length) {
       await queueDailyReport(run, task, 'SUCCEEDED');
-      return { state: 'TERMINAL', run: await finishRun(run, 'SUCCEEDED', 'all confirmed route steps completed') };
+      return { state: 'TERMINAL', run: await finishRun(run, 'SUCCEEDED', 'all confirmed route steps completed', task) };
     }
     await queueDailyReport(run, task, 'SUCCEEDED');
     const updated = await selectedRepository.updateRun(run.runId, { currentStepIndex: nextIndex, state: 'ACTIVE', statusReason: `step ${step.step_id} completed` }, { eventType: 'ROUTE_ADVANCED', eventPayload: { completed_step_id: step.step_id, next_step_index: nextIndex } });
-    await announce(updated, 'TASK_COMPLETED', { task_id: task.taskId, step_id: step.step_id, summary: result.summary_for_user }, task.taskId);
+    await announce(updated, 'TASK_COMPLETED', { task_id: task.taskId, step_id: step.step_id, summary: result.summary_for_user,
+      published_result: publishedResult(task) }, task.taskId);
     return { state: 'ACTIVE', run: updated };
   }
 
@@ -257,13 +288,38 @@ export function createOrchestrator({ projectRoot: projectRootInput, database = n
       && stored.payload?.workspace_attempt === stored.attempt
       ? { workspaceRootAbs: stored.payload.workspace_root_abs, worktreePathAbs: stored.payload.worktree_path_abs, artifactRootAbs: stored.payload.artifact_root_abs }
       : null;
-    const allocation = storedWorkspace ?? taskWorkspaces.reserve({ targetProjectRootAbs: run.targetProjectRootAbs, title: stored.title });
+    const legacyWorkspace = !storedWorkspace && stored.payload?.worktree_path_abs && stored.payload?.artifact_root_abs
+      && existsSync(stored.payload.worktree_path_abs) && existsSync(stored.payload.artifact_root_abs)
+      ? (() => {
+        const worktreePathAbs = realpathSync.native(stored.payload.worktree_path_abs);
+        const artifactRootAbs = realpathSync.native(stored.payload.artifact_root_abs);
+        if (!inside(join(runtimeRoot, 'worktrees'), worktreePathAbs) || !inside(join(runtimeRoot, 'artifacts'), artifactRootAbs)) return null;
+        return { workspaceRootAbs: dirname(worktreePathAbs), worktreePathAbs, artifactRootAbs };
+      })()
+      : null;
+    let allocation = null;
+    let prepared = null;
+    try {
+      selectedWorktrees.inspectTarget(run.targetProjectRootAbs);
+      allocation = storedWorkspace ?? legacyWorkspace ?? taskWorkspaces.reserve({ targetProjectRootAbs: run.targetProjectRootAbs, agentId: stored.agentId, title: stored.title });
+      const artifactRootAbs = allocation.artifactRootAbs ?? allocation.workspaceRootAbs;
+      mkdirSync(artifactRootAbs, { recursive: true });
+      prepared = storedWorkspace || legacyWorkspace
+        ? { worktreePathAbs: allocation.worktreePathAbs, inputCommit: stored.inputCommit }
+        : selectedWorktrees.prepare({ workflowId: run.workflowId, taskId: stored.taskId, runId: run.runId, attempt: stored.attempt,
+          title: stored.title, workspaceRootAbs: allocation.workspaceRootAbs, inputCommit: stored.inputCommit, targetProjectRootAbs: run.targetProjectRootAbs });
+    } catch (error) {
+      if (!storedWorkspace && !legacyWorkspace && allocation?.workspaceRootAbs) taskWorkspaces.release(allocation.workspaceRootAbs);
+      const existing = (await selectedRepository.listApprovals({ runId: run.runId, status: 'PENDING' }))
+        .find((approval) => approval.taskId === stored.taskId && approval.trigger === 'TASK_PREPARATION_FAILED');
+      const approval = existing ?? await selectedRepository.createApproval({ runId: run.runId, taskId: stored.taskId, stepId: stored.stepId,
+        trigger: 'TASK_PREPARATION_FAILED', request: taskPreparationApprovalRequest(run, stored, error) });
+      const waiting = await selectedRepository.getRunById(run.runId);
+      await announce(waiting, 'TASK_PREPARATION_FAILED', { task_id: stored.taskId,
+        error: { code: error.code ?? 'TASK_PREPARATION_FAILED', message: error.message }, approval: approval.request }, stored.taskId);
+      return { stored: await selectedRepository.getTask(stored.taskId), task: null };
+    }
     const artifactRootAbs = allocation.artifactRootAbs ?? allocation.workspaceRootAbs;
-    mkdirSync(artifactRootAbs, { recursive: true });
-    const prepared = storedWorkspace
-      ? { worktreePathAbs: storedWorkspace.worktreePathAbs, inputCommit: stored.inputCommit }
-      : selectedWorktrees.prepare({ workflowId: run.workflowId, taskId: stored.taskId, runId: run.runId, attempt: stored.attempt,
-        title: stored.title, workspaceRootAbs: allocation.workspaceRootAbs, inputCommit: stored.inputCommit, targetProjectRootAbs: run.targetProjectRootAbs });
     const task = { workflowId: run.workflowId, runId: run.runId, taskId: stored.taskId, stepId: stored.stepId, kind: stored.kind, title: stored.title,
       agentId: stored.agentId, attempt: stored.attempt, routeHash: stored.routeHash, inputCommit: stored.inputCommit,
       originalRequest: run.request?.original_request ?? null,
@@ -522,7 +578,8 @@ export function createOrchestrator({ projectRoot: projectRootInput, database = n
         response: { outcome: choice, notes, actor, decided_at: now(clock) } });
       if (['ABORT', 'CANCEL', 'REJECTED'].includes(choice)) {
         await queueDailyReport(resolved.run, resolved.task, 'CANCELLED');
-        await announce(resolved.run, 'WORKFLOW_TERMINAL', { outcome: 'CANCELLED', reason: 'user declined an exhausted retry approval' }, resolved.task.taskId);
+        await announce(resolved.run, 'WORKFLOW_TERMINAL', { outcome: 'CANCELLED', reason: 'user declined an exhausted retry approval',
+          published_result: publishedResult(resolved.task) }, resolved.task.taskId);
       } else {
         await announce(resolved.run, 'TASK_RETRY_BATCH_APPROVED',
           { task_id: resolved.task.taskId, decision_id: resolved.approval.decisionId, choice }, resolved.task.taskId);
@@ -536,7 +593,7 @@ export function createOrchestrator({ projectRoot: projectRootInput, database = n
         const cancelled = await selectedRepository.updateTask(task.taskId, { state: 'CANCELLED' }, { eventType: 'TASK_CANCELLED_BY_HUMAN', eventPayload: { decision_id: approval.decisionId } });
         await queueDailyReport(run, cancelled, 'CANCELLED');
       }
-      return finishRun(run, 'CANCELLED', 'user declined an approval through Manager');
+      return finishRun(run, 'CANCELLED', 'user declined an approval through Manager', task);
     }
     if (['RETRY_SAME_AGENT', 'REWORK', 'REVISE'].includes(choice) && task) {
       const exhausted = pending.trigger === 'TASK_RETRY_EXHAUSTED';

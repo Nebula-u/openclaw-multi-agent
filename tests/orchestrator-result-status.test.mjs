@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { dirname, join, relative, resolve } from 'node:path';
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import test from 'node:test';
 import { openKernelDatabase } from '../scripts/control-kernel/database.mjs';
@@ -60,6 +60,159 @@ function blockedTestResult(task, { inputCommit = task.inputCommit } = {}) {
     self_validation: { preflight_passed: false, checks: [] }, artifact_manifest_hash: task.contextManifestSha256,
   };
 }
+
+function completionRoute(workflowId) {
+  return {
+    schema_version: 1, workflow_id: workflowId, request_class: 'FEATURE', summary: 'Publish a completed task location.', display_title: 'Completion', risk_flags: [],
+    steps: [
+      { step_id: 'development', kind: 'DEVELOPMENT', title: 'Complete implementation', rationale: 'Produce a published result.', human_approval_after: false, approval_reason: null },
+      { step_id: 'test', kind: 'TEST', title: 'Test implementation', rationale: 'Satisfy the lifecycle requirement without advancing this test.', human_approval_after: false, approval_reason: null },
+      { step_id: 'code-review', kind: 'CODE_REVIEW', title: 'Review implementation', rationale: 'Leave a later route step pending.', human_approval_after: false, approval_reason: null },
+    ],
+    skipped_stages: ['REQUIREMENTS', 'ARCHITECTURE', 'DESIGN', 'RELEASE'].map((kind) => ({ kind, reason: 'Not required for this completion-notification test.' })),
+  };
+}
+
+async function createPreparationWorkflow(t, { inspectTarget, prepare }) {
+  const workflowId = `WF-Preparation-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  const targetProjectRootAbs = join(ROOT, `preparation-target-${workflowId.toLowerCase()}`);
+  const workRoot = join(ROOT, 'work');
+  const workBefore = new Set(readdirSync(workRoot));
+  const database = openKernelDatabase({ databasePath: ':memory:' });
+  t.after(() => {
+    database.close();
+    for (const name of readdirSync(workRoot)) {
+      if (!workBefore.has(name) && name.startsWith('preparation-target-')) rmSync(join(workRoot, name), { recursive: true, force: true });
+    }
+  });
+  const orchestrator = createOrchestrator({
+    projectRoot: ROOT,
+    database,
+    testSandboxEnabled: false,
+    worktrees: { inspectTarget, prepare },
+    notificationRunner: async () => ({ exitCode: 0, stdout: '', stderr: '' }),
+    runner: async () => { throw new Error('runner must not start before workspace preparation succeeds'); },
+  });
+  await orchestrator.createRun({
+    schema_version: 1, request_id: `REQ-${workflowId}`, request_type: 'CREATE', workflow_id: workflowId, submitted_by: 'manager-agent',
+    manager_session_id: 'manager-session', manager_session_key: 'agent:manager:test', project_path_abs: targetProjectRootAbs,
+    original_request: 'Prepare an isolated workspace.', route_plan: testRoute(workflowId),
+    user_authorized: { confirmed: true, actor: 'human:test', message: 'Prepare it.' },
+  });
+  return { workflowId, orchestrator, workRoot, workBefore, targetProjectRootAbs };
+}
+
+test('a missing target waits for a human decision before reserving a workspace', async (t) => {
+  let inspections = 0; let prepareCalls = 0;
+  const { workflowId, orchestrator, workRoot, workBefore, targetProjectRootAbs } = await createPreparationWorkflow(t, {
+    inspectTarget(path) {
+      inspections += 1;
+      if (inspections === 1) return { targetProjectRootAbs: path, headCommit: '1'.repeat(40) };
+      throw Object.assign(new Error('managed project is missing'), { code: 'TARGET_REPOSITORY_MISSING' });
+    },
+    prepare() { prepareCalls += 1; throw Object.assign(new Error('must not prepare'), { code: 'GIT_COMMAND_FAILED' }); },
+  });
+
+  const result = await orchestrator.tick(workflowId);
+  const run = await orchestrator.repository.getRun(workflowId);
+  const [task] = await orchestrator.repository.listTasks({ runId: run.runId });
+  const [approval] = await orchestrator.repository.listApprovals({ runId: run.runId, status: 'PENDING' });
+
+  assert.equal(result.state, 'WAITING_HUMAN');
+  assert.equal(run.state, 'WAITING_HUMAN');
+  assert.equal(task.state, 'WAITING_HUMAN');
+  assert.equal(prepareCalls, 0);
+  assert.deepEqual(new Set(readdirSync(workRoot)), workBefore);
+  assert.equal(approval.trigger, 'TASK_PREPARATION_FAILED');
+  assert.equal(approval.request.error.code, 'TARGET_REPOSITORY_MISSING');
+  assert.deepEqual(approval.request.options.map((option) => option.option_id), ['RETRY_SAME_AGENT', 'ABORT']);
+  assert.equal(targetProjectRootAbs.includes('preparation-target-'), true);
+});
+
+test('a Git worktree preparation failure removes the newly reserved empty workspace', async (t) => {
+  let prepareCalls = 0;
+  const { workflowId, orchestrator, workRoot, workBefore } = await createPreparationWorkflow(t, {
+    inspectTarget(path) { return { targetProjectRootAbs: path, headCommit: '1'.repeat(40) }; },
+    prepare() { prepareCalls += 1; throw Object.assign(new Error('git worktree add failed'), { code: 'GIT_COMMAND_FAILED' }); },
+  });
+
+  const result = await orchestrator.tick(workflowId);
+  const run = await orchestrator.repository.getRun(workflowId);
+  const [task] = await orchestrator.repository.listTasks({ runId: run.runId });
+  const [approval] = await orchestrator.repository.listApprovals({ runId: run.runId, status: 'PENDING' });
+
+  assert.equal(result.state, 'WAITING_HUMAN');
+  assert.equal(run.state, 'WAITING_HUMAN');
+  assert.equal(task.state, 'WAITING_HUMAN');
+  assert.equal(prepareCalls, 1);
+  assert.deepEqual(new Set(readdirSync(workRoot)), workBefore);
+  assert.equal(approval.request.error.code, 'GIT_COMMAND_FAILED');
+});
+
+test('a completed task notification identifies the published worktree and result', async (t) => {
+  const workflowId = `WF-Completion-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  const targetProjectRootAbs = join(ROOT, `completion-target-${workflowId.toLowerCase()}`);
+  const workRoot = join(ROOT, 'work');
+  const workBefore = new Set(readdirSync(workRoot));
+  const database = openKernelDatabase({ databasePath: ':memory:' });
+  t.after(() => {
+    database.close();
+    for (const name of readdirSync(workRoot)) {
+      if (!workBefore.has(name) && name.startsWith('completion-target-')) rmSync(join(workRoot, name), { recursive: true, force: true });
+    }
+  });
+  const orchestrator = createOrchestrator({
+    projectRoot: ROOT,
+    database,
+    testSandboxEnabled: false,
+    worktrees: {
+      inspectTarget() { return { targetProjectRootAbs, headCommit: '1'.repeat(40) }; },
+      prepare() { return { worktreePathAbs: ROOT, inputCommit: '1'.repeat(40) }; },
+    },
+    snapshots: {
+      async accept(input) { return { ...input, snapshotId: 'SNP-completion', snapshotKind: 'ACCEPTED', changeSummary: {} }; },
+      async recover() { throw new Error('not reached'); },
+    },
+    notificationRunner: async () => ({ exitCode: 0, stdout: '', stderr: '' }),
+    runner: async ({ messagePath }) => {
+      const message = readFileSync(messagePath, 'utf8');
+      const rawOutputPath = message.match(/Write exactly one result\.schema\.json object only to:\r?\n\r?\n([^\r\n]+)/u)?.[1];
+      assert.ok(rawOutputPath);
+      mkdirSync(dirname(rawOutputPath), { recursive: true });
+      writeFileSync(rawOutputPath, `${JSON.stringify({
+        schema_version: 1, workflow_id: field(message, 'workflow_id'), task_id: field(message, 'task_id'), run_id: field(message, 'run_id'),
+        agent_id: field(message, 'assigned_agent'), role: 'worker', attempt: Number(field(message, 'attempt')),
+        started_at: '2026-08-28T00:00:00.000Z', finished_at: '2026-08-28T00:01:00.000Z', result_status: 'COMPLETED',
+        summary_for_user: 'Implementation completed.', summary_for_manager: 'Implementation completed.',
+        worktree_path_abs: field(message, 'worktree_path_abs'), artifact_root_abs: dirname(dirname(rawOutputPath)),
+        input_commit: '1'.repeat(40), output_commit: '1'.repeat(40), isolation_mode: 'UNSANDBOXED_LOCAL',
+        self_validation: { preflight_passed: true, checks: [] }, artifact_manifest_hash: field(message, 'context_manifest_sha256'),
+      })}\n`);
+      return { exitCode: 0, stdout: '', stderr: '' };
+    },
+  });
+  await orchestrator.createRun({
+    schema_version: 1, request_id: `REQ-${workflowId}`, request_type: 'CREATE', workflow_id: workflowId, submitted_by: 'manager-agent',
+    manager_session_id: 'manager-session', manager_session_key: 'agent:manager:test', project_path_abs: targetProjectRootAbs,
+    original_request: 'Produce an implementation result.', route_plan: completionRoute(workflowId),
+    user_authorized: { confirmed: true, actor: 'human:test', message: 'Run it.' },
+  });
+
+  const result = await orchestrator.tick(workflowId);
+  const run = await orchestrator.repository.getRun(workflowId);
+  const [task] = await orchestrator.repository.listTasks({ runId: run.runId });
+  const notifications = await orchestrator.repository.listNotifications({ runId: run.runId, statuses: ['DELIVERED'] });
+  const completed = notifications.find((notification) => notification.type === 'TASK_COMPLETED');
+
+  assert.equal(result.state, 'ACTIVE');
+  assert.deepEqual(completed.payload.published_result, {
+    task_id: task.taskId,
+    worktree_path_abs: task.payload.worktree_path_abs,
+    artifact_root_abs: task.payload.artifact_root_abs,
+    published_output_path_abs: task.payload.published_output_path_abs,
+    output_commit: '1'.repeat(40),
+  });
+});
 
 test('disabled TEST sandbox dispatches the assigned local worktree without staging or attestation', async (t) => {
   const calls = { prepare: 0, collect: 0, cleanup: 0, runner: 0 };
@@ -311,8 +464,19 @@ test('TEST workflow imports a validated staged commit before snapshot acceptance
   });
 
   const result = await orchestrator.tick(workflowId);
+  const run = await orchestrator.repository.getRun(workflowId);
+  const [task] = await orchestrator.repository.listTasks({ runId: run.runId });
+  const notifications = await orchestrator.repository.listNotifications({ runId: run.runId, statuses: ['DELIVERED'] });
+  const terminal = notifications.find((notification) => notification.type === 'WORKFLOW_TERMINAL');
   assert.equal(result.state, 'TERMINAL');
   assert.equal(imported, true);
+  assert.deepEqual(terminal.payload.published_result, {
+    task_id: task.taskId,
+    worktree_path_abs: task.payload.worktree_path_abs,
+    artifact_root_abs: task.payload.artifact_root_abs,
+    published_output_path_abs: task.payload.published_output_path_abs,
+    output_commit: outputCommit,
+  });
 });
 
 test('TEST runner error cleans staged workspace and releases its execution lease', async (t) => {

@@ -38,10 +38,10 @@ test('retry attempts use different deterministic worktree paths', (t) => {
 test('task worktree is created in a readable project work directory', (t) => {
   const repo = repository(t); const worktrees = createGitWorktreeManager({ projectRoot: repo.root });
   const prepared = worktrees.prepare({ workflowId: 'WF-readable', taskId: 'TASK-readable', runId: 'RUN-readable', attempt: 1,
-    title: 'Add login flow', inputCommit: repo.base, targetProjectRootAbs: repo.root });
+    agentId: 'developer-agent', title: 'Add login flow', inputCommit: repo.base, targetProjectRootAbs: repo.root });
 
   assert.equal(relative(join(repo.root, 'work'), prepared.worktreePathAbs).startsWith('..'), false);
-  assert.match(prepared.worktreePathAbs, /work[\\/]snapshot-repo-[^\\/]+-add-login-flow[\\/]repo$/u);
+  assert.match(prepared.worktreePathAbs, /work[\\/]snapshot-repo-[^\\/]+[\\/]developer-agent[\\/]operation-0001[\\/]repo$/u);
   assert.doesNotMatch(prepared.worktreePathAbs, /runtime[\\/]worktrees/u);
 });
 
