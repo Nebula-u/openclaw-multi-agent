@@ -141,6 +141,33 @@ test('an Agent decision with a descriptive trigger re-dispatches the current tas
   assert.deepEqual(retried.payload.resolved_decisions, [{ decision_id: 'DEC-agent-decision-001', choice: 'PERSIST_SERVER_FILE', notes: '使用 JSON 文件。', actor: 'human:monitor' }]);
 });
 
+test('a route approval after a completed task advances without re-dispatching the task', async (t) => {
+  const database = openKernelDatabase({ databasePath: ':memory:' });
+  t.after(() => database.close());
+  const orchestrator = createOrchestrator({ projectRoot: ROOT, database, notificationRunner: async () => ({ exitCode: 0, stdout: '', stderr: '' }) });
+  const routePlan = {
+    workflow_id: 'WF-route-approval-001', route_hash: 'e'.repeat(64), display_title: 'Route approval', summary: 'Route approval',
+    steps: [{ step_id: 'requirements', kind: 'REQUIREMENTS', title: 'Requirements' }, { step_id: 'architecture', kind: 'ARCHITECTURE', title: 'Architecture' }],
+  };
+  const run = await orchestrator.repository.createRun({ workflowId: routePlan.workflow_id, request: {}, routePlan, targetProjectRootAbs: ROOT,
+    baseCommit: '1'.repeat(40), managerSessionId: 'manager-session', managerSessionKey: 'manager-key' });
+  const task = await orchestrator.repository.createTask({ runId: run.runId,
+    step: { step_id: 'requirements', kind: 'REQUIREMENTS', title: 'Requirements' }, agentId: 'requirement-agent' });
+  await orchestrator.repository.updateTask(task.taskId, { state: 'SUCCEEDED', payload: { result: { result_status: 'COMPLETED' } } });
+  await orchestrator.repository.createApproval({ runId: run.runId, taskId: task.taskId, stepId: task.stepId, trigger: 'ROUTE_STEP_APPROVAL', request: {
+    decision_id: 'DEC-route-approval-001', workflow_id: run.workflowId, task_id: task.taskId, run_id: run.runId, summary: 'Approve requirements',
+    options: [{ option_id: 'APPROVE', description: 'Continue' }],
+  } });
+
+  const active = await orchestrator.resolveApprovalCommand({ ...command(), workflow_id: run.workflowId, run_id: run.runId,
+    task_id: task.taskId, decision_id: 'DEC-route-approval-001' });
+  const completed = await orchestrator.repository.getTask(task.taskId);
+
+  assert.equal(active.currentStepIndex, 1);
+  assert.equal(completed.state, 'SUCCEEDED');
+  assert.equal(completed.attempt, 1);
+});
+
 test('TEST waits for upstream rework instead of retrying when DEVELOPMENT has no completed result', async (t) => {
   const database = openKernelDatabase({ databasePath: ':memory:' });
   t.after(() => database.close());
