@@ -628,7 +628,7 @@ export function createOrchestrator({ projectRoot: projectRootInput, database = n
       }
       return finishRun(run, 'CANCELLED', 'user declined an approval through Manager', task);
     }
-    if (approval.trigger === 'AGENT_DECISION_REQUIRED' && task) {
+    if (task?.payload?.result?.result_status === 'HUMAN_DECISION_REQUIRED') {
       const resolvedDecisions = [...(task.payload?.resolved_decisions ?? []), { decision_id: approval.decisionId, choice, notes, actor }];
       const retried = await selectedRepository.updateTask(task.taskId, { state: 'READY', attempt: task.attempt + 1,
         jsonRegenerations: 0, executionRound: task.executionRound + 1, contextManifest: {},
