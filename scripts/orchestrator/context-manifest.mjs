@@ -53,6 +53,7 @@ export function createContextManifest({ projectRoot: projectRootInput, task, pri
     artifact_root_abs: task.artifactRootAbs, allowed_write_paths_abs: [task.worktreePathAbs, join(task.artifactRootAbs, '.agent-raw')],
     forbidden_paths_abs: [inputRoot, join(task.artifactRootAbs, 'output')], required_gate_checks: task.requiredGateChecks,
     original_request_path_abs: join(inputRoot, 'user-request.md'), prior_artifacts: priorArtifacts,
+    resolved_decisions: task.resolvedDecisions ?? [],
   };
   atomicWriteJson(taskPath, taskInput); readOnly(taskPath);
   const inputs = [{ path_abs: taskPath, sha256: sha256File(taskPath), role: 'task' }];

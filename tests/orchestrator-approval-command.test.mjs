@@ -111,6 +111,76 @@ test('orchestrator accepts a legacy approval option that uses id instead of opti
   assert.equal(active.state, 'ACTIVE');
 });
 
+test('an Agent decision approval re-dispatches the current task with the recorded choice', async (t) => {
+  const database = openKernelDatabase({ databasePath: ':memory:' });
+  t.after(() => database.close());
+  const orchestrator = createOrchestrator({ projectRoot: ROOT, database, notificationRunner: async () => ({ exitCode: 0, stdout: '', stderr: '' }) });
+  const routePlan = {
+    workflow_id: 'WF-agent-decision-001', route_hash: 'c'.repeat(64), display_title: 'Decision', summary: 'Decision',
+    steps: [{ step_id: 'development', kind: 'DEVELOPMENT', title: 'Implement', agent_id: 'developer-agent' }, { step_id: 'test', kind: 'TEST', title: 'Test', agent_id: 'test-agent' }],
+  };
+  const run = await orchestrator.repository.createRun({ workflowId: routePlan.workflow_id, request: {}, routePlan, targetProjectRootAbs: ROOT,
+    baseCommit: '1'.repeat(40), managerSessionId: 'manager-session', managerSessionKey: 'manager-key' });
+  const task = await orchestrator.repository.createTask({ runId: run.runId,
+    step: { step_id: 'development', kind: 'DEVELOPMENT', title: 'Implement' }, agentId: 'developer-agent', inputCommit: run.baseCommit });
+  await orchestrator.repository.createApproval({ runId: run.runId, taskId: task.taskId, stepId: task.stepId, trigger: 'AGENT_DECISION_REQUIRED', request: {
+    decision_id: 'DEC-agent-decision-001', workflow_id: run.workflowId, task_id: task.taskId, run_id: run.runId, summary: 'Choose persistence',
+    options: [{ option_id: 'PERSIST_SERVER_FILE', description: 'Use a server JSON file.' }],
+  } });
+
+  const active = await orchestrator.resolveApprovalCommand({ ...command(), workflow_id: run.workflowId, run_id: run.runId,
+    task_id: task.taskId, decision_id: 'DEC-agent-decision-001', choice: 'PERSIST_SERVER_FILE', notes: '使用 JSON 文件。' });
+  const retried = await orchestrator.repository.getTask(task.taskId);
+
+  assert.equal(active.state, 'ACTIVE');
+  assert.equal(active.currentStepIndex, 0);
+  assert.equal(retried.state, 'READY');
+  assert.equal(retried.attempt, 2);
+  assert.deepEqual(retried.payload.resolved_decisions, [{ decision_id: 'DEC-agent-decision-001', choice: 'PERSIST_SERVER_FILE', notes: '使用 JSON 文件。', actor: 'human:monitor' }]);
+});
+
+test('TEST waits for upstream rework instead of retrying when DEVELOPMENT has no completed result', async (t) => {
+  const database = openKernelDatabase({ databasePath: ':memory:' });
+  t.after(() => database.close());
+  let runnerCalls = 0;
+  const orchestrator = createOrchestrator({
+    projectRoot: ROOT, database, testSandboxEnabled: false,
+    notificationRunner: async () => ({ exitCode: 0, stdout: '', stderr: '' }),
+    runner: async () => { runnerCalls += 1; throw new Error('TEST must not be dispatched'); },
+    worktrees: {
+      inspectTarget(targetProjectRootAbs) { return { targetProjectRootAbs, headCommit: '1'.repeat(40) }; },
+      prepare() { return { worktreePathAbs: ROOT, inputCommit: '1'.repeat(40) }; },
+    },
+  });
+  const routePlan = {
+    workflow_id: 'WF-upstream-missing-001', route_hash: 'd'.repeat(64), display_title: 'Upstream', summary: 'Upstream',
+    steps: [{ step_id: 'development', kind: 'DEVELOPMENT', title: 'Implement', agent_id: 'developer-agent' }, { step_id: 'test', kind: 'TEST', title: 'Test', agent_id: 'test-agent' }],
+  };
+  const run = await orchestrator.repository.createRun({ workflowId: routePlan.workflow_id, request: { original_request: 'Implement then test the application.' }, routePlan, targetProjectRootAbs: ROOT,
+    baseCommit: '1'.repeat(40), managerSessionId: 'manager-session', managerSessionKey: 'manager-key' });
+  const development = await orchestrator.repository.createTask({ runId: run.runId,
+    step: { step_id: 'development', kind: 'DEVELOPMENT', title: 'Implement' }, agentId: 'developer-agent', inputCommit: run.baseCommit });
+  await orchestrator.repository.updateTask(development.taskId, { state: 'SUCCEEDED', payload: { result: { result_status: 'HUMAN_DECISION_REQUIRED', output_commit: null } } });
+  await orchestrator.repository.updateRun(run.runId, { currentStepIndex: 1, state: 'ACTIVE' });
+
+  const waiting = await orchestrator.tick(run.workflowId);
+  const pending = (await orchestrator.repository.listApprovals({ runId: run.runId, status: 'PENDING' }))[0];
+
+  assert.equal(runnerCalls, 0);
+  assert.equal(waiting.state, 'WAITING_HUMAN');
+  assert.equal(pending.trigger, 'UPSTREAM_IMPLEMENTATION_MISSING');
+  assert.deepEqual(pending.request.options.map((option) => option.option_id), ['REWORK', 'ABORT']);
+
+  const resumed = await orchestrator.decide({ workflow_id: run.workflowId, manager_session_id: 'manager-session', manager_session_key: 'manager-key',
+    decision_id: pending.decisionId, choice: 'REWORK', notes: '请先完成开发。', user_authorized: { confirmed: true, actor: 'human:test', message: '返工。' } });
+  const retriedDevelopment = await orchestrator.repository.getTask(development.taskId);
+  const testTask = (await orchestrator.repository.listTasks({ runId: run.runId })).find((task) => task.stepId === 'test');
+  assert.equal(resumed.currentStepIndex, 0);
+  assert.equal(retriedDevelopment.state, 'READY');
+  assert.equal(retriedDevelopment.attempt, 2);
+  assert.equal(testTask.state, 'READY');
+});
+
 test('orchestrator scans approval commands from its configured runtime root', async (t) => {
   const runtimeRoot = mkdtempSync(join(tmpdir(), 'orchestrator-approval-runtime-'));
   const database = openKernelDatabase({ databasePath: ':memory:' });

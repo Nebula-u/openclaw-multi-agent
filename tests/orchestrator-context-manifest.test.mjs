@@ -54,6 +54,21 @@ test('retry context uses an attempt-specific input directory without overwriting
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
+test('retry context includes resolved task decisions for the re-dispatched Worker', () => {
+  const root = mkdtempSync(join(tmpdir(), 'orchestrator-context-decision-'));
+  try {
+    const retryTask = {
+      ...task(root),
+      attempt: 2,
+      resolvedDecisions: [{ decision_id: 'DEC-Context-001', choice: 'PERSIST_SERVER_FILE', notes: '使用服务端 JSON 文件。', actor: 'human:test' }],
+    };
+    createContextManifest({ projectRoot: ROOT, task: retryTask });
+    const inputPath = join(retryTask.artifactRootAbs, 'attempts', 'attempt-2', 'input', 'task.json');
+    const taskInput = JSON.parse(readFileSync(inputPath, 'utf8'));
+    assert.deepEqual(taskInput.resolved_decisions, retryTask.resolvedDecisions);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
 test('context creation fails closed if a run has no original user request', () => {
   const root = mkdtempSync(join(tmpdir(), 'orchestrator-context-'));
   try {

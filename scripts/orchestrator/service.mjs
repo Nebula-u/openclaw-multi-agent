@@ -104,6 +104,26 @@ function retryExhaustedApprovalRequest(task) {
   };
 }
 
+function upstreamImplementationApprovalRequest(run, task, upstreamTask) {
+  return {
+    decision_id: `DEC-${task.taskId.slice(5)}-${randomUUID().slice(0, 8)}`,
+    workflow_id: run.workflowId, task_id: task.taskId, run_id: run.runId,
+    summary: `测试任务 ${task.taskId} 没有可验证的 DEVELOPMENT 交付物，需要先返工实现阶段。`,
+    trigger: 'UPSTREAM_IMPLEMENTATION_MISSING', upstream_task_id: upstreamTask?.taskId ?? null,
+    options: [
+      { option_id: 'REWORK', description: '返工：重新执行上游 DEVELOPMENT 任务，再继续测试' },
+      { option_id: 'ABORT', description: '终止当前工作流，保留已记录的诊断信息' },
+    ],
+  };
+}
+
+function completedDevelopmentTask(task) {
+  const result = task?.payload?.result ?? {};
+  const outputCommit = task?.payload?.snapshot?.outputCommit ?? result.output_commit;
+  return task?.kind === 'DEVELOPMENT' && task.state === 'SUCCEEDED' && result.result_status === 'COMPLETED'
+    && /^[a-f0-9]{40}$/iu.test(outputCommit ?? '');
+}
+
 function taskPreparationApprovalRequest(run, task, error) {
   return {
     decision_id: `DEC-${task.taskId.slice(5)}-${randomUUID().slice(0, 8)}`,
@@ -326,7 +346,8 @@ export function createOrchestrator({ projectRoot: projectRootInput, database = n
       originalRequest: run.request?.original_request ?? null,
       targetProjectRootAbs: run.targetProjectRootAbs, worktreePathAbs: prepared.worktreePathAbs, artifactRootAbs,
       requiredGateChecks: GATE_CHECKS_BY_KIND[stored.kind] ?? [], contextManifestPathAbs: stored.contextManifest?.path_abs ?? null,
-      contextManifestSha256: stored.contextManifest?.sha256 ?? null };
+      contextManifestSha256: stored.contextManifest?.sha256 ?? null,
+      resolvedDecisions: stored.payload?.resolved_decisions ?? [] };
     // Context manifests created before original-request propagation did not contain
     // input/user-request.md. Regenerate those incomplete manifests before dispatch.
     const originalRequestPath = join(inputRootForAttempt(task), 'user-request.md');
@@ -344,6 +365,17 @@ export function createOrchestrator({ projectRoot: projectRootInput, database = n
     const { stored: current, task } = await taskForStep(run, step);
     if (current.state === 'SUCCEEDED') return advanceAfterSuccess(run, current, current.payload?.result ?? { summary_for_user: 'Previously published task result.' });
     if (current.state === 'WAITING_HUMAN') return { state: 'WAITING_HUMAN', task: current };
+    if (current.kind === 'TEST' && current.state === 'READY' && run.routePlan.steps.some((item) => item.kind === 'DEVELOPMENT')) {
+      const prior = await selectedRepository.listTasks({ runId: run.runId });
+      const upstream = prior.find((item) => item.kind === 'DEVELOPMENT');
+      if (!completedDevelopmentTask(upstream)) {
+        const request = upstreamImplementationApprovalRequest(run, current, upstream);
+        await selectedRepository.createApproval({ runId: run.runId, taskId: current.taskId, stepId: current.stepId, trigger: request.trigger, request });
+        const waiting = await selectedRepository.getRunById(run.runId);
+        await announce(waiting, 'HUMAN_APPROVAL_REQUIRED', { approval: request, result_summary: request.summary }, current.taskId);
+        return { state: 'WAITING_HUMAN', run: waiting, task: await selectedRepository.getTask(current.taskId) };
+      }
+    }
     if (current.state === 'FAILED') {
       if (current.attempt >= current.maxAttempts) {
         const request = retryExhaustedApprovalRequest({ ...current, workflowId: run.workflowId });
@@ -595,6 +627,34 @@ export function createOrchestrator({ projectRoot: projectRootInput, database = n
         await queueDailyReport(run, cancelled, 'CANCELLED');
       }
       return finishRun(run, 'CANCELLED', 'user declined an approval through Manager', task);
+    }
+    if (approval.trigger === 'AGENT_DECISION_REQUIRED' && task) {
+      const resolvedDecisions = [...(task.payload?.resolved_decisions ?? []), { decision_id: approval.decisionId, choice, notes, actor }];
+      const retried = await selectedRepository.updateTask(task.taskId, { state: 'READY', attempt: task.attempt + 1,
+        jsonRegenerations: 0, executionRound: task.executionRound + 1, contextManifest: {},
+        payload: { ...(task.payload ?? {}), resolved_decisions: resolvedDecisions,
+          workspace_root_abs: null, workspace_attempt: null, artifact_root_abs: null, worktree_path_abs: null } },
+      { eventType: 'TASK_AGENT_DECISION_RESOLVED', eventPayload: { decision_id: approval.decisionId, choice } });
+      const active = await selectedRepository.updateRun(run.runId, { state: 'ACTIVE', statusReason: 'agent decision resolved; current task will re-run' },
+        { eventType: 'WORKFLOW_RESUMED', eventPayload: { decision_id: approval.decisionId, choice } });
+      await announce(active, 'HUMAN_APPROVAL_RESOLVED', { decision_id: approval.decisionId, choice, actor, notes, re_dispatch_task_id: retried.taskId }, retried.taskId);
+      return active;
+    }
+    if (approval.trigger === 'UPSTREAM_IMPLEMENTATION_MISSING' && task && choice === 'REWORK') {
+      const upstream = approval.request?.upstream_task_id ? await selectedRepository.getTask(approval.request.upstream_task_id) : null;
+      const upstreamIndex = upstream ? run.routePlan.steps.findIndex((step) => step.step_id === upstream.stepId) : -1;
+      if (!upstream || upstreamIndex < 0) throw Object.assign(new Error('upstream DEVELOPMENT task is unavailable for rework'), { code: 'UPSTREAM_REWORK_TARGET_MISSING' });
+      await selectedRepository.updateTask(upstream.taskId, { state: 'READY', attempt: upstream.attempt + 1,
+        jsonRegenerations: 0, executionRound: upstream.executionRound + 1, contextManifest: {},
+        payload: { ...(upstream.payload ?? {}), rework_authorization: { decision_id: approval.decisionId, choice, notes, actor },
+          workspace_root_abs: null, workspace_attempt: null, artifact_root_abs: null, worktree_path_abs: null } },
+      { eventType: 'TASK_UPSTREAM_REWORK_APPROVED', eventPayload: { decision_id: approval.decisionId, source_task_id: task.taskId } });
+      await selectedRepository.updateTask(task.taskId, { state: 'READY', contextManifest: {},
+        payload: { ...(task.payload ?? {}), workspace_root_abs: null, workspace_attempt: null, artifact_root_abs: null, worktree_path_abs: null } });
+      const active = await selectedRepository.updateRun(run.runId, { state: 'ACTIVE', currentStepIndex: upstreamIndex, statusReason: 'user approved upstream development rework' },
+        { eventType: 'WORKFLOW_REWOUND_FOR_REWORK', eventPayload: { decision_id: approval.decisionId, source_task_id: task.taskId, upstream_task_id: upstream.taskId } });
+      await announce(active, 'TASK_REWORK_APPROVED', { task_id: upstream.taskId, decision_id: approval.decisionId, choice, actor, notes }, upstream.taskId);
+      return active;
     }
     if (['RETRY_SAME_AGENT', 'REWORK', 'REVISE'].includes(choice) && task) {
       const exhausted = pending.trigger === 'TASK_RETRY_EXHAUSTED';
