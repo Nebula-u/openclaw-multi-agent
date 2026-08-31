@@ -1,13 +1,18 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { cpSync, existsSync, mkdtempSync, realpathSync, rmSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import test from 'node:test';
 import { createManagerControl } from '../scripts/manager-control/service.mjs';
 import { run as runManagerControl } from '../scripts/manager-control/cli.mjs';
 import { openKernelDatabase } from '../scripts/control-kernel/database.mjs';
 import { createWorkflowRepository } from '../scripts/control-kernel/workflow-repository.mjs';
+import { createManagerRequestProcessor } from '../scripts/orchestrator/manager-request-queue.mjs';
+import { atomicWriteJson } from '../scripts/runtime-core/atomic-store.mjs';
+
+const ROOT = resolve(process.cwd());
 
 function fixture(t, options = {}) {
   const projectRoot = mkdtempSync(join(tmpdir(), 'manager-control-'));
@@ -155,6 +160,86 @@ test('manager control reports the latest published task location for its bound w
   const status = runManagerControl(['orchestrator-status', '--workflow-id', run.workflowId, '--manager-session-id', 'manager-session', '--manager-session-key', 'manager-key'], output, { runtimeRoot });
 
   assert.deepEqual(status.published_result, publishedResult);
+});
+
+test('manager control reports a bound rejected request before it is stored in SQLite', async (t) => {
+  const runtimeRoot = mkdtempSync(join(tmpdir(), 'manager-control-rejected-request-'));
+  const database = openKernelDatabase({ databasePath: join(runtimeRoot, 'control', 'kernel.db') });
+  t.after(() => { database.close(); rmSync(runtimeRoot, { recursive: true, force: true }); });
+  const request = {
+    schema_version: 1, request_id: 'REQ-rejected-status', request_type: 'CREATE', workflow_id: 'WF-rejected-status', submitted_by: 'manager-agent',
+    manager_session_id: 'manager-session', manager_session_key: 'manager-key', project_path_abs: ROOT, original_request: 'Build a demo',
+    route_plan: {
+      schema_version: 1, workflow_id: 'WF-rejected-status', request_class: 'ANALYSIS_ONLY', summary: 'Review the codebase.', display_title: 'This title is too long', risk_flags: [],
+      steps: [{ step_id: 'review', kind: 'CODE_REVIEW', title: 'Review', rationale: 'The user requested a review.', human_approval_after: false, approval_reason: null }],
+      skipped_stages: ['REQUIREMENTS', 'ARCHITECTURE', 'DESIGN', 'DEVELOPMENT', 'TEST', 'RELEASE'].map((kind) => ({ kind, reason: 'Not required for this request.' })),
+    },
+    user_authorized: { confirmed: true, actor: 'human:liuxu', message: 'Run the confirmed route.' },
+  };
+  const queue = createManagerRequestProcessor({
+    projectRoot: ROOT,
+    orchestrator: { projectRoot: ROOT, runtimeRoot, async createRun() { throw new Error('must not create a rejected run'); }, async tickAll() { return []; } },
+  });
+  atomicWriteJson(join(queue.requests, 'rejected-status.json'), request);
+  await queue.processFile('rejected-status.json');
+  const output = { value: '', write(value) { this.value += value; } };
+
+  const status = runManagerControl(['orchestrator-status', '--workflow-id', request.workflow_id, '--manager-session-id', 'manager-session', '--manager-session-key', 'manager-key'], output, { runtimeRoot });
+
+  assert.equal(status.state, 'REQUEST_REJECTED');
+  assert.equal(status.run_id, null);
+  assert.equal(status.request.request_id, request.request_id);
+  assert.equal(status.request.request_type, request.request_type);
+  assert.equal(status.request.status, 'REJECTED');
+  assert.equal(status.request.error.code, 'ROUTE_PLAN_SCHEMA_INVALID');
+  assert.match(status.request.error.message, /route plan failed JSON Schema validation/u);
+  assert.equal(typeof status.request.processed_at, 'string');
+});
+
+test('manager control recognizes a legacy rejected receipt with missing identity fields', (t) => {
+  const runtimeRoot = mkdtempSync(join(tmpdir(), 'manager-control-legacy-receipt-'));
+  const database = openKernelDatabase({ databasePath: join(runtimeRoot, 'control', 'kernel.db') });
+  t.after(() => { database.close(); rmSync(runtimeRoot, { recursive: true, force: true }); });
+  const requestRoot = join(runtimeRoot, 'agents', 'manager-agent', 'workspace', '.orchestrator');
+  mkdirSync(join(requestRoot, 'requests'), { recursive: true });
+  mkdirSync(join(requestRoot, 'receipts'), { recursive: true });
+  const request = { request_id: 'REQ-legacy-receipt', request_type: 'CREATE', workflow_id: 'WF-legacy-receipt', manager_session_id: 'manager-session', manager_session_key: 'manager-key' };
+  const requestPath = join(requestRoot, 'requests', 'legacy.json');
+  atomicWriteJson(requestPath, request);
+  const inputSha256 = createHash('sha256').update(readFileSync(requestPath, 'utf8'), 'utf8').digest('hex');
+  atomicWriteJson(join(requestRoot, 'receipts', 'legacy.json.receipt.json'), {
+    schema_version: 1, request_id: null, request_type: null, workflow_id: null, input_sha256: inputSha256,
+    status: 'REJECTED', processed_at: '2026-08-31T00:00:00.000Z', error: { code: 'ROUTE_PLAN_SCHEMA_INVALID', message: 'Route plan is invalid', details: null },
+  });
+  const output = { value: '', write(value) { this.value += value; } };
+
+  const status = runManagerControl(['orchestrator-status', '--workflow-id', request.workflow_id, '--manager-session-id', 'manager-session', '--manager-session-key', 'manager-key'], output, { runtimeRoot });
+
+  assert.equal(status.state, 'REQUEST_REJECTED');
+  assert.equal(status.request.request_id, request.request_id);
+  assert.equal(status.request.error.code, 'ROUTE_PLAN_SCHEMA_INVALID');
+});
+
+test('manager control keeps SQLite workflow status authoritative over a matching request receipt', async (t) => {
+  const runtimeRoot = mkdtempSync(join(tmpdir(), 'manager-control-sqlite-authority-'));
+  const database = openKernelDatabase({ databasePath: join(runtimeRoot, 'control', 'kernel.db') });
+  t.after(() => { database.close(); rmSync(runtimeRoot, { recursive: true, force: true }); });
+  const repository = createWorkflowRepository({ database });
+  const run = await repository.createRun({ workflowId: 'WF-sqlite-authority', request: {}, targetProjectRootAbs: runtimeRoot, baseCommit: '1'.repeat(40),
+    managerSessionId: 'manager-session', managerSessionKey: 'manager-key', routePlan: { steps: [], route_hash: 'a'.repeat(64) } });
+  const requestRoot = join(runtimeRoot, 'agents', 'manager-agent', 'workspace', '.orchestrator');
+  mkdirSync(join(requestRoot, 'requests'), { recursive: true });
+  mkdirSync(join(requestRoot, 'receipts'), { recursive: true });
+  const request = { request_id: 'REQ-shadow', request_type: 'CREATE', workflow_id: run.workflowId, manager_session_id: 'manager-session', manager_session_key: 'manager-key' };
+  writeFileSync(join(requestRoot, 'requests', 'shadow.json'), JSON.stringify(request));
+  writeFileSync(join(requestRoot, 'receipts', 'shadow.json.receipt.json'), JSON.stringify({ request_id: request.request_id, request_type: request.request_type, workflow_id: request.workflow_id, status: 'REJECTED' }));
+  const output = { value: '', write(value) { this.value += value; } };
+
+  const status = runManagerControl(['orchestrator-status', '--workflow-id', run.workflowId, '--manager-session-id', 'manager-session', '--manager-session-key', 'manager-key'], output, { runtimeRoot });
+
+  assert.equal(status.run_id, run.runId);
+  assert.notEqual(status.state, 'REQUEST_REJECTED');
+  assert.equal(status.request, undefined);
 });
 
 test('manager control queues a session-bound user-authorized pause command', async (t) => {

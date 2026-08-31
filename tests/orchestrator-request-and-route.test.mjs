@@ -69,6 +69,35 @@ test('Manager request queue requires session-bound requests and records a receip
   assert.equal((await queue.processFile('missing-session.json')).status, 'REJECTED');
 });
 
+test('Manager request queue preserves request identity when route validation rejects a request', async () => {
+  const workspace = mkdtempSync(join(tmpdir(), 'orchestrator-manager-rejected-'));
+  const calls = [];
+  const orchestrator = {
+    projectRoot: ROOT,
+    async createRun(request) { calls.push(request); return { runId: 'RUN-unexpected', routeHash: 'a'.repeat(64) }; },
+    async reviseRun() { throw new Error('not used'); },
+    async decide() { throw new Error('not used'); },
+    async tickAll() { return []; },
+  };
+  const queue = createManagerRequestProcessor({ orchestrator, projectRoot: ROOT, managerWorkspace: workspace });
+  const request = {
+    schema_version: 1, request_id: 'REQ-rejected-route', request_type: 'CREATE', workflow_id: 'WF-rejected-route', submitted_by: 'manager-agent',
+    manager_session_id: 'manager-session', manager_session_key: 'agent:manager:source', project_path_abs: ROOT, original_request: 'Build a demo', route_plan: routePlan('WF-rejected-route'),
+    user_authorized: { confirmed: true, actor: 'human:liuxu', message: 'Run the confirmed route.' },
+  };
+  request.route_plan.display_title = 'This title is too long';
+  atomicWriteJson(join(queue.requests, 'rejected-route.json'), request);
+
+  const receipt = await queue.processFile('rejected-route.json');
+
+  assert.equal(receipt.status, 'REJECTED');
+  assert.equal(receipt.request_id, request.request_id);
+  assert.equal(receipt.request_type, request.request_type);
+  assert.equal(receipt.workflow_id, request.workflow_id);
+  assert.equal(receipt.error.code, 'ROUTE_PLAN_SCHEMA_INVALID');
+  assert.equal(calls.length, 0);
+});
+
 test('Manager request validation rejects invalid route metadata before orchestration', () => {
   const request = {
     schema_version: 1, request_id: 'REQ-002', request_type: 'CREATE', workflow_id: 'WF-Route-002', submitted_by: 'manager-agent',

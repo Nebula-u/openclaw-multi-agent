@@ -7,6 +7,14 @@ import { assertManagerRequest } from './request-validation.mjs';
 const PROCESSED_NOW = Symbol('processedNow');
 function sha256(value) { return createHash('sha256').update(value, 'utf8').digest('hex'); }
 function requestRoot(projectRoot, managerWorkspace, runtimeRoot) { return join(resolve(managerWorkspace ?? join(runtimeRoot ?? join(projectRoot, 'runtime'), 'agents', 'manager-agent', 'workspace')), '.orchestrator'); }
+function requestIdentity(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return { requestId: null, requestType: null, workflowId: null };
+  return {
+    requestId: typeof value.request_id === 'string' ? value.request_id : null,
+    requestType: typeof value.request_type === 'string' ? value.request_type : null,
+    workflowId: typeof value.workflow_id === 'string' ? value.workflow_id : null,
+  };
+}
 
 export function createManagerRequestProcessor({ orchestrator, projectRoot: projectRootInput, managerWorkspace = null } = {}) {
   if (!orchestrator) throw new TypeError('orchestrator is required');
@@ -28,9 +36,10 @@ export function createManagerRequestProcessor({ orchestrator, projectRoot: proje
       const existing = JSON.parse(readFileSync(receiptPath, 'utf8'));
       if (existing.input_sha256 === inputSha256) return existing;
     }
-    let request;
+    let request; let identity = { requestId: null, requestType: null, workflowId: null };
     try {
-      request = assertRequest(JSON.parse(raw));
+      const parsed = JSON.parse(raw); identity = requestIdentity(parsed);
+      request = assertRequest(parsed);
       let run;
       if (request.request_type === 'CREATE') run = await orchestrator.createRun(request);
       else if (request.request_type === 'CHANGE') run = await orchestrator.reviseRun(request);
@@ -39,7 +48,7 @@ export function createManagerRequestProcessor({ orchestrator, projectRoot: proje
         status: 'ACCEPTED', input_sha256: inputSha256, run_id: run.runId, route_hash: run.routeHash ?? null, processed_at: new Date().toISOString() };
       atomicWriteJson(receiptPath, receipt); Object.defineProperty(receipt, PROCESSED_NOW, { value: true }); return receipt;
     } catch (error) {
-      const receipt = { schema_version: 1, request_id: request?.request_id ?? null, request_type: request?.request_type ?? null, workflow_id: request?.workflow_id ?? null,
+      const receipt = { schema_version: 1, request_id: request?.request_id ?? identity.requestId, request_type: request?.request_type ?? identity.requestType, workflow_id: request?.workflow_id ?? identity.workflowId,
         status: 'REJECTED', input_sha256: inputSha256, error: { code: error.code ?? 'MANAGER_REQUEST_FAILED', message: error.message, details: error.details ?? null }, processed_at: new Date().toISOString() };
       atomicWriteJson(receiptPath, receipt); return receipt;
     }
