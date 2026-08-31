@@ -611,7 +611,7 @@ export function createOrchestrator({ projectRoot: projectRootInput, database = n
     }
     const nextIndex = run.currentStepIndex + 1;
     const resumed = await selectedRepository.updateRun(run.runId, { state: 'ACTIVE', currentStepIndex: nextIndex, statusReason: 'human approval accepted' }, { eventType: 'WORKFLOW_RESUMED', eventPayload: { decision_id: approval.decisionId, choice } });
-    await announce(resumed, 'HUMAN_APPROVAL_RESOLVED', { decision_id: approval.decisionId, choice }, task?.taskId ?? null);
+    await announce(resumed, 'HUMAN_APPROVAL_RESOLVED', { decision_id: approval.decisionId, choice, actor, notes }, task?.taskId ?? null);
     return nextIndex >= run.routePlan.steps.length ? finishRun(resumed, 'SUCCEEDED', 'all route steps approved') : resumed;
   }
 

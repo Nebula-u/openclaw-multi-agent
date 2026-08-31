@@ -94,12 +94,16 @@ export function readOrchestratorStatus({ runtimeRoot: runtimeRootInput, workflow
     }
     assertBinding(run, managerSessionId, managerSessionKey);
     const approvalRow = database.get("SELECT decision_id,task_id,step_id,trigger,request FROM approvals WHERE run_id=? AND status='PENDING' ORDER BY created_at DESC LIMIT 1", [run.runId]);
+    const resolvedRow = database.get("SELECT decision_id,response,resolved_at FROM approvals WHERE run_id=? AND status='RESOLVED' ORDER BY resolved_at DESC LIMIT 1", [run.runId]);
     const pending = approvalRow ? { decisionId: approvalRow.decision_id, taskId: approvalRow.task_id, stepId: approvalRow.step_id,
       trigger: approvalRow.trigger, request: approvalRow.request ? JSON.parse(approvalRow.request) : {} } : null;
+    const response = resolvedRow?.response ? JSON.parse(resolvedRow.response) : null;
     const latestSucceededTask = database.get("SELECT task_id,task_payload FROM tasks WHERE run_id=? AND state='SUCCEEDED' ORDER BY updated_at DESC,created_at DESC LIMIT 1", [run.runId]);
     return { workflow_id: run.workflowId, run_id: run.runId, state: run.state, current_step_index: run.currentStepIndex,
       pending_approval: pending ? { decision_id: pending.decisionId, task_id: pending.taskId, step_id: pending.stepId, summary: pending.request?.summary ?? pending.trigger,
         options: pending.request?.options ?? [] } : null,
+      latest_resolved_approval: resolvedRow ? { decision_id: resolvedRow.decision_id, choice: response?.outcome ?? null, actor: response?.actor ?? null,
+        notes: response?.notes ?? '', resolved_at: resolvedRow.resolved_at } : null,
       published_result: publishedResult(latestSucceededTask) };
   } finally { database.close(); }
 }
