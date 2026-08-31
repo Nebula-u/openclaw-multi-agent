@@ -123,6 +123,7 @@ test('an Agent decision with a descriptive trigger re-dispatches the current tas
     baseCommit: '1'.repeat(40), managerSessionId: 'manager-session', managerSessionKey: 'manager-key' });
   const task = await orchestrator.repository.createTask({ runId: run.runId,
     step: { step_id: 'development', kind: 'DEVELOPMENT', title: 'Implement' }, agentId: 'developer-agent', inputCommit: run.baseCommit });
+  await orchestrator.repository.updateTask(task.taskId, { state: 'SUCCEEDED', payload: { result: { result_status: 'HUMAN_DECISION_REQUIRED' } } });
   const descriptiveTrigger = '需求存在影响范围或验收方式的关键歧义；实现存在明显不同取舍的方向（APPROVAL_RULES §1.1/§1.2）';
   await orchestrator.repository.createApproval({ runId: run.runId, taskId: task.taskId, stepId: task.stepId, trigger: descriptiveTrigger, request: {
     decision_id: 'DEC-agent-decision-001', workflow_id: run.workflowId, task_id: task.taskId, run_id: run.runId, summary: 'Choose persistence',
