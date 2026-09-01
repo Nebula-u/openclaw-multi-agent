@@ -314,6 +314,17 @@ test('staging permissions let configured image UID 10001 write repo/output/logs 
   await sandbox.cleanup(staged);
 });
 
+test('staging preserves special workspace mode bits while adding container traversal', async (t) => {
+  const value = fixture();
+  t.after(() => rmSync(value.root, { recursive: true, force: true }));
+  chmodSync(value.workspace, 0o2700);
+  const sandbox = createStager(value.workspace);
+  const staged = await sandbox.prepare(value.task);
+
+  assert.equal(statSync(value.workspace).mode & 0o7777, 0o2705);
+  await sandbox.cleanup(staged);
+});
+
 test('Docker configured image can use a real staged bind without writing immutable input', { timeout: 30_000 }, async (t) => {
   if (process.platform !== 'linux') return t.skip('requires a native Linux Docker Engine host to verify bind-mount immutability');
   const daemon = spawnSync('docker', ['version', '--format', '{{.Server.Version}}'], { encoding: 'utf8', shell: false });
@@ -346,6 +357,33 @@ test('Docker configured image can use a real staged bind without writing immutab
   assert.equal(readFileSync(join(staged.executionWorktreeAbs, 'tests', 'container.test.js'), 'utf8'), 'assert.equal(1, 1);\n');
   assert.equal(readFileSync(staged.executionRawOutputPath, 'utf8'), '{}\n');
   assert.equal(readFileSync(join(staged.executionRawLogsRootAbs, 'e2e.log'), 'utf8'), 'log\n');
+});
+
+test('staging makes a restrictive host workspace traversable by the configured test container', { timeout: 30_000 }, async (t) => {
+  if (process.platform !== 'linux') return t.skip('requires a native Linux Docker Engine host to verify workspace traversal');
+  const daemon = spawnSync('docker', ['version', '--format', '{{.Server.Version}}'], { encoding: 'utf8', shell: false });
+  const image = SANDBOX_PROFILE.docker.image;
+  const inspected = spawnSync('docker', ['image', 'inspect', image], { encoding: 'utf8', shell: false });
+  if (daemon.status !== 0 || inspected.status !== 0) return t.skip(`Docker daemon/configured image unavailable: ${image}`);
+  const value = fixture();
+  chmodSync(value.workspace, 0o700);
+  const sandbox = createStager(value.workspace);
+  const staged = await sandbox.prepare(value.task);
+  t.after(async () => { await sandbox.cleanup(staged); rmSync(value.root, { recursive: true, force: true }); });
+
+  const script = [
+    'test "$(id -u):$(id -g)" = "10001:10001"',
+    'test ! -w /workspace',
+    'test -r /workspace/.task-sandbox/input/task.json',
+    'test ! -w /workspace/.task-sandbox/input/task.json',
+    'test -w /workspace/.task-sandbox/repo',
+    'test -w /workspace/.task-sandbox/output',
+    'test -w /workspace/.task-sandbox/raw-logs',
+  ].join(' && ');
+  const result = spawnSync('docker', ['run', '--rm', '--network', 'none', '--read-only', '--cap-drop', 'ALL', '--pids-limit', '256',
+    '--memory', '2g', '--cpus', '2', '--volume', `${value.workspace}:/workspace`, image, 'bash', '-lc', script],
+  { encoding: 'utf8', shell: false, timeout: 25_000 });
+  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
 });
 
 test('cleanup handles restrictive container-owned staging and releases the OS lease', { timeout: 30_000 }, async (t) => {
