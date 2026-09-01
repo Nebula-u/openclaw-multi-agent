@@ -7,6 +7,7 @@ import { atomicWriteJson } from '../runtime-core/atomic-store.mjs';
 const WORKFLOW = /^WF-[A-Za-z0-9][A-Za-z0-9-]*$/u;
 const PROJECT = /^[a-z0-9][a-z0-9-]{0,62}$/u;
 const SHA = /^[a-f0-9]{40}$/u;
+const URL_PATH = /^\/[a-z0-9][a-z0-9-]{0,80}$/u;
 const ONLINE_VERIFY_TIMEOUT_MS = 15_000;
 const ONLINE_VERIFY_SCRIPT = `
 const url = process.argv[1];
@@ -57,7 +58,11 @@ export function createReleaseControl({ runtimeRoot: runtimeRootInput, policyPath
     if (value.deployment_entrypoint !== null && (typeof value.deployment_entrypoint !== 'string' || !isAbsolute(value.deployment_entrypoint))) {
       fail('RELEASE_DEPLOYMENT_POLICY_INVALID', 'deployment entrypoint must be null or an absolute path');
     }
-    return value;
+    const reservedUrlPaths = value.reserved_url_paths ?? [];
+    if (!Array.isArray(reservedUrlPaths) || new Set(reservedUrlPaths).size !== reservedUrlPaths.length || reservedUrlPaths.some((path) => typeof path !== 'string' || !URL_PATH.test(path))) {
+      fail('RELEASE_DEPLOYMENT_POLICY_INVALID', 'reserved URL paths must be unique absolute lowercase project paths');
+    }
+    return { ...value, reserved_url_paths: reservedUrlPaths };
   }
   function registry() {
     if (!existsSync(registryPath)) return { schema_version: 1, reservations: {} };
@@ -86,7 +91,7 @@ export function createReleaseControl({ runtimeRoot: runtimeRootInput, policyPath
       if (existing.candidate_commit !== candidateCommit) fail('RELEASE_PREFLIGHT_COMMIT_CHANGED', 'a new candidate commit requires a new deployment route');
       return result(existing);
     }
-    const used = new Set(Object.values(value.reservations).map((item) => item.url_path));
+    const used = new Set([...configured.reserved_url_paths, ...Object.values(value.reservations).map((item) => item.url_path)]);
     let suffix = 1; let urlPath = `/${projectId}`;
     while (used.has(urlPath)) { suffix += 1; urlPath = `/${projectId}-${suffix}`; }
     const reservation = {

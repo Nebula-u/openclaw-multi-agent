@@ -9,11 +9,11 @@ import { run as runReleaseControl } from '../scripts/release-control/cli.mjs';
 
 const SHA = '1'.repeat(40);
 
-function setup(t, { deploymentEntrypoint = null, runDeployment = null, verifyOnline = () => ({ status: 200 }) } = {}) {
+function setup(t, { deploymentEntrypoint = null, runDeployment = null, verifyOnline = () => ({ status: 200 }), reservedUrlPaths = [] } = {}) {
   const runtimeRoot = mkdtempSync(join(tmpdir(), 'release-control-'));
   const policyPath = join(runtimeRoot, 'release-control', 'release-control-policy.json');
   mkdirSync(join(runtimeRoot, 'release-control'), { recursive: true });
-  writeFileSync(policyPath, `${JSON.stringify({ schema_version: 1, base_url: 'https://multiagentforge.cloud', deployment_target: 'current-server', deployment_entrypoint: deploymentEntrypoint })}\n`);
+  writeFileSync(policyPath, `${JSON.stringify({ schema_version: 1, base_url: 'https://multiagentforge.cloud', deployment_target: 'current-server', deployment_entrypoint: deploymentEntrypoint, reserved_url_paths: reservedUrlPaths })}\n`);
   const database = openKernelDatabase({ databasePath: join(runtimeRoot, 'control', 'kernel.db') });
   t.after(() => { database.close(); rmSync(runtimeRoot, { recursive: true, force: true }); });
   return { runtimeRoot, database, control: createReleaseControl({ runtimeRoot, policyPath, runDeployment, verifyOnline }) };
@@ -44,6 +44,16 @@ test('Release 为共享基础域名中的不同项目分配稳定且不冲突的
   assert.deepEqual(repeated, first);
   assert.equal(second.url_path, '/todo-list-2');
   assert.equal(second.final_url, 'https://multiagentforge.cloud/todo-list-2');
+});
+
+test('Release 不会分配反向代理保留的 Monitor 和 API 路径', (t) => {
+  const { control } = setup(t, { reservedUrlPaths: ['/monitor', '/api'] });
+
+  const monitor = control.preflight({ workflowId: 'WF-Release-Reserved-Monitor', projectId: 'monitor', candidateCommit: SHA });
+  const api = control.preflight({ workflowId: 'WF-Release-Reserved-Api', projectId: 'api', candidateCommit: SHA });
+
+  assert.equal(monitor.url_path, '/monitor-2');
+  assert.equal(api.url_path, '/api-2');
 });
 
 test('Release 只在已批准的候选提交和路径上调用固定部署入口', (t) => {
