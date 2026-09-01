@@ -1,12 +1,13 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { cpSync, existsSync, linkSync, mkdtempSync, realpathSync, rmSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, linkSync, mkdtempSync, realpathSync, renameSync, rmSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import test from 'node:test';
 import { createManagerControl } from '../scripts/manager-control/service.mjs';
 import { run as runManagerControl } from '../scripts/manager-control/cli.mjs';
+import { createManagerRequestSubmission } from '../scripts/manager-control/request-submission.mjs';
 import { openKernelDatabase } from '../scripts/control-kernel/database.mjs';
 import { createWorkflowRepository } from '../scripts/control-kernel/workflow-repository.mjs';
 import { createManagerRequestProcessor } from '../scripts/orchestrator/manager-request-queue.mjs';
@@ -147,6 +148,40 @@ test('manager control refuses submission when a validated draft changes', (t) =>
   assert.equal(existsSync(join(requestRoot, 'requests', 'deploy.json')), false);
 });
 
+test('manager control validates and publishes the same captured draft bytes when its path is replaced', (t) => {
+  const { runtimeRoot, draftPath, requestRoot, raw } = requestDraftFixture(t);
+  const expectedSha256 = createHash('sha256').update(raw, 'utf8').digest('hex');
+  const replacement = `${JSON.stringify({ ...deploymentRequest(), request_id: 'REQ-replacement' })}\n`;
+  let validatorInput;
+  const submission = createManagerRequestSubmission({
+    runtimeRoot,
+    projectRoot: ROOT,
+    runValidator(input) {
+      validatorInput = input;
+      renameSync(draftPath, `${draftPath}.captured`);
+      writeFileSync(draftPath, replacement);
+      const request = JSON.parse(input.toString('utf8'));
+      return {
+        status: 0,
+        stdout: JSON.stringify({
+          ok: true,
+          request_id: request.request_id,
+          request_type: request.request_type,
+          workflow_id: request.workflow_id,
+        }),
+      };
+    },
+  });
+
+  const result = submission.submitDraft('deploy.json', expectedSha256);
+
+  assert.equal(Buffer.isBuffer(validatorInput), true);
+  assert.equal(validatorInput.equals(Buffer.from(raw)), true);
+  assert.equal(result.request_id, 'REQ-manager-draft-001');
+  assert.equal(result.input_sha256, expectedSha256);
+  assert.equal(readFileSync(join(requestRoot, 'requests', 'deploy.json'), 'utf8'), raw);
+});
+
 test('manager control preserves authoritative validation details without publishing an invalid draft', (t) => {
   const { runtimeRoot, draftPath, requestRoot } = requestDraftFixture(t);
   const output = { value: '', write(value) { this.value += value; } };
@@ -170,8 +205,11 @@ test('manager control confines drafts and rejects linked or existing formal targ
     assert.throws(() => validate(name), (error) => error.code === 'MANAGER_REQUEST_DRAFT_NAME_INVALID');
   }
 
-  symlinkSync(draftPath, join(requestRoot, 'drafts', 'linked.json'));
-  assert.throws(() => validate('linked.json'), (error) => error.code === 'MANAGER_REQUEST_DRAFT_UNSAFE');
+  try { symlinkSync(draftPath, join(requestRoot, 'drafts', 'linked.json')); }
+  catch { t.diagnostic('current platform does not permit creating a file symlink'); }
+  if (existsSync(join(requestRoot, 'drafts', 'linked.json'))) {
+    assert.throws(() => validate('linked.json'), (error) => error.code === 'MANAGER_REQUEST_DRAFT_UNSAFE');
+  }
   linkSync(draftPath, join(requestRoot, 'drafts', 'hardlinked.json'));
   assert.throws(() => validate('hardlinked.json'), (error) => error.code === 'MANAGER_REQUEST_DRAFT_UNSAFE');
 
@@ -187,6 +225,81 @@ test('manager control confines drafts and rejects linked or existing formal targ
   assert.throws(
     () => runManagerControl(['orchestrator-submit-request', '--draft-file', 'deploy.json', '--expected-sha256', validated.input_sha256], output, { runtimeRoot, projectRoot: ROOT }),
     (error) => error.code === 'MANAGER_REQUEST_TARGET_EXISTS',
+  );
+});
+
+test('manager control uses the fixed installed workspace and never creates request directories', (t) => {
+  const runtimeRoot = mkdtempSync(join(tmpdir(), 'manager-control-boundary-'));
+  const outside = mkdtempSync(join(tmpdir(), 'manager-control-boundary-outside-'));
+  t.after(() => { rmSync(runtimeRoot, { recursive: true, force: true }); rmSync(outside, { recursive: true, force: true }); });
+  const control = join(runtimeRoot, 'control');
+  const workspace = join(runtimeRoot, 'agents', 'manager-agent', 'workspace');
+  mkdirSync(control, { recursive: true });
+  mkdirSync(workspace, { recursive: true });
+  writeFileSync(join(control, 'install-manifest.json'), `${JSON.stringify({
+    project_root_abs: ROOT,
+    agents: [{ id: 'manager-agent', workspace_abs: outside }],
+  })}\n`);
+
+  assert.throws(
+    () => createManagerRequestSubmission({ runtimeRoot }),
+    (error) => error.code === 'MANAGER_REQUEST_DIRECTORY_UNSAFE',
+  );
+  assert.equal(existsSync(join(workspace, '.orchestrator')), false);
+  assert.equal(existsSync(join(outside, '.orchestrator')), false);
+});
+
+test('manager control rejects a linked request root before creating directories outside the runtime', (t) => {
+  const runtimeRoot = mkdtempSync(join(tmpdir(), 'manager-control-ancestor-link-'));
+  const outside = mkdtempSync(join(tmpdir(), 'manager-control-ancestor-link-outside-'));
+  t.after(() => { rmSync(runtimeRoot, { recursive: true, force: true }); rmSync(outside, { recursive: true, force: true }); });
+  const workspace = join(runtimeRoot, 'agents', 'manager-agent', 'workspace');
+  mkdirSync(workspace, { recursive: true });
+  try { symlinkSync(outside, join(workspace, '.orchestrator'), 'junction'); }
+  catch { t.skip('current platform does not permit creating a directory link'); return; }
+
+  assert.throws(
+    () => createManagerRequestSubmission({ runtimeRoot, projectRoot: ROOT }),
+    (error) => error.code === 'MANAGER_REQUEST_DIRECTORY_UNSAFE',
+  );
+  assert.equal(existsSync(join(outside, 'drafts')), false);
+  assert.equal(existsSync(join(outside, 'requests')), false);
+  assert.equal(existsSync(join(outside, 'receipts')), false);
+});
+
+test('manager control refuses a dangling receipt target without publishing the request', (t) => {
+  const { runtimeRoot, requestRoot } = requestDraftFixture(t);
+  const output = { value: '', write(value) { this.value += value; } };
+  const validated = runManagerControl(['orchestrator-validate-request', '--draft-file', 'deploy.json'], output, { runtimeRoot, projectRoot: ROOT });
+  const receipt = join(requestRoot, 'receipts', 'deploy.json.receipt.json');
+  try { symlinkSync(join(requestRoot, 'receipts', 'missing.json'), receipt); }
+  catch { t.skip('current platform does not permit creating a file symlink'); return; }
+
+  assert.throws(
+    () => runManagerControl(['orchestrator-submit-request', '--draft-file', 'deploy.json', '--expected-sha256', validated.input_sha256], output, { runtimeRoot, projectRoot: ROOT }),
+    (error) => error.code === 'MANAGER_REQUEST_TARGET_EXISTS',
+  );
+  assert.equal(existsSync(join(requestRoot, 'requests', 'deploy.json')), false);
+});
+
+test('manager control draft submission rejects DECISION requests', (t) => {
+  const { runtimeRoot, draftPath } = requestDraftFixture(t, 'decision.json');
+  const output = { value: '', write(value) { this.value += value; } };
+  const decision = JSON.parse(readFileSync(join(ROOT, 'templates', 'manager-request.decision.json'), 'utf8'));
+  Object.assign(decision, {
+    request_id: 'REQ-manager-decision-001',
+    workflow_id: 'WF-manager-decision-001',
+    manager_session_id: 'manager-session',
+    manager_session_key: 'agent:manager:source',
+    decision_id: 'DEC-manager-decision-001',
+    choice: 'APPROVE',
+    user_authorized: { confirmed: true, actor: 'human:liuxu', message: 'Approve the pending decision.' },
+  });
+  writeFileSync(draftPath, `${JSON.stringify(decision)}\n`);
+
+  assert.throws(
+    () => runManagerControl(['orchestrator-validate-request', '--draft-file', 'decision.json'], output, { runtimeRoot, projectRoot: ROOT }),
+    (error) => error.code === 'MANAGER_REQUEST_DRAFT_TYPE_INVALID',
   );
 });
 

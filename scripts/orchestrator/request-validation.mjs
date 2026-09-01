@@ -33,11 +33,15 @@ export function assertManagerRequest(projectRootInput, value) {
 }
 
 export function validateManagerRequestFile(projectRootInput, requestFile) {
-  const projectRoot = resolve(projectRootInput);
   const raw = readFileSync(resolve(requestFile), 'utf8');
+  return validateManagerRequestText(projectRootInput, raw);
+}
+
+export function validateManagerRequestText(projectRootInput, raw) {
+  const projectRoot = resolve(projectRootInput);
   let value;
   try {
-    value = JSON.parse(raw);
+    value = JSON.parse(String(raw));
   } catch (error) {
     throw Object.assign(new Error('manager request is not valid JSON'), {
       code: 'MANAGER_REQUEST_JSON_INVALID',

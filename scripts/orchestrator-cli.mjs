@@ -2,8 +2,9 @@
 
 import { basename, dirname, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { readFileSync } from 'node:fs';
 import { createManagerRequestProcessor } from './orchestrator/manager-request-queue.mjs';
-import { validateManagerRequestFile } from './orchestrator/request-validation.mjs';
+import { validateManagerRequestFile, validateManagerRequestText } from './orchestrator/request-validation.mjs';
 import { createOrchestrator } from './orchestrator/service.mjs';
 import { createHrService } from './hr/service.mjs';
 import { inspectKernelDatabaseSchema, openKernelDatabase, resolveKernelConfig } from './control-kernel/database.mjs';
@@ -29,8 +30,13 @@ export async function main(argv = process.argv.slice(2)) {
   if (command === 'service-status') return emit({ ok: true, command, service: readForegroundServiceStatus(projectRoot) });
   if (command === 'stop') return emit({ ok: true, command, result: requestForegroundServiceStop(projectRoot) });
   if (command === 'validate-request') {
-    if (!options['request-file']) throw Object.assign(new Error('--request-file is required'), { code: 'REQUEST_FILE_REQUIRED' });
-    const request = validateManagerRequestFile(projectRoot, options['request-file']);
+    const requestStdin = options['request-stdin'] === 'true';
+    if (Boolean(options['request-file']) === requestStdin) {
+      throw Object.assign(new Error('exactly one of --request-file or --request-stdin true is required'), { code: 'REQUEST_INPUT_REQUIRED' });
+    }
+    const request = requestStdin
+      ? validateManagerRequestText(projectRoot, readFileSync(0, 'utf8'))
+      : validateManagerRequestFile(projectRoot, options['request-file']);
     return emit({ ok: true, command, request_id: request.request_id, workflow_id: request.workflow_id, request_type: request.request_type });
   }
   if (READ_ONLY_COMMANDS.has(command)) {
