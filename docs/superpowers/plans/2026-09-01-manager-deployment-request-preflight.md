@@ -135,7 +135,7 @@ Run:
 
 ```bash
 node --test tests/runtime-bundle.test.mjs tests/validate-install.test.mjs
-bash scripts/install.sh --dry-run --yes --runtime-root runtime
+bash scripts/install.sh --yes --runtime-root runtime
 bash scripts/validate-install.sh --runtime-root runtime
 ```
 

@@ -565,7 +565,8 @@ try {
   if (-not $IsWindows) { & chmod 755 $managerEntrypoint }
   if (-not (Test-Path -LiteralPath $managerEntrypoint -PathType Leaf)) { throw "缺少 Manager 受控执行入口：$managerEntrypoint" }
   $managerEntrypointFile = Join-Path $Manager.workspace '.orchestrator\manager-control-entrypoint.json'
-  New-Item -ItemType Directory -Force -Path (Split-Path -Parent $managerEntrypointFile) | Out-Null
+  $managerRequestRoot = Split-Path -Parent $managerEntrypointFile
+  New-Item -ItemType Directory -Force -Path $managerRequestRoot, (Join-Path $managerRequestRoot 'drafts'), (Join-Path $managerRequestRoot 'requests'), (Join-Path $managerRequestRoot 'receipts') | Out-Null
   Write-JsonAtomic -Value ([ordered]@{ schema_version = 1; entrypoint = $managerEntrypoint }) -Path $managerEntrypointFile -Depth 4
   $release = @($RegisteredPackages | Where-Object { $_.id -eq 'release-agent' }) | Select-Object -First 1
   $releaseEntrypoint = Join-Path $RuntimeRootAbs $(if ($IsWindows) { 'release-control\release-control.cmd' } else { 'release-control/release-control' })

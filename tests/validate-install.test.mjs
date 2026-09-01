@@ -522,6 +522,11 @@ test(
       assert.equal(existsSync(join(runtime, 'manager-control', 'manager-control-policy.json')), true);
       const managerEntrypoint = JSON.parse(readFileSync(join(runtime, 'agents', 'manager-agent', 'workspace', '.orchestrator', 'manager-control-entrypoint.json'), 'utf8'));
       assert.equal(managerEntrypoint.entrypoint, join(runtime, 'manager-control', 'manager-control'));
+      for (const directory of ['drafts', 'requests', 'receipts']) {
+        assert.equal(existsSync(join(runtime, 'agents', 'manager-agent', 'workspace', '.orchestrator', directory)), true);
+      }
+      assert.equal(existsSync(join(runtime, 'agents', 'manager-agent', 'workspace', 'templates', 'manager-request.deploy.json')), true);
+      assert.equal(existsSync(join(runtime, 'manager-control', 'request-submission.mjs')), true);
       assert.equal(existsSync(join(runtime, 'control', 'runtime-bundle.json')), true);
       assert.equal(existsSync(work), true);
       assert.equal(existsSync(join(runtime, 'worktrees')), false);
@@ -581,6 +586,11 @@ esac
     assert.equal(result.status, 0, result.stdout + result.stderr);
     const record = JSON.parse(readFileSync(join(runtime, 'agents', 'manager-agent', 'workspace', '.orchestrator', 'manager-control-entrypoint.json'), 'utf8'));
     assert.equal(record.entrypoint, join(runtime, 'manager-control', 'manager-control'));
+    for (const directory of ['drafts', 'requests', 'receipts']) {
+      assert.equal(existsSync(join(runtime, 'agents', 'manager-agent', 'workspace', '.orchestrator', directory)), true);
+    }
+    assert.equal(existsSync(join(runtime, 'agents', 'manager-agent', 'workspace', 'templates', 'manager-request.deploy.json')), true);
+    assert.equal(existsSync(join(runtime, 'manager-control', 'request-submission.mjs')), true);
     assert.equal(existsSync(join(runtime, 'release-control', 'release-control-policy.json')), true);
     const releaseEntrypoint = JSON.parse(readFileSync(join(runtime, 'agents', 'release-agent', 'workspace', '.orchestrator', 'release-control-entrypoint.json'), 'utf8'));
     assert.equal(releaseEntrypoint.entrypoint, join(runtime, 'release-control', 'release-control'));

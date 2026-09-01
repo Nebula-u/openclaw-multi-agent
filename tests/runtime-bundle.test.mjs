@@ -113,7 +113,9 @@ test('Manager runtime bundle includes the fixed manager-control entrypoint', () 
   try {
     const bundle = buildBundle(ROOT, runtime, { agentIds: ['manager-agent'] });
     assert.equal(bundle.entries.some((entry) => entry.target_rel === 'manager-control/manager-control.cmd'), true);
+    assert.equal(bundle.entries.some((entry) => entry.target_rel === 'manager-control/request-submission.mjs'), true);
     assert.equal(bundle.entries.some((entry) => entry.target_rel === 'manager-control/manager-control-policy.json'), true);
+    assert.equal(bundle.entries.some((entry) => entry.target_rel === 'agents/manager-agent/workspace/templates/manager-request.deploy.json'), true);
     assert.equal(bundle.entries.some((entry) => entry.target_rel === 'runtime-core/atomic-store.mjs'), true);
     assert.equal(bundle.entries.some((entry) => entry.target_rel === 'control-kernel/database.mjs'), true);
   } finally { rmSync(runtime, { recursive: true, force: true }); }
