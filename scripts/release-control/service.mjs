@@ -7,6 +7,16 @@ import { atomicWriteJson } from '../runtime-core/atomic-store.mjs';
 const WORKFLOW = /^WF-[A-Za-z0-9][A-Za-z0-9-]*$/u;
 const PROJECT = /^[a-z0-9][a-z0-9-]{0,62}$/u;
 const SHA = /^[a-f0-9]{40}$/u;
+const ONLINE_VERIFY_TIMEOUT_MS = 15_000;
+const ONLINE_VERIFY_SCRIPT = `
+const url = process.argv[1];
+fetch(url, { method: 'GET', redirect: 'error', signal: AbortSignal.timeout(${ONLINE_VERIFY_TIMEOUT_MS}) })
+  .then((response) => {
+    process.stdout.write(JSON.stringify({ status: response.status }));
+    process.exitCode = response.status >= 200 && response.status < 300 ? 0 : 1;
+  })
+  .catch(() => { process.exitCode = 1; });
+`;
 
 function fail(code, message, details = {}) { throw Object.assign(new Error(message), { code, details }); }
 function regular(path, code) {
@@ -18,7 +28,7 @@ function validWorkflow(value) { if (!WORKFLOW.test(value ?? '')) fail('RELEASE_W
 function validProject(value) { if (!PROJECT.test(value ?? '')) fail('RELEASE_PROJECT_ID_INVALID', 'project ID is invalid'); }
 function validCommit(value) { if (!SHA.test(value ?? '')) fail('RELEASE_CANDIDATE_COMMIT_INVALID', 'candidate commit must be a full lowercase SHA'); }
 
-export function createReleaseControl({ runtimeRoot: runtimeRootInput, policyPath: policyPathInput = null, runDeployment = null, clock = () => new Date() } = {}) {
+export function createReleaseControl({ runtimeRoot: runtimeRootInput, policyPath: policyPathInput = null, runDeployment = null, verifyOnline = null, clock = () => new Date() } = {}) {
   if (!runtimeRootInput) throw new TypeError('runtimeRoot is required');
   const runtimeRoot = resolve(runtimeRootInput);
   const stateRoot = join(runtimeRoot, 'release-control');
@@ -27,6 +37,14 @@ export function createReleaseControl({ runtimeRoot: runtimeRootInput, policyPath
   const manifestsRoot = join(stateRoot, 'manifests');
   const policyPath = resolve(policyPathInput ?? join(stateRoot, 'release-control-policy.json'));
   const invoke = runDeployment ?? ((command, args) => spawnSync(command, args, { shell: false, windowsHide: true, encoding: 'utf8', timeout: 300_000 }));
+  const onlineCheck = verifyOnline ?? ((url) => {
+    const check = spawnSync(process.execPath, ['-e', ONLINE_VERIFY_SCRIPT, url], { shell: false, windowsHide: true, encoding: 'utf8', timeout: ONLINE_VERIFY_TIMEOUT_MS + 1_000 });
+    if (check.error || check.status !== 0) return { status: null };
+    try {
+      const value = JSON.parse(check.stdout);
+      return Number.isInteger(value?.status) ? { status: value.status } : { status: null };
+    } catch { return { status: null }; }
+  });
 
   function policy() {
     regular(policyPath, 'RELEASE_DEPLOYMENT_POLICY_MISSING');
@@ -116,9 +134,14 @@ export function createReleaseControl({ runtimeRoot: runtimeRootInput, policyPath
       audit('release.deploy', { ...manifest, status: 'DEPLOY_FAILED', exit_code: execution?.status ?? null });
       fail('RELEASE_DEPLOYMENT_EXECUTION_FAILED', 'configured deployment entrypoint failed', { status: execution?.status ?? null, stderr: String(execution?.stderr ?? '').trim() });
     }
+    const verification = onlineCheck(manifest.final_url);
+    if (!Number.isInteger(verification?.status) || verification.status < 200 || verification.status >= 300) {
+      audit('release.online-verification', { ...manifest, status: 'ONLINE_VERIFICATION_FAILED', http_status: verification?.status ?? null });
+      fail('RELEASE_ONLINE_VERIFICATION_FAILED', 'the deployed final URL did not return a successful HTTP response', { status: verification?.status ?? null });
+    }
     reservation.status = 'DEPLOYED'; reservation.deployed_at = clock().toISOString(); reservation.approval_id = approvalId;
     value.reservations[reservationKey(workflowId, projectId)] = reservation; writeRegistry(value); audit('release.deploy', { ...manifest, status: 'DEPLOYED' });
-    return { ...result(reservation), manifest_path_abs: manifestPath };
+    return { ...result(reservation), manifest_path_abs: manifestPath, online_verification: { url: manifest.final_url, http_status: verification.status } };
   }
   return { preflight, deploy, registryPath, auditPath, manifestsRoot };
 }

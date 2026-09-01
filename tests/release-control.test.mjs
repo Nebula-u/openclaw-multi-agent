@@ -9,14 +9,14 @@ import { run as runReleaseControl } from '../scripts/release-control/cli.mjs';
 
 const SHA = '1'.repeat(40);
 
-function setup(t, { deploymentEntrypoint = null, runDeployment = null } = {}) {
+function setup(t, { deploymentEntrypoint = null, runDeployment = null, verifyOnline = () => ({ status: 200 }) } = {}) {
   const runtimeRoot = mkdtempSync(join(tmpdir(), 'release-control-'));
   const policyPath = join(runtimeRoot, 'release-control', 'release-control-policy.json');
   mkdirSync(join(runtimeRoot, 'release-control'), { recursive: true });
   writeFileSync(policyPath, `${JSON.stringify({ schema_version: 1, base_url: 'https://multiagentforge.cloud', deployment_target: 'current-server', deployment_entrypoint: deploymentEntrypoint })}\n`);
   const database = openKernelDatabase({ databasePath: join(runtimeRoot, 'control', 'kernel.db') });
   t.after(() => { database.close(); rmSync(runtimeRoot, { recursive: true, force: true }); });
-  return { runtimeRoot, database, control: createReleaseControl({ runtimeRoot, policyPath, runDeployment }) };
+  return { runtimeRoot, database, control: createReleaseControl({ runtimeRoot, policyPath, runDeployment, verifyOnline }) };
 }
 
 function approveDeployment(database, { workflowId, projectId, candidateCommit, urlPath }) {
@@ -75,6 +75,21 @@ test('Release 拒绝未绑定到当前候选提交和路径的部署', (t) => {
   approveDeployment(database, { workflowId: 'WF-Release-Deny', projectId: 'todo-list', candidateCommit: '2'.repeat(40), urlPath: '/todo-list' });
 
   assert.throws(() => control.deploy({ workflowId: 'WF-Release-Deny', projectId: 'todo-list', candidateCommit: SHA }), (error) => error.code === 'RELEASE_DEPLOYMENT_APPROVAL_MISSING');
+});
+
+test('Release 在最终 URL 的线上检查失败时不将部署标记为成功', (t) => {
+  const { control, database } = setup(t, {
+    deploymentEntrypoint: join(tmpdir(), 'release-deploy-entrypoint'),
+    runDeployment() { return { status: 0, stdout: 'deployed', stderr: '' }; },
+    verifyOnline() { return { status: 503 }; },
+  });
+  control.preflight({ workflowId: 'WF-Release-Verify', projectId: 'todo-list', candidateCommit: SHA });
+  approveDeployment(database, { workflowId: 'WF-Release-Verify', projectId: 'todo-list', candidateCommit: SHA, urlPath: '/todo-list' });
+
+  assert.throws(
+    () => control.deploy({ workflowId: 'WF-Release-Verify', projectId: 'todo-list', candidateCommit: SHA }),
+    (error) => error.code === 'RELEASE_ONLINE_VERIFICATION_FAILED',
+  );
 });
 
 test('Release CLI 只接受显式的受控部署参数', (t) => {
