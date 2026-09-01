@@ -128,6 +128,10 @@ function renderRate(value) {
   return value === null ? 'N/A' : `${(value * 100).toFixed(1)}%`;
 }
 
+function completedForQuality(row) {
+  return row.executed - row.transport_failures;
+}
+
 function renderReport(summary) {
   const lines = [
     '# Agent JSON 生成与清洗工作流测试报告', '',
@@ -136,11 +140,11 @@ function renderReport(summary) {
     '- 每个 Schema 固定 3 个测试样例，每样例固定 10 次；首次失败在相同会话内最多修复 2 次。',
     '- 清洗器：生产同源 `ingestJsonText`；校验器：Runtime Guard + Ajv。',
     `- 计划逻辑测试：${summary.totals.planned}；已执行：${summary.totals.executed}；通信异常：${summary.totals.transport_failures}。`,
-    `- 最终通过率：${renderRate(summary.totals.final_pass_rate)}。`, '',
-    '| Schema 场景 | 计划 | 执行 | 原始首轮通过 | 清洗后首轮通过 | 修复成功 | 最终通过 | 终态失败 | 通信异常 | 最终通过率 |',
-    '| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |',
+    `- 总体正确率：${renderRate(summary.totals.final_pass_rate)}（通过次数 ${summary.totals.final_passed} / 有效执行 ${completedForQuality(summary.totals)}；通信异常不计入质量分母）。`, '',
+    '| Schema | Agent 分类 | 计划 | 执行 | 通过次数 | 正确率 | 原始首轮通过 | 清洗后首轮通过 | 修复成功 | 终态失败 | 通信异常 |',
+    '| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |',
   ];
-  for (const row of summary.scenarios) lines.push(`| ${row.name} | ${row.planned} | ${row.executed} | ${row.strict_raw_first_passed} | ${row.cleaned_first_passed} | ${row.repair_retry_succeeded} | ${row.final_passed} | ${row.final_failed} | ${row.transport_failures} | ${renderRate(row.final_pass_rate)} |`);
+  for (const row of summary.scenarios) lines.push(`| ${row.name} | ${row.agent_id} | ${row.planned} | ${row.executed} | ${row.final_passed} / ${completedForQuality(row)} | ${renderRate(row.final_pass_rate)} | ${row.strict_raw_first_passed} | ${row.cleaned_first_passed} | ${row.repair_retry_succeeded} | ${row.final_failed} | ${row.transport_failures} |`);
   lines.push('', '## 错误分类', '');
   for (const row of summary.scenarios) {
     const categories = Object.entries(row.error_categories);

@@ -13,14 +13,7 @@ import { ingestJsonText } from '../scripts/runtime-core/json-ingestion.mjs';
 import { MAX_REPAIR_RETRIES, buildJsonRepairPrompt, classifyLlmFailure } from '../scripts/agent-json-harness/json-repair-prompts.mjs';
 import { CONTRACT_SCENARIOS, INTERNAL_CONTRACTS, getContractScenario } from '../scripts/agent-llm-contract-tests/contract-scenarios.mjs';
 
-const EXPECTED_SCHEMAS = [
-  'acceptance-criteria.schema.json', 'agent-package.schema.json',
-  'approval-assessment.schema.json', 'approval-request.schema.json', 'approval-response.schema.json', 'command-record.schema.json',
-  'component-build-result.schema.json', 'component-request.schema.json', 'context-manifest.schema.json',
-  'evidence.schema.json', 'gate-result.schema.json', 'json-validation-error.schema.json',
-  'release-decision.schema.json', 'result.schema.json', 'review-findings.schema.json', 'skill-package.schema.json',
-  'route-plan.schema.json', 'task-run.schema.json', 'task.schema.json',
-];
+const EXPECTED_SCHEMAS = Object.keys(CONTRACT_SCENARIOS);
 
 test('LLM 场景矩阵覆盖每份 Agent 契约的三个固定需求，并固定每例十次', () => {
   assert.deepEqual(LLM_SCENARIOS.map((item) => item.schemaFile).sort(), [...EXPECTED_SCHEMAS].sort());
@@ -222,7 +215,9 @@ test('收集器固定规划三乘十并为每个无效尝试保留原件与诊�
     assert.ok(existsSync(join(folder, 'validation.json')));
     assert.ok(existsSync(join(folder, 'diagnosis.json')));
   }
-  assert.match(readFileSync(join(root, 'unit-run', 'report.md'), 'utf8'), /最终通过率/);
+  const report = readFileSync(join(root, 'unit-run', 'report.md'), 'utf8');
+  assert.match(report, /\| Schema \| Agent 分类 \| 计划/u);
+  assert.match(report, /\| uncapped \| developer-agent \| 30 \| 30 \| 0 \/ 30 \| 0\.0% \|/u);
 });
 
 test('真实矩阵命令拒绝覆盖固定的每样例十次配置', () => {

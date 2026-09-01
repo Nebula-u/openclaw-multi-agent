@@ -314,7 +314,9 @@ test('staging permissions let configured image UID 10001 write repo/output/logs 
   await sandbox.cleanup(staged);
 });
 
-test('staging preserves special workspace mode bits while adding container traversal', async (t) => {
+test('staging preserves special workspace mode bits while adding container traversal', {
+  skip: process.platform !== 'linux' && 'requires a native Linux filesystem for POSIX special mode bits',
+}, async (t) => {
   const value = fixture();
   t.after(() => rmSync(value.root, { recursive: true, force: true }));
   chmodSync(value.workspace, 0o2700);

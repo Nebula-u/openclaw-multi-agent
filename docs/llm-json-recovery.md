@@ -16,9 +16,10 @@ worker 只写：
 
 ## Agent Schema 生成与清洗测试矩阵
 
-真实 Gateway 测试使用 `npm run agent-json:matrix`。它覆盖所有 19 个由
+真实 Gateway 测试由主矩阵和 `test-agent` 专用矩阵组成，共覆盖所有 19 个由
 Agent 生成的 Schema：每份 Schema 固定三项不同的业务生成要求，每项独立
-执行十次，共 570 个逻辑测试。每次首次 JSON 清洗或 Schema 校验失败时，
+执行十次，共 570 个逻辑测试。报告逐个 Schema 汇总 `通过次数 / 有效执行次数`
+与正确率；通信异常不计入质量分母。每次首次 JSON 清洗或 Schema 校验失败时，
 测试脚本会在同一 Session 内最多请求两次 JSON 修复；修复请求明确说明这是
 JSON 清洗工作流测试，不得调用工具或返回 JSON/JSONL 之外的内容。
 

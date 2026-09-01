@@ -344,7 +344,8 @@ Kernel 测试全部使用临时 SQLite，不需要外部数据库，也不应因
 npm run agent-json:matrix -- --run-id schema-matrix-<YYYYMMDD-HHMM> --concurrency 1 --timeout-seconds 120
 ```
 
-结果写入 `artifacts/agent-json-workflow/<run-id>/`。`test-agent` 单独运行，
+结果写入 `artifacts/agent-json-workflow/<run-id>/`。报告会逐个 Schema 给出
+`通过次数 / 有效执行次数` 和正确率；通信异常不计入质量分母。`test-agent` 单独运行，
 便于将 Docker sandbox 启动问题与 JSON 输出质量分开统计（60 个逻辑测试）：
 
 ```text
