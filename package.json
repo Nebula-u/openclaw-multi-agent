@@ -20,7 +20,7 @@
     "test:runtime-bundle": "node --test tests/runtime-bundle.test.mjs",
     "test:orchestrator": "node --test --test-concurrency=1 tests/orchestrator-*.test.mjs",
     "test:hr": "node --test --test-concurrency=1 tests/hr-*.test.mjs",
-    "test:monitor": "node --test --test-concurrency=1 tests/monitor-kernel-http.test.mjs tests/monitor-session-catalog.test.mjs tests/monitor-session-tailer.test.mjs tests/monitor-static-dashboard.test.mjs",
+    "test:monitor": "node --test --test-concurrency=1 tests/monitor-control.test.mjs tests/monitor-kernel-http.test.mjs tests/monitor-session-catalog.test.mjs tests/monitor-session-tailer.test.mjs tests/monitor-static-dashboard.test.mjs",
     "test:kernel": "node --test --test-concurrency=1 tests/control-kernel-*.test.mjs",
     "kernel:schema": "node scripts/control-kernel/apply-schema.mjs",
     "kernel:status": "node scripts/orchestrator-cli.mjs kernel-status --project-root .",
@@ -28,6 +28,7 @@
     "orchestrator:status": "node scripts/orchestrator-cli.mjs service-status --project-root .",
     "orchestrator:stop": "node scripts/orchestrator-cli.mjs stop --project-root .",
     "monitor:start": "node monitor/main.mjs",
+    "monitor:stop": "node scripts/monitor-control.mjs stop",
     "hr:run": "node scripts/orchestrator-cli.mjs hr-run-pending --project-root ."
   },
   "dependencies": {

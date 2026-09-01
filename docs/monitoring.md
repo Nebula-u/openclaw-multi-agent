@@ -11,6 +11,14 @@ npm run kernel:schema
 npm run monitor:start
 ```
 
+停止当前项目的 Monitor：
+
+```text
+npm run monitor:stop
+```
+
+该命令读取当前项目 `.env`（或环境变量）解析出的 `MONITOR_PORT`，仅查找该端口的监听器。它会核验监听进程属于本项目的 `monitor/main.mjs` 后才发送 `SIGTERM`，因此不会停止其他端口或非 Monitor 服务。若端口未监听、被其他程序占用，或 Monitor 未能在短时间内优雅退出，命令会报错而不会强制终止进程。Linux 和 Windows 均受支持。
+
 默认地址为 `http://127.0.0.1:4319/`。Monitor 只监听 loopback，并校验 Origin；不要直接暴露到公网。需要远程访问时，应在同机反向代理后增加身份认证和 TLS。
 
 `config/monitoring.example.json` 中的关键路径：

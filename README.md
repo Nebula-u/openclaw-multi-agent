@@ -202,6 +202,12 @@ npm run orchestrator:stop
 npm run monitor:start
 ```
 
+停止当前项目的 Monitor：
+
+```text
+npm run monitor:stop
+```
+
 打开 `http://127.0.0.1:4319/`。Monitor 可以把当前人工审批的选择写入本地 Orchestrator 命令队列；Orchestrator 才会验证、推进 workflow 并通知 Manager。Monitor 不执行 workflow、HR、restore 或 revert。
 
 ## Git 快照与回滚
