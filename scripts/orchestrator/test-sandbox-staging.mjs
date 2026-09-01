@@ -63,6 +63,11 @@ function chmodContainerWritable(path) {
     try { chmodSync(path, 0o666); } catch { /* Windows bind sharing does not use POSIX mode bits */ }
   }
 }
+function ensureContainerWorkspaceTraversal(path) {
+  const mode = statSync(path).mode & 0o777;
+  const requiredMode = mode | 0o005;
+  if (requiredMode !== mode) chmodSync(path, requiredMode);
+}
 function defaultGit(cwd, args) {
   const result = spawnSync('git', ['-C', cwd, ...args], { encoding: 'utf8', shell: false, windowsHide: true });
   if (result.status !== 0) fail('TEST_SANDBOX_GIT_FAILED', `git ${args.join(' ')} failed`, { cwd, stderr: String(result.stderr ?? '').trim() });
@@ -265,6 +270,7 @@ export function createTestSandboxStager({ workspaceRoot: workspaceRootInput, run
     try {
       const configuredSandbox = verifiedSandboxProfile(inspectSandbox);
       cleanupImage = configuredSandbox.docker.image;
+      ensureContainerWorkspaceTraversal(paths.workspaceRoot);
       cleanRoot(cleanupImage);
       const inputRoot = inputRootForAttempt(task);
       if (!existsSync(inputRoot)) fail('TEST_SANDBOX_INPUT_MISSING', `task input root is missing: ${inputRoot}`);
