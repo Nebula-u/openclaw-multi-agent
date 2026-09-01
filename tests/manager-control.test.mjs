@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { cpSync, existsSync, mkdtempSync, realpathSync, rmSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, linkSync, mkdtempSync, realpathSync, rmSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -18,6 +18,34 @@ function fixture(t, options = {}) {
   const projectRoot = mkdtempSync(join(tmpdir(), 'manager-control-'));
   t.after(() => rmSync(projectRoot, { recursive: true, force: true }));
   return { projectRoot, control: createManagerControl({ projectRoot, ...options }) };
+}
+
+function deploymentRequest(workflowId = 'WF-manager-draft-001') {
+  const request = JSON.parse(readFileSync(join(ROOT, 'templates', 'manager-request.deploy.json'), 'utf8'));
+  request.request_id = `REQ-${workflowId.slice(3)}`;
+  request.workflow_id = workflowId;
+  request.submitted_at = '2026-09-01T00:00:00.000Z';
+  request.manager_session_id = 'manager-session';
+  request.manager_session_key = 'agent:manager:source';
+  request.project_ref = 'PRJ-manager-draft-001';
+  request.original_request = 'Build and deploy a persistent web demo.';
+  request.route_plan.workflow_id = workflowId;
+  request.route_plan.summary = 'Build and deploy a persistent web demo.';
+  request.route_plan.display_title = 'Web Deploy';
+  request.route_plan.deployment.project_id = 'manager-draft-001';
+  request.user_authorized = { confirmed: true, actor: 'human:liuxu', message: 'Deploy the confirmed route.' };
+  return request;
+}
+
+function requestDraftFixture(t, name = 'deploy.json') {
+  const runtimeRoot = mkdtempSync(join(tmpdir(), 'manager-control-draft-'));
+  t.after(() => rmSync(runtimeRoot, { recursive: true, force: true }));
+  const requestRoot = join(runtimeRoot, 'agents', 'manager-agent', 'workspace', '.orchestrator');
+  for (const child of ['drafts', 'requests', 'receipts']) mkdirSync(join(requestRoot, child), { recursive: true });
+  const draftPath = join(requestRoot, 'drafts', name);
+  const raw = `${JSON.stringify(deploymentRequest(), null, 2)}\n`;
+  writeFileSync(draftPath, raw);
+  return { runtimeRoot, requestRoot, draftPath, raw };
 }
 
 test('manager control creates and registers a new managed Git project', (t) => {
@@ -87,6 +115,79 @@ test('manager control CLI only exposes semantic project actions', (t) => {
   assert.throws(() => runManagerControl(['ensure', '--workflow-id', 'WF-CLI-002', '--project-name', 'invalid remote', '--project-mode', 'new', '--remote-url', 'https://example.test/project.git'], output, { runtimeRoot }), (error) => error.code === 'MANAGER_CONTROL_USAGE');
   assert.throws(() => runManagerControl(['ensure', '--workflow-id', 'WF-CLI-003', '--project-name', 'missing remote', '--project-mode', 'remote'], output, { runtimeRoot }), (error) => error.code === 'MANAGER_CONTROL_USAGE');
   assert.throws(() => runManagerControl(['ensure', '--project-root', runtimeRoot, '--workflow-id', 'WF-CLI-004', '--project-name', 'not allowed', '--project-mode', 'new'], output, { runtimeRoot }), (error) => error.code === 'MANAGER_CONTROL_USAGE');
+});
+
+test('manager control validates a draft and submits the exact hash-bound bytes', (t) => {
+  const { runtimeRoot, requestRoot, raw } = requestDraftFixture(t);
+  const output = { value: '', write(value) { this.value += value; } };
+  const expectedSha256 = createHash('sha256').update(raw, 'utf8').digest('hex');
+
+  const validated = runManagerControl(['orchestrator-validate-request', '--draft-file', 'deploy.json'], output, { runtimeRoot, projectRoot: ROOT });
+
+  assert.deepEqual(validated, {
+    status: 'VALID', request_id: 'REQ-manager-draft-001', request_type: 'CREATE', workflow_id: 'WF-manager-draft-001', input_sha256: expectedSha256,
+  });
+  const submitted = runManagerControl(['orchestrator-submit-request', '--draft-file', 'deploy.json', '--expected-sha256', expectedSha256], output, { runtimeRoot, projectRoot: ROOT });
+  assert.equal(submitted.status, 'QUEUED');
+  assert.equal(submitted.input_sha256, expectedSha256);
+  assert.equal(submitted.request_id, 'REQ-manager-draft-001');
+  assert.equal(readFileSync(join(requestRoot, 'requests', 'deploy.json'), 'utf8'), raw);
+});
+
+test('manager control refuses submission when a validated draft changes', (t) => {
+  const { runtimeRoot, draftPath, requestRoot, raw } = requestDraftFixture(t);
+  const output = { value: '', write(value) { this.value += value; } };
+  const validated = runManagerControl(['orchestrator-validate-request', '--draft-file', 'deploy.json'], output, { runtimeRoot, projectRoot: ROOT });
+  writeFileSync(draftPath, raw.replace('Web Deploy', 'This title is too long'));
+
+  assert.throws(
+    () => runManagerControl(['orchestrator-submit-request', '--draft-file', 'deploy.json', '--expected-sha256', validated.input_sha256], output, { runtimeRoot, projectRoot: ROOT }),
+    (error) => error.code === 'MANAGER_REQUEST_DRAFT_HASH_MISMATCH',
+  );
+  assert.equal(existsSync(join(requestRoot, 'requests', 'deploy.json')), false);
+});
+
+test('manager control preserves authoritative validation details without publishing an invalid draft', (t) => {
+  const { runtimeRoot, draftPath, requestRoot } = requestDraftFixture(t);
+  const output = { value: '', write(value) { this.value += value; } };
+  const invalid = deploymentRequest();
+  invalid.route_plan.display_title = 'This title is too long';
+  invalid.route_plan.risk_flags = ['deployment'];
+  writeFileSync(draftPath, `${JSON.stringify(invalid)}\n`);
+
+  assert.throws(
+    () => runManagerControl(['orchestrator-validate-request', '--draft-file', 'deploy.json'], output, { runtimeRoot, projectRoot: ROOT }),
+    (error) => error.code === 'ROUTE_PLAN_SCHEMA_INVALID' && error.details.errors.length === 2,
+  );
+  assert.equal(existsSync(join(requestRoot, 'requests', 'deploy.json')), false);
+});
+
+test('manager control confines drafts and rejects linked or existing formal targets', (t) => {
+  const { runtimeRoot, draftPath, requestRoot } = requestDraftFixture(t);
+  const output = { value: '', write(value) { this.value += value; } };
+  const validate = (name) => runManagerControl(['orchestrator-validate-request', '--draft-file', name], output, { runtimeRoot, projectRoot: ROOT });
+  for (const name of ['../deploy.json', '/tmp/deploy.json', 'nested/deploy.json', 'deploy.txt']) {
+    assert.throws(() => validate(name), (error) => error.code === 'MANAGER_REQUEST_DRAFT_NAME_INVALID');
+  }
+
+  symlinkSync(draftPath, join(requestRoot, 'drafts', 'linked.json'));
+  assert.throws(() => validate('linked.json'), (error) => error.code === 'MANAGER_REQUEST_DRAFT_UNSAFE');
+  linkSync(draftPath, join(requestRoot, 'drafts', 'hardlinked.json'));
+  assert.throws(() => validate('hardlinked.json'), (error) => error.code === 'MANAGER_REQUEST_DRAFT_UNSAFE');
+
+  rmSync(join(requestRoot, 'drafts', 'hardlinked.json'));
+  const validated = validate('deploy.json');
+  writeFileSync(join(requestRoot, 'requests', 'deploy.json'), '{}\n');
+  assert.throws(
+    () => runManagerControl(['orchestrator-submit-request', '--draft-file', 'deploy.json', '--expected-sha256', validated.input_sha256], output, { runtimeRoot, projectRoot: ROOT }),
+    (error) => error.code === 'MANAGER_REQUEST_TARGET_EXISTS',
+  );
+  rmSync(join(requestRoot, 'requests', 'deploy.json'));
+  writeFileSync(join(requestRoot, 'receipts', 'deploy.json.receipt.json'), '{}\n');
+  assert.throws(
+    () => runManagerControl(['orchestrator-submit-request', '--draft-file', 'deploy.json', '--expected-sha256', validated.input_sha256], output, { runtimeRoot, projectRoot: ROOT }),
+    (error) => error.code === 'MANAGER_REQUEST_TARGET_EXISTS',
+  );
 });
 
 test('manager control lists any absolute directory without reading files or following links', (t) => {

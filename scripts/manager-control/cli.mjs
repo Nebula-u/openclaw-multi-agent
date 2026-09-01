@@ -4,16 +4,19 @@ import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createManagerControl } from './service.mjs';
 import { readCurrentOrchestratorStatus, readOrchestratorStatus, submitOrchestratorApproval, submitWorkflowControl } from './orchestrator-state.mjs';
+import { createManagerRequestSubmission } from './request-submission.mjs';
 
 function fail(message) { throw Object.assign(new Error(message), { code: 'MANAGER_CONTROL_USAGE' }); }
 function parse(argv) {
   const [action, ...tokens] = argv;
-  if (!['ensure', 'resolve', 'fetch', 'directory-list', 'orchestrator-status', 'orchestrator-current-status', 'orchestrator-approve', 'orchestrator-control'].includes(action)) fail('action is not supported');
+  if (!['ensure', 'resolve', 'fetch', 'directory-list', 'orchestrator-status', 'orchestrator-current-status', 'orchestrator-validate-request', 'orchestrator-submit-request', 'orchestrator-approve', 'orchestrator-control'].includes(action)) fail('action is not supported');
   const allowedByAction = {
     ensure: new Set(['workflow-id', 'project-name', 'project-mode', 'remote-url']), resolve: new Set(['workflow-id', 'project-ref']), fetch: new Set(['workflow-id', 'project-ref']),
     'directory-list': new Set(['path', 'recursive']),
     'orchestrator-status': new Set(['workflow-id', 'manager-session-id', 'manager-session-key']),
     'orchestrator-current-status': new Set(['manager-session-key']),
+    'orchestrator-validate-request': new Set(['draft-file']),
+    'orchestrator-submit-request': new Set(['draft-file', 'expected-sha256']),
     'orchestrator-approve': new Set(['workflow-id', 'manager-session-id', 'manager-session-key', 'decision-id', 'choice', 'authorization-summary', 'notes']),
     'orchestrator-control': new Set(['workflow-id', 'manager-session-id', 'manager-session-key', 'action', 'authorization-summary', 'notes']),
   };
@@ -68,12 +71,18 @@ function listDirectory(options) {
   return { path_abs: root, recursive: options.recursive === 'true', entries };
 }
 
-export function run(argv, output = process.stdout, { runtimeRoot = installedRuntimeRoot() } = {}) {
+export function run(argv, output = process.stdout, { runtimeRoot = installedRuntimeRoot(), projectRoot = null } = {}) {
   const { action, options } = parse(argv);
   const control = createManagerControl({ runtimeRoot: resolve(runtimeRoot) });
   let result;
   if (action === 'directory-list') {
     result = listDirectory(options);
+  } else if (action === 'orchestrator-validate-request') {
+    if (!options['draft-file']) fail('orchestrator-validate-request requires --draft-file');
+    result = createManagerRequestSubmission({ projectRoot, runtimeRoot }).validateDraft(options['draft-file']);
+  } else if (action === 'orchestrator-submit-request') {
+    if (!options['draft-file'] || !options['expected-sha256']) fail('orchestrator-submit-request requires --draft-file and --expected-sha256');
+    result = createManagerRequestSubmission({ projectRoot, runtimeRoot }).submitDraft(options['draft-file'], options['expected-sha256']);
   } else if (action === 'ensure') {
     if (!options['workflow-id']) fail('ensure requires --workflow-id');
     const project = projectFromOptions(options);
