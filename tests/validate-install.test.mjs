@@ -123,6 +123,48 @@ test('install validators require the Node version that provides stable node:sqli
   assert.match(bash, /Node\.js 22\.13\.0\+/u);
 });
 
+function createInstalledManagerPreflightFixture(runtime) {
+  const workspace = join(runtime, 'agents', 'manager-agent', 'workspace');
+  for (const directory of ['drafts', 'requests', 'receipts']) {
+    mkdirSync(join(workspace, '.orchestrator', directory), { recursive: true });
+  }
+  mkdirSync(join(workspace, 'templates'), { recursive: true });
+  mkdirSync(join(runtime, 'manager-control'), { recursive: true });
+  for (const name of ['AGENTS.md', 'TOOLS.md']) {
+    cpSync(join(ROOT, 'agents', 'manager-agent', 'workspace', name), join(workspace, name));
+  }
+  cpSync(join(ROOT, 'templates', 'manager-request.deploy.json'), join(workspace, 'templates', 'manager-request.deploy.json'));
+  cpSync(join(ROOT, 'scripts', 'manager-control', 'request-submission.mjs'), join(runtime, 'manager-control', 'request-submission.mjs'));
+}
+
+for (const [name, command, available] of [
+  ['Bash', ['bash', VALIDATOR, '--skip-openclaw', '--runtime-root'], BASH_AVAILABLE],
+  ['PowerShell', ['pwsh', '-NoProfile', '-File', POWERSHELL_VALIDATOR, '-SkipOpenClaw', '-RuntimeRoot'], PWSH_AVAILABLE],
+]) {
+  test(`${name} validator rejects a missing installed Manager request preflight capability`, {
+    skip: available ? false : `${name} unavailable in this environment`,
+  }, () => {
+    const root = mkdtempSync(join(tmpdir(), 'openclaw-manager-preflight-validator-'));
+    const runtime = join(root, 'runtime');
+    const previousManifest = existsSync(DRY_MANIFEST) ? readFileSync(DRY_MANIFEST) : null;
+    try {
+      createInstalledManagerPreflightFixture(runtime);
+      const complete = spawnSync(command[0], [...command.slice(1), runtime], { cwd: ROOT, encoding: 'utf8' });
+      assert.equal(complete.status, 0, complete.stdout + complete.stderr);
+
+      rmSync(join(runtime, 'manager-control', 'request-submission.mjs'));
+      const missing = spawnSync(command[0], [...command.slice(1), runtime], { cwd: ROOT, encoding: 'utf8' });
+
+      assert.notEqual(missing.status, 0, missing.stdout + missing.stderr);
+      assert.match(missing.stdout, /Manager.*request-submission/u);
+    } finally {
+      if (previousManifest === null) rmSync(DRY_MANIFEST, { force: true });
+      else writeFileSync(DRY_MANIFEST, previousManifest);
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+}
+
 test('active architecture documents describe Orchestrator dispatch, SQLite, and the Docker test sandbox', () => {
   const configNotes = readFileSync(join(ROOT, 'config', 'openclaw-config-notes.md'), 'utf8');
   const nativeIntegration = readFileSync(join(ROOT, 'docs', 'native-openclaw-integration.md'), 'utf8');
@@ -249,10 +291,12 @@ test('Bash validator isolates its installer dry-run from conflicting outer openc
   skip: BASH_AVAILABLE ? false : 'bash unavailable in this environment',
 }, () => {
   const bin = mkdtempSync(join(tmpdir(), 'openclaw-validator-fake-bin-'));
+  const runtime = join(bin, 'runtime');
   const fakeOpenClaw = join(bin, 'openclaw');
   const previousManifest = existsSync(DRY_MANIFEST) ? readFileSync(DRY_MANIFEST) : null;
 
   try {
+    createInstalledManagerPreflightFixture(runtime);
     writeFileSync(fakeOpenClaw, `#!/usr/bin/env bash
 case "\${1:-}" in
   --version) printf 'fake-openclaw 0\\n' ;;
@@ -265,7 +309,7 @@ esac
     mkdirSync(dirname(DRY_MANIFEST), { recursive: true });
     writeFileSync(DRY_MANIFEST, '{"schema_version":999}\n', 'utf8');
 
-    const result = spawnSync('bash', [VALIDATOR, '--skip-openclaw'], {
+    const result = spawnSync('bash', [VALIDATOR, '--skip-openclaw', '--runtime-root', runtime], {
       cwd: ROOT,
       encoding: 'utf8',
       env: { ...process.env, PATH: `${bin}${delimiter}${process.env.PATH}` },
@@ -335,12 +379,15 @@ function runInstalledSandboxValidator(command, agents) {
   const bin = join(root, 'bin');
   const agentsPath = join(root, 'agents.json');
   const callsPath = join(root, 'openclaw-calls.txt');
+  const runtime = join(root, 'runtime');
   const previousManifest = existsSync(DRY_MANIFEST) ? readFileSync(DRY_MANIFEST) : null;
   try {
+    createInstalledManagerPreflightFixture(runtime);
     mkdirSync(bin, { recursive: true });
     writeFileSync(agentsPath, JSON.stringify(agents), 'utf8');
     const env = writeValidatorOpenClaw(bin, agentsPath, callsPath);
-    const result = spawnSync(command[0], command.slice(1), {
+    const runtimeArgs = command[0] === 'pwsh' ? ['-RuntimeRoot', runtime] : ['--runtime-root', runtime];
+    const result = spawnSync(command[0], [...command.slice(1), ...runtimeArgs], {
       cwd: ROOT,
       encoding: 'utf8',
       env: { ...process.env, ...env, OPENCLAW_TEST_SANDBOX_ENABLED: 'true', PATH: `${bin}${delimiter}${process.env.PATH}` },
@@ -407,11 +454,13 @@ test(
   { skip: PWSH_AVAILABLE ? false : 'pwsh unavailable in this environment' },
   () => {
     const bin = mkdtempSync(join(tmpdir(), 'openclaw-validator-fake-bin-'));
+    const runtime = join(bin, 'runtime');
     const fakeOpenClaw = join(bin, 'openclaw');
     const fakeOpenClawCmd = join(bin, 'openclaw.cmd');
     const previousManifest = existsSync(DRY_MANIFEST) ? readFileSync(DRY_MANIFEST) : null;
 
     try {
+      createInstalledManagerPreflightFixture(runtime);
       writeFileSync(fakeOpenClaw, `#!/usr/bin/env sh
 case "\${1:-}" in
   --version) printf 'fake-openclaw 0\\n' ;;
@@ -432,7 +481,7 @@ exit /b 0
 
       const result = spawnSync(
         'pwsh',
-        ['-NoProfile', '-File', POWERSHELL_VALIDATOR, '-SkipOpenClaw'],
+        ['-NoProfile', '-File', POWERSHELL_VALIDATOR, '-SkipOpenClaw', '-RuntimeRoot', runtime],
         {
           cwd: ROOT,
           encoding: 'utf8',

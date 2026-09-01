@@ -22,6 +22,11 @@ while [ -h "$SOURCE" ]; do
 done
 SCRIPT_DIR="$(cd -P "$(dirname "$SOURCE")" >/dev/null 2>&1 && pwd -P)"
 PROJECT_ROOT="$(cd -P "$SCRIPT_DIR/.." >/dev/null 2>&1 && pwd -P)"
+if [[ "$RUNTIME_ROOT" = /* || "$RUNTIME_ROOT" =~ ^[A-Za-z]:[\\/] ]]; then
+  RUNTIME_ROOT_ABS="$RUNTIME_ROOT"
+else
+  RUNTIME_ROOT_ABS="$PROJECT_ROOT/$RUNTIME_ROOT"
+fi
 
 if [ -z "${OPENCLAW_TEST_SANDBOX_ENABLED+x}" ] && [ -f "$PROJECT_ROOT/.env" ]; then
   OPENCLAW_TEST_SANDBOX_ENABLED="$(sed -n 's/^[[:space:]]*OPENCLAW_TEST_SANDBOX_ENABLED[[:space:]]*=[[:space:]]*//p' "$PROJECT_ROOT/.env" | head -n 1 | tr -d '\r' | tr -d '\"')"
@@ -129,6 +134,28 @@ done
 
 for f in "$PROJECT_ROOT"/contracts/*.json; do jq empty "$(native_path "$f")" >/dev/null 2>&1 && check "contracts JSON: $(basename "$f")" PASS || check "contracts JSON: $(basename "$f")" FAIL; done
 for f in "$PROJECT_ROOT"/templates/*.json; do [ -e "$f" ] || continue; jq empty "$(native_path "$f")" >/dev/null 2>&1 && check "templates JSON: $(basename "$f")" PASS || check "templates JSON: $(basename "$f")" FAIL; done
+
+MANAGER_WORKSPACE="$RUNTIME_ROOT_ABS/agents/manager-agent/workspace"
+for directory in drafts requests receipts; do
+  path="$MANAGER_WORKSPACE/.orchestrator/$directory"
+  [ -d "$path" ] && check "已安装 Manager $directory 目录" PASS "$path" || check "已安装 Manager $directory 目录" FAIL "$path"
+done
+MANAGER_DEPLOY_TEMPLATE="$MANAGER_WORKSPACE/templates/manager-request.deploy.json"
+if [ -f "$MANAGER_DEPLOY_TEMPLATE" ] && jq empty "$(native_path "$MANAGER_DEPLOY_TEMPLATE")" >/dev/null 2>&1; then
+  check "已安装 Manager 部署请求模板" PASS "$MANAGER_DEPLOY_TEMPLATE"
+else
+  check "已安装 Manager 部署请求模板" FAIL "$MANAGER_DEPLOY_TEMPLATE"
+fi
+MANAGER_REQUEST_SUBMISSION="$RUNTIME_ROOT_ABS/manager-control/request-submission.mjs"
+[ -f "$MANAGER_REQUEST_SUBMISSION" ] && check "已安装 Manager request-submission 控制模块" PASS "$MANAGER_REQUEST_SUBMISSION" || check "已安装 Manager request-submission 控制模块" FAIL "$MANAGER_REQUEST_SUBMISSION"
+MANAGER_AGENTS="$MANAGER_WORKSPACE/AGENTS.md"
+MANAGER_TOOLS="$MANAGER_WORKSPACE/TOOLS.md"
+if grep -q 'orchestrator-validate-request' "$MANAGER_AGENTS" 2>/dev/null && grep -q 'orchestrator-submit-request' "$MANAGER_AGENTS" 2>/dev/null \
+  && grep -q 'orchestrator-validate-request' "$MANAGER_TOOLS" 2>/dev/null && grep -q 'orchestrator-submit-request' "$MANAGER_TOOLS" 2>/dev/null; then
+  check "已安装 Manager 请求预校验协议" PASS
+else
+  check "已安装 Manager 请求预校验协议" FAIL "$MANAGER_AGENTS, $MANAGER_TOOLS"
+fi
 
 RUNTIME_GUARD="$PROJECT_ROOT/scripts/runtime-guard.mjs"
 RUNTIME_GUARD_TEST="$PROJECT_ROOT/tests/runtime-guard.test.mjs"

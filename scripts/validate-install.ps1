@@ -104,6 +104,25 @@ Get-ChildItem -LiteralPath $contractsDir -Filter '*.json' -File | ForEach-Object
 $templatesDir = Join-Path $ProjectRoot 'templates'
 Get-ChildItem -LiteralPath $templatesDir -Filter '*.json' -File | ForEach-Object { Add-Check "templates JSON: $($_.Name)" (Test-Json $_.FullName) }
 
+$managerWorkspace = Join-Path $RuntimeRootAbs 'agents\manager-agent\workspace'
+foreach ($directory in @('drafts','requests','receipts')) {
+  $path = Join-Path $managerWorkspace ".orchestrator\$directory"
+  Add-Check "已安装 Manager $directory 目录" (Test-Path -LiteralPath $path -PathType Container) $path
+}
+$managerDeployTemplate = Join-Path $managerWorkspace 'templates\manager-request.deploy.json'
+Add-Check '已安装 Manager 部署请求模板' ((Test-Path -LiteralPath $managerDeployTemplate -PathType Leaf) -and (Test-Json $managerDeployTemplate)) $managerDeployTemplate
+$managerRequestSubmission = Join-Path $RuntimeRootAbs 'manager-control\request-submission.mjs'
+Add-Check '已安装 Manager request-submission 控制模块' (Test-Path -LiteralPath $managerRequestSubmission -PathType Leaf) $managerRequestSubmission
+$managerAgentsPath = Join-Path $managerWorkspace 'AGENTS.md'
+$managerToolsPath = Join-Path $managerWorkspace 'TOOLS.md'
+$managerProtocolInstalled = $false
+if ((Test-Path -LiteralPath $managerAgentsPath -PathType Leaf) -and (Test-Path -LiteralPath $managerToolsPath -PathType Leaf)) {
+  $managerAgentsText = Get-Content -Raw -LiteralPath $managerAgentsPath
+  $managerToolsText = Get-Content -Raw -LiteralPath $managerToolsPath
+  $managerProtocolInstalled = $managerAgentsText -match 'orchestrator-validate-request' -and $managerAgentsText -match 'orchestrator-submit-request' -and $managerToolsText -match 'orchestrator-validate-request' -and $managerToolsText -match 'orchestrator-submit-request'
+}
+Add-Check '已安装 Manager 请求预校验协议' $managerProtocolInstalled "$managerAgentsPath, $managerToolsPath"
+
 $runtimeGuard = Join-Path $ProjectRoot 'scripts\runtime-guard.mjs'
 $runtimeGuardTest = Join-Path $ProjectRoot 'tests\runtime-guard.test.mjs'
 if (Get-Command node -ErrorAction SilentlyContinue) {
