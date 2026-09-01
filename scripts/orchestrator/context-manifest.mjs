@@ -47,7 +47,7 @@ export function createContextManifest({ projectRoot: projectRootInput, task, pri
   const taskPath = join(inputRoot, 'task.json');
   const taskInput = {
     schema_version: 1, workflow_id: task.workflowId, task_id: task.taskId, run_id: task.runId,
-    step_id: task.stepId, kind: task.kind, title: task.title, assigned_agent: task.agentId,
+    step_id: task.stepId, kind: task.kind, release_phase: task.releasePhase ?? null, deployment: task.deployment ?? null, title: task.title, assigned_agent: task.agentId,
     attempt: task.attempt, route_hash: task.routeHash, input_commit: task.inputCommit,
     target_project_root_abs: task.targetProjectRootAbs, worktree_path_abs: task.worktreePathAbs,
     artifact_root_abs: task.artifactRootAbs, allowed_write_paths_abs: [task.worktreePathAbs, join(task.artifactRootAbs, '.agent-raw')],

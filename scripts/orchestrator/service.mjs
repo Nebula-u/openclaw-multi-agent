@@ -40,6 +40,20 @@ function notificationMessage(notification, run) {
   return `# Orchestrator update\n\nA workflow event must be explained to the user in the current native Manager conversation. Do not make a workflow decision on the user's behalf.\n\n${JSON.stringify({ workflow_id: run.workflowId, notification_type: notification.type, task_id: notification.taskId, payload: notification.payload }, null, 2)}\n`;
 }
 function approvalRequest(task, result = null, step = null) {
+  if (step?.kind === 'RELEASE' && step.release_phase === 'PREFLIGHT') {
+    const deployment = result?.deployment;
+    if (!deployment) throw Object.assign(new Error('release preflight result is missing deployment binding'), { code: 'RELEASE_DEPLOYMENT_BINDING_MISSING' });
+    return {
+      decision_id: `DEC-${task.taskId.slice(5)}-${randomUUID().slice(0, 8)}`,
+      workflow_id: task.workflowId, task_id: task.taskId, run_id: task.runId,
+      summary: `确认将候选提交 ${deployment.candidate_commit} 部署到 ${deployment.final_url}。`, trigger: 'RELEASE_DEPLOYMENT', deployment,
+      options: [
+        { option_id: 'APPROVE_DEPLOY', description: '确认部署这个候选提交到这个 URL' },
+        { option_id: 'REWORK', description: '要求补充或修正部署前检查' },
+        { option_id: 'CANCEL', description: '取消本次部署' },
+      ],
+    };
+  }
   const requested = result?.decisions_required?.[0] ?? {};
   const sourceOptions = Array.isArray(requested.options) && requested.options.length ? requested.options : [{ option_id: 'APPROVE', description: 'Approve and continue' }, { option_id: 'REWORK', description: 'Request another attempt' }, { option_id: 'CANCEL', description: 'Cancel this workflow' }];
   const options = sourceOptions.map((option) => ({ ...option, option_id: option.option_id ?? option.id })).filter((option) => option.option_id);
@@ -282,7 +296,7 @@ export function createOrchestrator({ projectRoot: projectRootInput, database = n
   async function advanceAfterSuccess(run, task, result) {
     const step = run.routePlan.steps[run.currentStepIndex];
     if (step.human_approval_after) {
-      const request = approvalRequest(task, null, step);
+      const request = approvalRequest(task, result, step);
       await selectedRepository.createApproval({ runId: run.runId, taskId: task.taskId, stepId: step.step_id, trigger: request.trigger, request });
       await announce(run, 'HUMAN_APPROVAL_REQUIRED', { approval: request, result_summary: result.summary_for_user }, task.taskId);
       await queueDailyReport(run, task, 'WAITING_HUMAN');
@@ -342,7 +356,8 @@ export function createOrchestrator({ projectRoot: projectRootInput, database = n
     }
     const artifactRootAbs = allocation.artifactRootAbs ?? allocation.workspaceRootAbs;
     const task = { workflowId: run.workflowId, runId: run.runId, taskId: stored.taskId, stepId: stored.stepId, kind: stored.kind, title: stored.title,
-      agentId: stored.agentId, attempt: stored.attempt, routeHash: stored.routeHash, inputCommit: stored.inputCommit,
+      agentId: stored.agentId, attempt: stored.attempt, routeHash: stored.routeHash, inputCommit: stored.inputCommit, releasePhase: step.release_phase ?? null,
+      deployment: run.routePlan.deployment ?? null,
       originalRequest: run.request?.original_request ?? null,
       targetProjectRootAbs: run.targetProjectRootAbs, worktreePathAbs: prepared.worktreePathAbs, artifactRootAbs,
       requiredGateChecks: GATE_CHECKS_BY_KIND[stored.kind] ?? [], contextManifestPathAbs: stored.contextManifest?.path_abs ?? null,

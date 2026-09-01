@@ -637,3 +637,58 @@ test('TEST staging preparation failure is recorded as BLOCKED, releases its leas
   assert.equal(existsSync(lockPath), false);
   assert.equal(execution.state, 'FAILED');
 });
+
+test('Release 前置检查的部署确认绑定实际候选提交与最终 URL', async (t) => {
+  const workflowId = `WF-Release-Approval-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  const candidateCommit = '1'.repeat(40);
+  const runtimeRoot = join(ROOT, 'runtime', 'release-approval-workflows', workflowId);
+  const database = openKernelDatabase({ databasePath: ':memory:' });
+  t.after(() => { database.close(); rmSync(runtimeRoot, { recursive: true, force: true }); });
+  const route = {
+    schema_version: 1, workflow_id: workflowId, request_class: 'RELEASE_ONLY', summary: 'Deploy the approved candidate.', display_title: 'Deploy',
+    risk_flags: ['external_side_effect', 'manual_acceptance', 'release_risk'], deployment: { base_url: 'https://multiagentforge.cloud', project_id: 'todo-list' },
+    steps: [
+      { step_id: 'release-preflight', kind: 'RELEASE', release_phase: 'PREFLIGHT', title: 'Preflight', rationale: 'Bind the deployment target.', human_approval_after: true, approval_reason: 'Confirm deployment.' },
+      { step_id: 'release-deploy', kind: 'RELEASE', release_phase: 'DEPLOY', title: 'Deploy', rationale: 'Deploy the approved candidate.', human_approval_after: false, approval_reason: null },
+    ],
+    skipped_stages: ['REQUIREMENTS', 'ARCHITECTURE', 'DESIGN', 'DEVELOPMENT', 'TEST', 'CODE_REVIEW'].map((kind) => ({ kind, reason: 'Not part of this release-only test.' })),
+  };
+  const orchestrator = createOrchestrator({
+    projectRoot: ROOT, runtimeRoot, database, testSandboxEnabled: false,
+    worktrees: { inspectTarget(targetProjectRootAbs) { return { targetProjectRootAbs, headCommit: candidateCommit }; }, prepare() { return { worktreePathAbs: ROOT, inputCommit: candidateCommit }; } },
+    snapshots: { async accept(input) { return { ...input, snapshotId: 'SNP-release', snapshotKind: 'NO_CHANGE', outputCommit: input.inputCommit, changeSummary: {} }; } },
+    notificationRunner: async () => ({ exitCode: 0, stdout: '', stderr: '' }),
+    runner: async ({ messagePath }) => {
+      const message = readFileSync(messagePath, 'utf8');
+      const rawOutputPath = message.match(/Write exactly one result\.schema\.json object only to:\r?\n\r?\n([^\r\n]+)/u)?.[1];
+      mkdirSync(dirname(rawOutputPath), { recursive: true });
+      writeFileSync(rawOutputPath, `${JSON.stringify({
+        schema_version: 1, workflow_id: field(message, 'workflow_id'), task_id: field(message, 'task_id'), run_id: field(message, 'run_id'),
+        agent_id: field(message, 'assigned_agent'), role: 'release', attempt: Number(field(message, 'attempt')),
+        started_at: '2026-09-01T00:00:00.000Z', finished_at: '2026-09-01T00:01:00.000Z', result_status: 'COMPLETED',
+        summary_for_user: 'Preflight passed.', summary_for_manager: 'Preflight passed.', worktree_path_abs: field(message, 'worktree_path_abs'),
+        artifact_root_abs: dirname(dirname(rawOutputPath)), input_commit: candidateCommit, output_commit: candidateCommit, isolation_mode: 'UNSANDBOXED_LOCAL',
+        self_validation: { preflight_passed: true, checks: [] }, artifact_manifest_hash: field(message, 'context_manifest_sha256'),
+        deployment: { project_id: 'todo-list', candidate_commit: candidateCommit, base_url: 'https://multiagentforge.cloud', url_path: '/todo-list', final_url: 'https://multiagentforge.cloud/todo-list', deployment_target: 'current-server' },
+      })}\n`);
+      return { exitCode: 0, stdout: '', stderr: '' };
+    },
+  });
+  await orchestrator.createRun({
+    schema_version: 1, request_id: `REQ-${workflowId}`, request_type: 'CREATE', workflow_id: workflowId, submitted_by: 'manager-agent',
+    manager_session_id: 'manager-session', manager_session_key: 'agent:manager:release', project_path_abs: ROOT, original_request: 'Deploy TodoList.', route_plan: route,
+    user_authorized: { confirmed: true, actor: 'human:test', message: 'Deploy it.' },
+  });
+
+  const outcome = await orchestrator.tick(workflowId);
+  const run = await orchestrator.repository.getRun(workflowId);
+  const [approval] = await orchestrator.repository.listApprovals({ runId: run.runId, status: 'PENDING' });
+
+  assert.equal(outcome.state, 'WAITING_HUMAN');
+  assert.equal(approval.trigger, 'RELEASE_DEPLOYMENT');
+  assert.deepEqual(approval.request.deployment, {
+    project_id: 'todo-list', candidate_commit: candidateCommit, base_url: 'https://multiagentforge.cloud', url_path: '/todo-list',
+    final_url: 'https://multiagentforge.cloud/todo-list', deployment_target: 'current-server',
+  });
+  assert.deepEqual(approval.request.options.map((option) => option.option_id), ['APPROVE_DEPLOY', 'REWORK', 'CANCEL']);
+});

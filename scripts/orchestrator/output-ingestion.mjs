@@ -53,6 +53,16 @@ function assertIdentity(task, value) {
   }
 }
 
+function assertReleaseDeployment(task, value) {
+  if (task.kind !== 'RELEASE' || task.releasePhase !== 'PREFLIGHT') return;
+  const deployment = value.deployment;
+  if (!deployment) throw new OutputBoundaryError('RELEASE_DEPLOYMENT_BINDING_MISSING', 'RELEASE PREFLIGHT output must bind deployment metadata');
+  if (deployment.project_id !== task.deployment?.project_id || deployment.base_url !== task.deployment?.base_url
+    || deployment.candidate_commit !== task.inputCommit || deployment.final_url !== `${deployment.base_url}${deployment.url_path}`) {
+    throw new OutputBoundaryError('RELEASE_DEPLOYMENT_BINDING_MISMATCH', 'RELEASE PREFLIGHT deployment metadata does not match the assigned route and candidate commit');
+  }
+}
+
 function mappedReferences(value, mappings = []) {
   const mapped = structuredClone(value);
   const mapPath = (path) => {
@@ -138,6 +148,7 @@ export function ingestTaskOutput({ projectRoot, task, occurredAt = new Date().to
   const mapped = mappedReferences(ingestion.value, sandboxContext?.referencePathMappings);
   const value = attachHostSandboxAttestation(task, mapped, sandboxContext, testSandboxPreparationFailure, testSandboxEnabled);
   assertIdentity(task, value);
+  assertReleaseDeployment(task, value);
   const boundaryTransformations = [];
   if (JSON.stringify(mapped) !== JSON.stringify(ingestion.value)) boundaryTransformations.push('container_references_mapped');
   if (value.sandbox_attestation !== mapped.sandbox_attestation) boundaryTransformations.push('host_sandbox_attestation_attached');
