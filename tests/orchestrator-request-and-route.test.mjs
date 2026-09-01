@@ -45,6 +45,36 @@ test('Orchestrator accepts TEST before CODE_REVIEW in a lifecycle route', () => 
   assert.doesNotThrow(() => compileRoutePlan(ROOT, plan));
 });
 
+test('部署路线必须通过 Release 的前置检查和部署两个受控步骤', () => {
+  const plan = routePlan('WF-Deploy-001');
+  plan.request_class = 'FEATURE';
+  plan.risk_flags = ['external_side_effect', 'manual_acceptance', 'release_risk'];
+  plan.deployment = { base_url: 'https://multiagentforge.cloud', project_id: 'todo-list' };
+  plan.steps = [
+    { step_id: 'release-preflight', kind: 'RELEASE', release_phase: 'PREFLIGHT', title: '部署前检查', rationale: '确定候选提交、回滚方案和项目 URL 路径。', human_approval_after: true, approval_reason: '确认候选提交和最终 URL 后才可部署。' },
+    { step_id: 'release-deploy', kind: 'RELEASE', release_phase: 'DEPLOY', title: '受控部署与上线验证', rationale: '在确认后部署并验证线上服务。', human_approval_after: false, approval_reason: null },
+  ];
+  plan.skipped_stages = ['REQUIREMENTS', 'ARCHITECTURE', 'DESIGN', 'DEVELOPMENT', 'TEST', 'CODE_REVIEW'].map((kind) => ({ kind, reason: 'Not required for this release-only deployment test.' }));
+
+  const compiled = compileRoutePlan(ROOT, plan);
+
+  assert.equal(compiled.deployment.base_url, 'https://multiagentforge.cloud');
+  assert.deepEqual(compiled.steps.map((step) => step.release_phase), ['PREFLIGHT', 'DEPLOY']);
+});
+
+test('部署路线拒绝跳过 Release 前置检查或部署确认', () => {
+  const plan = routePlan('WF-Deploy-002');
+  plan.request_class = 'FEATURE';
+  plan.risk_flags = ['external_side_effect', 'manual_acceptance', 'release_risk'];
+  plan.deployment = { base_url: 'https://multiagentforge.cloud', project_id: 'todo-list' };
+  plan.steps = [
+    { step_id: 'release-deploy', kind: 'RELEASE', release_phase: 'DEPLOY', title: '直接部署', rationale: 'Incorrectly skips the preflight gate.', human_approval_after: false, approval_reason: null },
+  ];
+  plan.skipped_stages = ['REQUIREMENTS', 'ARCHITECTURE', 'DESIGN', 'DEVELOPMENT', 'TEST', 'CODE_REVIEW'].map((kind) => ({ kind, reason: 'Not required for this deployment validation test.' }));
+
+  assert.throws(() => compileRoutePlan(ROOT, plan), (error) => error instanceof RoutePlanError && error.code === 'DEPLOYMENT_RELEASE_ROUTE_INVALID');
+});
+
 test('Manager request queue requires session-bound requests and records a receipt', async () => {
   const workspace = mkdtempSync(join(tmpdir(), 'orchestrator-manager-'));
   const calls = [];

@@ -35,6 +35,26 @@ export class RoutePlanError extends Error {
 
 function fail(code, message, details = {}) { throw new RoutePlanError(code, message, details); }
 
+function assertDeploymentRules(plan) {
+  const releaseSteps = plan.steps.filter((step) => step.kind === 'RELEASE');
+  if (!plan.deployment) {
+    if (releaseSteps.some((step) => step.release_phase === 'DEPLOY')) {
+      fail('DEPLOYMENT_RELEASE_ROUTE_INVALID', 'a DEPLOY release phase requires declared deployment metadata');
+    }
+    return;
+  }
+  const requiredFlags = ['external_side_effect', 'manual_acceptance', 'release_risk'];
+  if (requiredFlags.some((flag) => !plan.risk_flags.includes(flag))) {
+    fail('DEPLOYMENT_RISK_FLAGS_MISSING', 'deployment routes must declare external_side_effect, manual_acceptance, and release_risk');
+  }
+  if (releaseSteps.length !== 2 || releaseSteps[0].release_phase !== 'PREFLIGHT' || releaseSteps[1].release_phase !== 'DEPLOY') {
+    fail('DEPLOYMENT_RELEASE_ROUTE_INVALID', 'deployment routes require RELEASE PREFLIGHT followed by RELEASE DEPLOY');
+  }
+  if (!releaseSteps[0].human_approval_after || releaseSteps[1].human_approval_after) {
+    fail('DEPLOYMENT_RELEASE_APPROVAL_INVALID', 'deployment routes require approval after PREFLIGHT and no route approval after DEPLOY');
+  }
+}
+
 function validator(projectRoot) {
   const schema = JSON.parse(readFileSync(join(projectRoot, 'contracts', 'route-plan.schema.json'), 'utf8'));
   const ajv = new Ajv({ allErrors: true, strict: true });
@@ -65,6 +85,7 @@ function assertRules(plan) {
     fail('ROUTE_PLAN_TEST_ONLY_SCOPE', 'TEST_ONLY must contain TEST and cannot include DEVELOPMENT or ARCHITECTURE');
   }
   if (included.has('DEVELOPMENT') && !included.has('TEST')) fail('ROUTE_PLAN_TEST_REQUIRED', 'DEVELOPMENT requires TEST in the same route');
+  assertDeploymentRules(plan);
   const elevated = plan.risk_flags.some((flag) => ['security_boundary', 'destructive_operation', 'external_side_effect', 'manual_acceptance', 'release_risk'].includes(flag));
   if (elevated && !plan.steps.some((step) => step.human_approval_after)) fail('ROUTE_PLAN_RISK_APPROVAL_REQUIRED', 'elevated risk requires a human approval point');
 }
@@ -81,6 +102,7 @@ export function compileRoutePlan(projectRootInput, value) {
     summary: value.summary,
     display_title: value.display_title,
     risk_flags: [...value.risk_flags],
+    deployment: value.deployment ? { ...value.deployment } : null,
     skipped_stages: value.skipped_stages.map((item) => ({ ...item })),
     steps: value.steps.map((step, index) => ({
       ...step,
