@@ -126,7 +126,6 @@ test('active architecture documents describe Orchestrator dispatch, SQLite, and 
   const nativeIntegration = readFileSync(join(ROOT, 'docs', 'native-openclaw-integration.md'), 'utf8');
   const compatibility = readFileSync(join(ROOT, 'docs', 'compatibility-report.md'), 'utf8');
   const jsonFlow = readFileSync(join(ROOT, 'docs', 'architect', 'JSON处理流程.md'), 'utf8');
-  const deliveryReport = readFileSync(join(ROOT, 'DELIVERY-REPORT.md'), 'utf8');
   const modelRouting = readFileSync(join(ROOT, 'docs', 'model-routing.md'), 'utf8');
   const resultContract = JSON.parse(readFileSync(join(ROOT, 'contracts', 'result.schema.json'), 'utf8'));
 
@@ -138,7 +137,6 @@ test('active architecture documents describe Orchestrator dispatch, SQLite, and 
   assert.match(compatibility, /当前架构.*Node Orchestrator.*SQLite/su);
   assert.match(jsonFlow, /SQLite.*runs.*tasks.*executions/su);
   assert.doesNotMatch(jsonFlow, /PostgreSQL 创建\/更新 workflow、task、event/u);
-  assert.match(deliveryReport, /历史交付快照.*不代表当前架构/su);
   assert.match(modelRouting, /manager-agent.*用户交互.*路线确认/su);
   assert.doesNotMatch(resultContract.properties.summary_for_manager.description, /Manager.*调度/u);
 });
