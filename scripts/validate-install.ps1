@@ -32,6 +32,12 @@ function Test-Json([string]$Path) {
 function Test-Throws([scriptblock]$Action) {
   try { & $Action; return $false } catch { return $true }
 }
+function Test-InstalledRealPath([string]$Path, [ValidateSet('Container','Leaf')][string]$PathType, [string]$Root) {
+  if (-not (Test-Path -LiteralPath $Path -PathType $PathType)) { return $false }
+  $item = Get-Item -Force -LiteralPath $Path
+  if (($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) { return $false }
+  return Test-PathWithin -Path $item.FullName -Root $Root
+}
 function Get-OptionalPropertyValue($Object, [string]$Name) {
   if ($null -ne $Object -and $Object.PSObject.Properties.Name -contains $Name) { return $Object.$Name }
   return $null
@@ -105,18 +111,29 @@ $templatesDir = Join-Path $ProjectRoot 'templates'
 Get-ChildItem -LiteralPath $templatesDir -Filter '*.json' -File | ForEach-Object { Add-Check "templates JSON: $($_.Name)" (Test-Json $_.FullName) }
 
 $managerWorkspace = Join-Path $RuntimeRootAbs 'agents\manager-agent\workspace'
+$managerWorkspaceSafe = $true
+foreach ($path in @(
+  (Join-Path $RuntimeRootAbs 'agents'),
+  (Join-Path $RuntimeRootAbs 'agents\manager-agent'),
+  $managerWorkspace,
+  (Join-Path $managerWorkspace '.orchestrator')
+)) {
+  if (-not (Test-InstalledRealPath -Path $path -PathType Container -Root $RuntimeRootAbs)) { $managerWorkspaceSafe = $false }
+}
 foreach ($directory in @('drafts','requests','receipts')) {
   $path = Join-Path $managerWorkspace ".orchestrator\$directory"
-  Add-Check "已安装 Manager $directory 目录" (Test-Path -LiteralPath $path -PathType Container) $path
+  Add-Check "已安装 Manager $directory 目录" ($managerWorkspaceSafe -and (Test-InstalledRealPath -Path $path -PathType Container -Root $RuntimeRootAbs)) $path
 }
 $managerDeployTemplate = Join-Path $managerWorkspace 'templates\manager-request.deploy.json'
-Add-Check '已安装 Manager 部署请求模板' ((Test-Path -LiteralPath $managerDeployTemplate -PathType Leaf) -and (Test-Json $managerDeployTemplate)) $managerDeployTemplate
+$managerTemplates = Join-Path $managerWorkspace 'templates'
+Add-Check '已安装 Manager 部署请求模板' ($managerWorkspaceSafe -and (Test-InstalledRealPath -Path $managerTemplates -PathType Container -Root $RuntimeRootAbs) -and (Test-InstalledRealPath -Path $managerDeployTemplate -PathType Leaf -Root $RuntimeRootAbs) -and (Test-Json $managerDeployTemplate)) $managerDeployTemplate
 $managerRequestSubmission = Join-Path $RuntimeRootAbs 'manager-control\request-submission.mjs'
-Add-Check '已安装 Manager request-submission 控制模块' (Test-Path -LiteralPath $managerRequestSubmission -PathType Leaf) $managerRequestSubmission
+$managerControlRoot = Join-Path $RuntimeRootAbs 'manager-control'
+Add-Check '已安装 Manager request-submission 控制模块' ((Test-InstalledRealPath -Path $managerControlRoot -PathType Container -Root $RuntimeRootAbs) -and (Test-InstalledRealPath -Path $managerRequestSubmission -PathType Leaf -Root $RuntimeRootAbs)) $managerRequestSubmission
 $managerAgentsPath = Join-Path $managerWorkspace 'AGENTS.md'
 $managerToolsPath = Join-Path $managerWorkspace 'TOOLS.md'
 $managerProtocolInstalled = $false
-if ((Test-Path -LiteralPath $managerAgentsPath -PathType Leaf) -and (Test-Path -LiteralPath $managerToolsPath -PathType Leaf)) {
+if ($managerWorkspaceSafe -and (Test-InstalledRealPath -Path $managerAgentsPath -PathType Leaf -Root $RuntimeRootAbs) -and (Test-InstalledRealPath -Path $managerToolsPath -PathType Leaf -Root $RuntimeRootAbs)) {
   $managerAgentsText = Get-Content -Raw -LiteralPath $managerAgentsPath
   $managerToolsText = Get-Content -Raw -LiteralPath $managerToolsPath
   $managerProtocolInstalled = $managerAgentsText -match 'orchestrator-validate-request' -and $managerAgentsText -match 'orchestrator-submit-request' -and $managerToolsText -match 'orchestrator-validate-request' -and $managerToolsText -match 'orchestrator-submit-request'

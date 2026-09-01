@@ -51,6 +51,21 @@ check() {
   case "$2" in PASS) PASS_N=$((PASS_N+1));; FAIL) FAIL_N=$((FAIL_N+1));; UNKNOWN) UNK_N=$((UNK_N+1));; esac
 }
 
+RUNTIME_ROOT_CANONICAL="$(cd -P "$RUNTIME_ROOT_ABS" >/dev/null 2>&1 && pwd -P || true)"
+safe_installed_directory() {
+  local path="$1" canonical
+  [ -n "$RUNTIME_ROOT_CANONICAL" ] && [ -d "$path" ] && [ ! -L "$path" ] || return 1
+  canonical="$(cd -P "$path" >/dev/null 2>&1 && pwd -P)" || return 1
+  [ "$canonical" = "$RUNTIME_ROOT_CANONICAL" ] || [[ "$canonical" = "$RUNTIME_ROOT_CANONICAL/"* ]]
+}
+safe_installed_file() {
+  local path="$1" parent canonical
+  [ -n "$RUNTIME_ROOT_CANONICAL" ] && [ -f "$path" ] && [ ! -L "$path" ] || return 1
+  parent="$(cd -P "$(dirname "$path")" >/dev/null 2>&1 && pwd -P)" || return 1
+  canonical="$parent/$(basename "$path")"
+  [[ "$canonical" = "$RUNTIME_ROOT_CANONICAL/"* ]]
+}
+
 check_installed_test_agent_sandbox() {
   local agents_json sandbox workspace_access workdir binds_absent hardening detail
   if ! agents_json="$(openclaw config get agents.list --json 2>/dev/null)"; then
@@ -136,21 +151,26 @@ for f in "$PROJECT_ROOT"/contracts/*.json; do jq empty "$(native_path "$f")" >/d
 for f in "$PROJECT_ROOT"/templates/*.json; do [ -e "$f" ] || continue; jq empty "$(native_path "$f")" >/dev/null 2>&1 && check "templates JSON: $(basename "$f")" PASS || check "templates JSON: $(basename "$f")" FAIL; done
 
 MANAGER_WORKSPACE="$RUNTIME_ROOT_ABS/agents/manager-agent/workspace"
+MANAGER_WORKSPACE_SAFE=1
+for directory in "$RUNTIME_ROOT_ABS/agents" "$RUNTIME_ROOT_ABS/agents/manager-agent" "$MANAGER_WORKSPACE" "$MANAGER_WORKSPACE/.orchestrator"; do
+  safe_installed_directory "$directory" || MANAGER_WORKSPACE_SAFE=0
+done
 for directory in drafts requests receipts; do
   path="$MANAGER_WORKSPACE/.orchestrator/$directory"
-  [ -d "$path" ] && check "已安装 Manager $directory 目录" PASS "$path" || check "已安装 Manager $directory 目录" FAIL "$path"
+  [ "$MANAGER_WORKSPACE_SAFE" -eq 1 ] && safe_installed_directory "$path" && check "已安装 Manager $directory 目录" PASS "$path" || check "已安装 Manager $directory 目录" FAIL "$path"
 done
 MANAGER_DEPLOY_TEMPLATE="$MANAGER_WORKSPACE/templates/manager-request.deploy.json"
-if [ -f "$MANAGER_DEPLOY_TEMPLATE" ] && jq empty "$(native_path "$MANAGER_DEPLOY_TEMPLATE")" >/dev/null 2>&1; then
+if [ "$MANAGER_WORKSPACE_SAFE" -eq 1 ] && safe_installed_directory "$MANAGER_WORKSPACE/templates" && safe_installed_file "$MANAGER_DEPLOY_TEMPLATE" && jq empty "$(native_path "$MANAGER_DEPLOY_TEMPLATE")" >/dev/null 2>&1; then
   check "已安装 Manager 部署请求模板" PASS "$MANAGER_DEPLOY_TEMPLATE"
 else
   check "已安装 Manager 部署请求模板" FAIL "$MANAGER_DEPLOY_TEMPLATE"
 fi
 MANAGER_REQUEST_SUBMISSION="$RUNTIME_ROOT_ABS/manager-control/request-submission.mjs"
-[ -f "$MANAGER_REQUEST_SUBMISSION" ] && check "已安装 Manager request-submission 控制模块" PASS "$MANAGER_REQUEST_SUBMISSION" || check "已安装 Manager request-submission 控制模块" FAIL "$MANAGER_REQUEST_SUBMISSION"
+safe_installed_directory "$RUNTIME_ROOT_ABS/manager-control" && safe_installed_file "$MANAGER_REQUEST_SUBMISSION" && check "已安装 Manager request-submission 控制模块" PASS "$MANAGER_REQUEST_SUBMISSION" || check "已安装 Manager request-submission 控制模块" FAIL "$MANAGER_REQUEST_SUBMISSION"
 MANAGER_AGENTS="$MANAGER_WORKSPACE/AGENTS.md"
 MANAGER_TOOLS="$MANAGER_WORKSPACE/TOOLS.md"
-if grep -q 'orchestrator-validate-request' "$MANAGER_AGENTS" 2>/dev/null && grep -q 'orchestrator-submit-request' "$MANAGER_AGENTS" 2>/dev/null \
+if [ "$MANAGER_WORKSPACE_SAFE" -eq 1 ] && safe_installed_file "$MANAGER_AGENTS" && safe_installed_file "$MANAGER_TOOLS" \
+  && grep -q 'orchestrator-validate-request' "$MANAGER_AGENTS" 2>/dev/null && grep -q 'orchestrator-submit-request' "$MANAGER_AGENTS" 2>/dev/null \
   && grep -q 'orchestrator-validate-request' "$MANAGER_TOOLS" 2>/dev/null && grep -q 'orchestrator-submit-request' "$MANAGER_TOOLS" 2>/dev/null; then
   check "已安装 Manager 请求预校验协议" PASS
 else

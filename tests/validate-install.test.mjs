@@ -8,6 +8,7 @@ import {
   readFileSync,
   readdirSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -164,6 +165,55 @@ for (const [name, command, available] of [
     }
   });
 }
+
+for (const [name, command, available] of [
+  ['Bash', ['bash', VALIDATOR, '--skip-openclaw', '--runtime-root'], BASH_AVAILABLE],
+  ['PowerShell', ['pwsh', '-NoProfile', '-File', POWERSHELL_VALIDATOR, '-SkipOpenClaw', '-RuntimeRoot'], PWSH_AVAILABLE],
+]) {
+  test(`${name} validator rejects linked Manager request preflight capabilities`, {
+    skip: available ? false : `${name} unavailable in this environment`,
+  }, (t) => {
+    const root = mkdtempSync(join(tmpdir(), 'openclaw-manager-preflight-link-validator-'));
+    const runtime = join(root, 'runtime');
+    const outside = join(root, 'outside');
+    const workspace = join(runtime, 'agents', 'manager-agent', 'workspace');
+    const previousManifest = existsSync(DRY_MANIFEST) ? readFileSync(DRY_MANIFEST) : null;
+    try {
+      createInstalledManagerPreflightFixture(runtime);
+      mkdirSync(join(outside, 'drafts'), { recursive: true });
+      writeFileSync(join(outside, 'request-submission.mjs'), 'export {};\n');
+      rmSync(join(workspace, '.orchestrator', 'drafts'), { recursive: true });
+      try { symlinkSync(join(outside, 'drafts'), join(workspace, '.orchestrator', 'drafts'), process.platform === 'win32' ? 'junction' : 'dir'); }
+      catch (error) { t.skip(`current platform does not permit creating a directory link: ${error.code ?? error.message}`); return; }
+
+      const linkedDirectory = spawnSync(command[0], [...command.slice(1), runtime], { cwd: ROOT, encoding: 'utf8' });
+      assert.notEqual(linkedDirectory.status, 0, linkedDirectory.stdout + linkedDirectory.stderr);
+      assert.match(linkedDirectory.stdout, /Manager drafts/u);
+
+      rmSync(join(workspace, '.orchestrator', 'drafts'));
+      mkdirSync(join(workspace, '.orchestrator', 'drafts'));
+      rmSync(join(runtime, 'manager-control', 'request-submission.mjs'));
+      try { symlinkSync(join(outside, 'request-submission.mjs'), join(runtime, 'manager-control', 'request-submission.mjs')); }
+      catch (error) { t.diagnostic(`current platform does not permit creating a file link: ${error.code ?? error.message}`); return; }
+
+      const linkedModule = spawnSync(command[0], [...command.slice(1), runtime], { cwd: ROOT, encoding: 'utf8' });
+      assert.notEqual(linkedModule.status, 0, linkedModule.stdout + linkedModule.stderr);
+      assert.match(linkedModule.stdout, /Manager.*request-submission/u);
+    } finally {
+      if (previousManifest === null) rmSync(DRY_MANIFEST, { force: true });
+      else writeFileSync(DRY_MANIFEST, previousManifest);
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+}
+
+test('PowerShell validator source retains Manager preflight and reparse-point checks', () => {
+  const powershell = readFileSync(POWERSHELL_VALIDATOR, 'utf8');
+  for (const value of ['drafts', 'requests', 'receipts', 'manager-request.deploy.json', 'request-submission.mjs', 'orchestrator-validate-request', 'orchestrator-submit-request']) {
+    assert.match(powershell, new RegExp(value.replaceAll('.', '\\.'), 'u'));
+  }
+  assert.match(powershell, /ReparsePoint/u);
+});
 
 test('active architecture documents describe Orchestrator dispatch, SQLite, and the Docker test sandbox', () => {
   const configNotes = readFileSync(join(ROOT, 'config', 'openclaw-config-notes.md'), 'utf8');
