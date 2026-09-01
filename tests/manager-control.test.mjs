@@ -133,6 +133,50 @@ test('manager control reads the bound pending approval and writes a matching dec
     '--decision-id', status.pending_approval.decision_id, '--choice', 'APPROVE', '--authorization-summary', '   '], output, { runtimeRoot }), (error) => error.code === 'MANAGER_CONTROL_USAGE');
 });
 
+test('manager control finds the latest workflow bound to the supplied session key', async (t) => {
+  const runtimeRoot = mkdtempSync(join(tmpdir(), 'manager-control-current-status-'));
+  const database = openKernelDatabase({ databasePath: join(runtimeRoot, 'control', 'kernel.db') });
+  t.after(() => { database.close(); rmSync(runtimeRoot, { recursive: true, force: true }); });
+  let timestamp = Date.parse('2026-09-01T00:00:00.000Z');
+  const repository = createWorkflowRepository({ database, clock: () => new Date(timestamp += 1000) });
+  await repository.createRun({ workflowId: 'WF-current-old', request: { original_request: '旧需求', project_ref: 'PRJ-old' }, targetProjectRootAbs: runtimeRoot, baseCommit: '1'.repeat(40),
+    managerSessionId: 'manager-session-old', managerSessionKey: 'manager-key', routePlan: { steps: [], route_hash: 'a'.repeat(64) } });
+  await repository.createRun({ workflowId: 'WF-current-other', request: { original_request: '不应泄露', project_ref: 'PRJ-other' }, targetProjectRootAbs: runtimeRoot, baseCommit: '1'.repeat(40),
+    managerSessionId: 'manager-session-other', managerSessionKey: 'other-manager-key', routePlan: { steps: [], route_hash: 'b'.repeat(64) } });
+  const latest = await repository.createRun({ workflowId: 'WF-current-latest', request: { original_request: '重新发起待办项目', project_ref: 'PRJ-latest' }, targetProjectRootAbs: runtimeRoot, baseCommit: '1'.repeat(40),
+    managerSessionId: 'manager-session-latest', managerSessionKey: 'manager-key', routePlan: { steps: [], route_hash: 'c'.repeat(64) } });
+  const output = { value: '', write(value) { this.value += value; } };
+
+  const status = runManagerControl(['orchestrator-current-status', '--manager-session-key', 'manager-key'], output, { runtimeRoot });
+
+  assert.equal(status.workflow_id, latest.workflowId);
+  assert.equal(status.manager_session_id, 'manager-session-latest');
+  assert.equal(status.original_request, '重新发起待办项目');
+  assert.equal(status.project_ref, 'PRJ-latest');
+  assert.doesNotMatch(output.value, /不应泄露/u);
+  assert.throws(() => runManagerControl(['orchestrator-current-status', '--manager-session-key', 'missing-manager-key'], output, { runtimeRoot }), (error) => error.code === 'WORKFLOW_NOT_FOUND');
+});
+
+test('manager control finds a queued workflow bound to the supplied session key before SQLite exists', (t) => {
+  const runtimeRoot = mkdtempSync(join(tmpdir(), 'manager-control-current-queued-'));
+  t.after(() => rmSync(runtimeRoot, { recursive: true, force: true }));
+  const requestRoot = join(runtimeRoot, 'agents', 'manager-agent', 'workspace', '.orchestrator');
+  mkdirSync(join(requestRoot, 'requests'), { recursive: true });
+  atomicWriteJson(join(requestRoot, 'requests', 'queued.json'), {
+    schema_version: 1, request_id: 'REQ-current-queued', request_type: 'CREATE', workflow_id: 'WF-current-queued',
+    manager_session_id: 'manager-session-queued', manager_session_key: 'manager-key', original_request: '排队中的需求', project_ref: 'PRJ-queued',
+  });
+  const output = { value: '', write(value) { this.value += value; } };
+
+  const status = runManagerControl(['orchestrator-current-status', '--manager-session-key', 'manager-key'], output, { runtimeRoot });
+
+  assert.equal(status.state, 'REQUEST_QUEUED');
+  assert.equal(status.workflow_id, 'WF-current-queued');
+  assert.equal(status.manager_session_id, 'manager-session-queued');
+  assert.equal(status.original_request, '排队中的需求');
+  assert.equal(status.project_ref, 'PRJ-queued');
+});
+
 test('manager control reports the latest published task location for its bound workflow', async (t) => {
   const runtimeRoot = mkdtempSync(join(tmpdir(), 'manager-control-result-location-'));
   const database = openKernelDatabase({ databasePath: join(runtimeRoot, 'control', 'kernel.db') });

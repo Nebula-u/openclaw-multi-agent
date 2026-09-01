@@ -558,6 +558,9 @@ try {
   $managerEntrypoint = Join-Path $RuntimeRootAbs $(if ($IsWindows) { 'manager-control\manager-control.cmd' } else { 'manager-control/manager-control' })
   if (-not $IsWindows) { & chmod 755 $managerEntrypoint }
   if (-not (Test-Path -LiteralPath $managerEntrypoint -PathType Leaf)) { throw "缺少 Manager 受控执行入口：$managerEntrypoint" }
+  $managerEntrypointFile = Join-Path $Manager.workspace '.orchestrator\manager-control-entrypoint.json'
+  New-Item -ItemType Directory -Force -Path (Split-Path -Parent $managerEntrypointFile) | Out-Null
+  Write-JsonAtomic -Value ([ordered]@{ schema_version = 1; entrypoint = $managerEntrypoint }) -Path $managerEntrypointFile -Depth 4
   $approvalFile = (Get-OpenClawJsonWithRetry -OcArgs @('approvals','get','--json') -Description 'Manager exec approvals').file
   if (-not $approvalFile) { throw 'Manager exec approvals 返回中缺少 approvals 文件。' }
   if (-not ($approvalFile.PSObject.Properties.Name -contains 'agents') -or -not $approvalFile.agents) {

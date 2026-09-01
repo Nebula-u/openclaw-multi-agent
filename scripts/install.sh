@@ -684,6 +684,11 @@ MANAGER_EXEC_STATE="$RUNTIME_ROOT_ABS/control/manager-exec-allowlist.json"
 MANAGER_ENTRYPOINT="$RUNTIME_ROOT_ABS/manager-control/manager-control"
 chmod 755 "$MANAGER_ENTRYPOINT"
 [ -f "$MANAGER_ENTRYPOINT" ] || { restore_on_failure "缺少 Manager 受控执行入口"; exit 1; }
+MANAGER_ENTRYPOINT_FILE="${WS[$MANAGER_ID]}/.orchestrator/manager-control-entrypoint.json"
+mkdir -p "$(dirname "$MANAGER_ENTRYPOINT_FILE")"
+manager_entrypoint_tmp="$(mktemp "${MANAGER_ENTRYPOINT_FILE}.tmp.XXXXXX")"
+printf '{"schema_version":1,"entrypoint":"%s"}\n' "$(json_escape "$MANAGER_ENTRYPOINT")" > "$manager_entrypoint_tmp"
+mv -f "$manager_entrypoint_tmp" "$MANAGER_ENTRYPOINT_FILE"
 approval_snapshot="$(openclaw approvals get --json 2>/dev/null)" || { restore_on_failure "读取 Manager exec approvals 失败"; exit 1; }
 approval_tmp="$(mktemp)"
 if ! printf '%s' "$approval_snapshot" | jq --arg agent "$MANAGER_ID" --arg entry "$MANAGER_ENTRYPOINT" '

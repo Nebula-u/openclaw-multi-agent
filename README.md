@@ -291,7 +291,7 @@ node scripts/orchestrator-cli.mjs kernel-status --project-root .
 node scripts/orchestrator-cli.mjs retry-notifications --project-root .
 ```
 
-当 workflow 显示 `WAITING_HUMAN` 时，Monitor 会显示当前审批的真实选项。点击后仅显示“已排队”；前台 Orchestrator 在下一个轮询周期写入最终审批结果，并向原 Manager Session 发送通知。Manager 也可通过受限的 `manager-control orchestrator-status` 读取完整 pending `decision_id`，并通过 `orchestrator-approve` 创建绑定当前 Session 的 DECISION request；两者都不会直接写 Kernel。
+当 workflow 显示 `WAITING_HUMAN` 时，Monitor 会显示当前审批的真实选项。点击后仅显示“已排队”；前台 Orchestrator 在下一个轮询周期写入最终审批结果，并向原 Manager Session 发送通知。Manager 也可通过受限的 `manager-control orchestrator-status` 读取完整 pending `decision_id`，并通过 `orchestrator-approve` 创建绑定当前 Session 的 DECISION request；两者都不会直接写 Kernel。若用户只说明“abort 后重新发起”而未提供 workflow ID，Manager 先读取安装器生成的受控入口记录，再以当前 session key 调用只读 `orchestrator-current-status` 获取同一会话最近 workflow 的真实 ID、原需求和项目引用；该动作不会读取其它 session 的 workflow。
 
 ## 备份和恢复
 

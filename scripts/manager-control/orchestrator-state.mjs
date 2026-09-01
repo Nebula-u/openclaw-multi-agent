@@ -65,6 +65,29 @@ function requestStatusFromQueue(runtimeRoot, workflowId, managerSessionId, manag
     },
   };
 }
+function currentRequestStatusFromQueue(runtimeRoot, managerSessionKey) {
+  const root = join(runtimeRoot, 'agents', 'manager-agent', 'workspace', '.orchestrator');
+  const requests = join(root, 'requests');
+  if (!existsSync(requests)) return null;
+  const candidates = [];
+  for (const name of readdirSync(requests).filter((value) => value.endsWith('.json'))) {
+    const requestPath = join(requests, name);
+    if (!isRegularFile(requestPath)) continue;
+    let request;
+    try { request = JSON.parse(readFileSync(requestPath, 'utf8')); }
+    catch { continue; }
+    if (!request || typeof request !== 'object' || Array.isArray(request)
+      || request.manager_session_key !== managerSessionKey || typeof request.workflow_id !== 'string'
+      || typeof request.manager_session_id !== 'string') continue;
+    candidates.push({ request, mtimeMs: lstatSync(requestPath).mtimeMs, name });
+  }
+  candidates.sort((left, right) => right.mtimeMs - left.mtimeMs || right.name.localeCompare(left.name));
+  for (const candidate of candidates) {
+    const status = requestStatusFromQueue(runtimeRoot, candidate.request.workflow_id, candidate.request.manager_session_id, managerSessionKey);
+    if (status) return { ...status, manager_session_id: candidate.request.manager_session_id, original_request: candidate.request.original_request ?? null, project_ref: candidate.request.project_ref ?? null };
+  }
+  return null;
+}
 function publishedResult(row) {
   if (!row) return null;
   const payload = row.task_payload ? JSON.parse(row.task_payload) : {};
@@ -106,6 +129,29 @@ export function readOrchestratorStatus({ runtimeRoot: runtimeRootInput, workflow
         notes: response?.notes ?? '', resolved_at: resolvedRow.resolved_at } : null,
       published_result: publishedResult(latestSucceededTask) };
   } finally { database.close(); }
+}
+
+export function readCurrentOrchestratorStatus({ runtimeRoot: runtimeRootInput, managerSessionKey }) {
+  const runtimeRoot = resolve(runtimeRootInput);
+  const databasePath = join(runtimeRoot, 'control', 'kernel.db');
+  let row = null;
+  if (existsSync(databasePath)) {
+    const database = openKernelDatabase({ databasePath, readonly: true, initialize: false });
+    try {
+      row = database.get(`SELECT workflow_id,manager_session_id,manager_session_key,request FROM runs
+        WHERE manager_session_key=? ORDER BY updated_at DESC,created_at DESC LIMIT 1`, [managerSessionKey]);
+    } finally { database.close(); }
+  }
+  if (row) {
+    let request = {};
+    try { request = row.request ? JSON.parse(row.request) : {}; }
+    catch { fail('WORKFLOW_REQUEST_INVALID', 'selected workflow request is invalid'); }
+    const status = readOrchestratorStatus({ runtimeRoot, workflowId: row.workflow_id, managerSessionId: row.manager_session_id, managerSessionKey: row.manager_session_key });
+    return { ...status, manager_session_id: row.manager_session_id, original_request: request.original_request ?? null, project_ref: request.project_ref ?? null };
+  }
+  const queued = currentRequestStatusFromQueue(runtimeRoot, managerSessionKey);
+  if (queued) return queued;
+  fail('WORKFLOW_NOT_FOUND', 'no workflow is bound to the Manager session');
 }
 
 export function submitOrchestratorApproval({ runtimeRoot: runtimeRootInput, workflowId, managerSessionId, managerSessionKey, decisionId, choice, authorization, notes = '' }) {

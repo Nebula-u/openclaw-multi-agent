@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import {
   chmodSync,
+  cpSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -17,6 +18,7 @@ import { fileURLToPath } from 'node:url';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const VALIDATOR = join(ROOT, 'scripts', 'validate-install.sh');
+const INSTALL_SH = join(ROOT, 'scripts', 'install.sh');
 const POWERSHELL_VALIDATOR = join(ROOT, 'scripts', 'validate-install.ps1');
 const DRY_MANIFEST = join(ROOT, 'artifacts', 'install-dryrun', 'install-manifest.dryrun.json');
 const BASH_AVAILABLE = spawnSync('bash', ['-lc', 'exit 0'], { encoding: 'utf8' }).status === 0;
@@ -520,6 +522,8 @@ test(
 
       assert.equal(result.status, 0, result.stdout + result.stderr);
       assert.equal(existsSync(join(runtime, 'manager-control', 'manager-control-policy.json')), true);
+      const managerEntrypoint = JSON.parse(readFileSync(join(runtime, 'agents', 'manager-agent', 'workspace', '.orchestrator', 'manager-control-entrypoint.json'), 'utf8'));
+      assert.equal(managerEntrypoint.entrypoint, join(runtime, 'manager-control', 'manager-control'));
       assert.equal(existsSync(join(runtime, 'control', 'runtime-bundle.json')), true);
       assert.equal(existsSync(work), true);
       assert.equal(existsSync(join(runtime, 'worktrees')), false);
@@ -534,3 +538,52 @@ test(
     }
   },
 );
+
+test('Bash installer writes the Manager entrypoint record that matches its allowlist entry', { skip: BASH_AVAILABLE ? false : 'bash unavailable in this environment' }, () => {
+  const root = mkdtempSync(join(tmpdir(), 'openclaw-install-bash-'));
+  const project = join(root, 'project');
+  const bin = join(root, 'bin');
+  const runtime = join(root, 'runtime');
+  const config = join(root, 'openclaw.json');
+  const agents = join(root, 'agents.json');
+  const fakeOpenClaw = join(bin, 'openclaw');
+  try {
+    mkdirSync(project, { recursive: true });
+    for (const name of ['agents', 'config', 'scripts', 'templates']) cpSync(join(ROOT, name), join(project, name), { recursive: true });
+    mkdirSync(bin, { recursive: true });
+    writeFileSync(config, '{}\n');
+    writeFileSync(agents, JSON.stringify(readdirSync(join(ROOT, 'agents', 'packages', 'builtin'))
+      .filter((name) => name.endsWith('.json'))
+      .map((name) => JSON.parse(readFileSync(join(ROOT, 'agents', 'packages', 'builtin', name), 'utf8')))
+      .filter((value) => value.lifecycle?.register !== false)
+      .map((value) => ({ id: value.id }))), 'utf8');
+    writeFileSync(fakeOpenClaw, `#!/usr/bin/env bash
+case "\${1:-}:\${2:-}:\${3:-}" in
+  --version::) printf 'fake-openclaw 0\\n' ;;
+  config:file:*) printf '%s\\n' "\$FAKE_OPENCLAW_CONFIG" ;;
+  agents:list:*) printf '[]\\n' ;;
+  config:get:agents.list) cat "\$FAKE_OPENCLAW_AGENTS" ;;
+  config:get:*) printf '\"\"\\n' ;;
+  config:set:*) exit 0 ;;
+  approvals:get:*) printf '{"file":{"version":1,"agents":{}}}\\n' ;;
+  approvals:set:*) exit 0 ;;
+  config:validate:*) printf '{"valid":true}\\n' ;;
+  doctor:--lint:*) printf '{"ok":true}\\n' ;;
+  *) exit 0 ;;
+esac
+`, 'utf8');
+    chmodSync(fakeOpenClaw, 0o755);
+
+    const result = spawnSync('bash', [join(project, 'scripts', 'install.sh'), '--apply', '--yes', '--runtime-root', runtime], {
+      cwd: project,
+      encoding: 'utf8',
+      env: { ...process.env, PATH: `${bin}${delimiter}${process.env.PATH}`, FAKE_OPENCLAW_CONFIG: config, FAKE_OPENCLAW_AGENTS: agents },
+    });
+
+    assert.equal(result.status, 0, result.stdout + result.stderr);
+    const record = JSON.parse(readFileSync(join(runtime, 'agents', 'manager-agent', 'workspace', '.orchestrator', 'manager-control-entrypoint.json'), 'utf8'));
+    assert.equal(record.entrypoint, join(runtime, 'manager-control', 'manager-control'));
+    const bundle = JSON.parse(readFileSync(join(runtime, 'control', 'runtime-bundle.json'), 'utf8'));
+    assert.equal(bundle.entries.some((entry) => entry.target_rel.endsWith('manager-control-entrypoint.json')), false);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
