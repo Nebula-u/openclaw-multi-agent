@@ -162,10 +162,15 @@ test('Manager workspace documents the current request queue protocol', () => {
   const managerRules = readFileSync(join(ROOT, 'agents', 'manager-agent', 'workspace', 'AGENTS.md'), 'utf8');
   const managerTools = readFileSync(join(ROOT, 'agents', 'manager-agent', 'workspace', 'TOOLS.md'), 'utf8');
   const managerTemplates = readFileSync(join(ROOT, 'agents', 'manager-agent', 'workspace', 'templates', 'README.md'), 'utf8');
+  assert.equal(existsSync(join(ROOT, 'templates', 'manager-request.deploy.json')), true);
   assert.equal(existsSync(join(ROOT, 'templates', 'manager-request.change.json')), true);
   assert.equal(existsSync(join(ROOT, 'templates', 'manager-request.decision.json')), true);
   assert.match(managerRules, /session_status/u);
   assert.match(managerRules, /templates\/manager-request\.json/u);
+  assert.match(managerRules, /templates\/manager-request\.deploy\.json/u);
+  assert.match(managerRules, /\.orchestrator\/drafts/u);
+  assert.match(managerRules, /orchestrator-validate-request/u);
+  assert.match(managerRules, /orchestrator-submit-request/u);
   assert.match(managerRules, /orchestrator-status/u);
   assert.match(managerRules, /\.orchestrator\/receipts/u);
   assert.match(managerRules, /requirement-agent/u);
@@ -173,12 +178,40 @@ test('Manager workspace documents the current request queue protocol', () => {
   assert.match(managerRules, /用户明确确认/u);
   assert.match(managerRules, /不能自行重置重试次数/u);
   assert.doesNotMatch(managerTools, /\.agent-raw\/route-plan\.json\.raw/u);
-  assert.doesNotMatch(managerTools, /validate-request/u);
+  assert.match(managerTools, /orchestrator-validate-request/u);
+  assert.match(managerTools, /orchestrator-submit-request/u);
   assert.match(managerTools, /orchestrator-approve/u);
   assert.match(managerTools, /orchestrator-control/u);
   assert.match(managerRules, /暂停/u);
   assert.match(managerTemplates, /manager-request\.change\.json/u);
   assert.match(managerTemplates, /manager-request\.decision\.json/u);
+  assert.match(managerTemplates, /manager-request\.deploy\.json/u);
+});
+
+test('Manager deployment CREATE reference passes the authoritative deployment route policy', () => {
+  const path = join(ROOT, 'templates', 'manager-request.deploy.json');
+  assert.equal(existsSync(path), true);
+  const request = JSON.parse(readFileSync(path, 'utf8'));
+  request.request_id = 'REQ-manager-deploy-001';
+  request.workflow_id = 'WF-manager-deploy-001';
+  request.submitted_at = '2026-09-01T00:00:00.000Z';
+  request.manager_session_id = 'manager-session';
+  request.manager_session_key = 'agent:manager:source';
+  request.project_ref = 'PRJ-manager-deploy-001';
+  request.original_request = 'Build and deploy a persistent web demo.';
+  request.route_plan.workflow_id = request.workflow_id;
+  request.route_plan.summary = 'Build and deploy a persistent web demo.';
+  request.route_plan.display_title = 'Web Deploy';
+  request.route_plan.deployment.project_id = 'manager-deploy-001';
+  request.user_authorized = { confirmed: true, actor: 'human:liuxu', message: 'Deploy the confirmed route.' };
+
+  assert.doesNotThrow(() => assertManagerRequest(ROOT, request));
+  assert.deepEqual(request.route_plan.risk_flags, ['external_side_effect', 'manual_acceptance', 'release_risk']);
+  assert.deepEqual(
+    request.route_plan.steps.filter((step) => step.kind === 'RELEASE').map((step) => [step.release_phase, step.human_approval_after]),
+    [['PREFLIGHT', true], ['DEPLOY', false]],
+  );
+  assert.deepEqual(Object.keys(request.route_plan.deployment).sort(), ['base_url', 'project_id']);
 });
 
 test('Manager CREATE reference is accepted and routes requirements to requirement-agent', async () => {

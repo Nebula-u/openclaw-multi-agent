@@ -4,7 +4,8 @@
 
 包含（安装后）：
 
-- `manager-request.json` — 已确认 CREATE 请求参考
+- `manager-request.json` — 已确认且不含部署的 CREATE 请求参考
+- `manager-request.deploy.json` — 已确认部署计划的 CREATE 请求参考，固定包含完整风险标志与 RELEASE PREFLIGHT/DEPLOY
 - `manager-request.change.json` — 已确认 CHANGE 请求参考
 - `manager-request.decision.json` — 已确认 DECISION 请求参考
 - `task.json` — 任务定义骨架
@@ -15,7 +16,8 @@
 填充规则：
 - 所有路径字段填**绝对路径**。
 - 所有 ID 用第 4 节（AGENTS.md）的生成方式产生。
-- 只能复制一个与本次请求类型相符的 manager request 参考；写入前替换全部 `<...>` 参考值，不能把示例值直接提交。
+- 只能复制一个与本次请求类型和部署属性相符的 manager request 参考；部署、发布、上线、运行到服务器或提供公网 URL 的 CREATE 必须使用 `manager-request.deploy.json`。写入前替换全部 `<...>` 参考值，不能把示例值直接提交。
+- 填充后的 CREATE/CHANGE 先写入 `.orchestrator/drafts/`，经 `orchestrator-validate-request` 校验并由 `orchestrator-submit-request` 绑定校验 SHA 发布；不得直接写正式请求队列。
 - 事实分级字段必须真实标注 OBSERVED/INFERRED/PROPOSED/UNKNOWN。
 - 不得留占位符进入正式产物；未知值填 `UNKNOWN` 并说明。
 

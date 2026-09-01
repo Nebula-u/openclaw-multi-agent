@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "request_id": "REQ-<唯一标识>",
+  "request_type": "CREATE",
+  "workflow_id": "WF-<唯一标识>",
+  "submitted_by": "manager-agent",
+  "submitted_at": "2026-01-01T00:00:00Z",
+  "manager_session_id": "<current-openclaw-session-id>",
+  "manager_session_key": "<current-openclaw-session-key>",
+  "manager_delivery": null,
+  "project_ref": null,
+  "original_request": "<用户首次需求及部署授权原文>",
+  "route_plan": {
+    "schema_version": 1,
+    "workflow_id": "WF-<唯一标识>",
+    "request_class": "FEATURE",
+    "summary": "<只概括用户请求的工作流摘要>",
+    "display_title": "<十字以内标题>",
+    "risk_flags": [
+      "external_side_effect",
+      "manual_acceptance",
+      "release_risk"
+    ],
+    "deployment": {
+      "base_url": "https://multiagentforge.cloud",
+      "project_id": "<小写字母数字连字符项目ID>"
+    },
+    "steps": [
+      { "step_id": "requirements", "kind": "REQUIREMENTS", "title": "由需求 Agent 给出推荐需求", "rationale": "需求细节由 requirement-agent 分析。", "human_approval_after": true, "approval_reason": "用户确认推荐需求后才进入后续阶段。" },
+      { "step_id": "architecture", "kind": "ARCHITECTURE", "title": "设计实现架构", "rationale": "需求确认后制定架构。", "human_approval_after": false, "approval_reason": null },
+      { "step_id": "development", "kind": "DEVELOPMENT", "title": "实现已确认方案", "rationale": "按已确认需求和架构开发。", "human_approval_after": false, "approval_reason": null },
+      { "step_id": "test", "kind": "TEST", "title": "验证实现", "rationale": "验证已实现功能。", "human_approval_after": false, "approval_reason": null },
+      { "step_id": "code-review", "kind": "CODE_REVIEW", "title": "审查实现", "rationale": "审查变更和回归风险。", "human_approval_after": false, "approval_reason": null },
+      { "step_id": "release-preflight", "kind": "RELEASE", "release_phase": "PREFLIGHT", "title": "部署预检", "rationale": "绑定实际 candidate commit、回滚信息和最终 URL。", "human_approval_after": true, "approval_reason": "用户确认实际 candidate commit 与最终 URL 后才可部署。" },
+      { "step_id": "release-deploy", "kind": "RELEASE", "release_phase": "DEPLOY", "title": "受控部署与上线验证", "rationale": "部署已确认的候选提交并验证线上服务。", "human_approval_after": false, "approval_reason": null }
+    ],
+    "skipped_stages": [
+      { "kind": "DESIGN", "reason": "本请求未要求单独的视觉或交互设计阶段。" }
+    ]
+  },
+  "user_authorized": {
+    "confirmed": true,
+    "actor": "human:cli-owner",
+    "message": "<用户明确授权完整部署路线的原文>"
+  }
+}
