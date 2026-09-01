@@ -314,6 +314,17 @@ test('staging permissions let configured image UID 10001 write repo/output/logs 
   await sandbox.cleanup(staged);
 });
 
+test('staging preserves special workspace mode bits while adding container traversal', async (t) => {
+  const value = fixture();
+  t.after(() => rmSync(value.root, { recursive: true, force: true }));
+  chmodSync(value.workspace, 0o2700);
+  const sandbox = createStager(value.workspace);
+  const staged = await sandbox.prepare(value.task);
+
+  assert.equal(statSync(value.workspace).mode & 0o7777, 0o2705);
+  await sandbox.cleanup(staged);
+});
+
 test('Docker configured image can use a real staged bind without writing immutable input', { timeout: 30_000 }, async (t) => {
   if (process.platform !== 'linux') return t.skip('requires a native Linux Docker Engine host to verify bind-mount immutability');
   const daemon = spawnSync('docker', ['version', '--format', '{{.Server.Version}}'], { encoding: 'utf8', shell: false });

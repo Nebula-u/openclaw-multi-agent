@@ -64,7 +64,7 @@ function chmodContainerWritable(path) {
   }
 }
 function ensureContainerWorkspaceTraversal(path) {
-  const mode = statSync(path).mode & 0o777;
+  const mode = statSync(path).mode & 0o7777;
   const requiredMode = mode | 0o005;
   if (requiredMode !== mode) chmodSync(path, requiredMode);
 }
