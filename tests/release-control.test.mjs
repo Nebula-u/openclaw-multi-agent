@@ -1,16 +1,18 @@
 import assert from 'node:assert/strict';
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 import { openKernelDatabase } from '../scripts/control-kernel/database.mjs';
 import { createReleaseControl } from '../scripts/release-control/service.mjs';
+import { run as runReleaseControl } from '../scripts/release-control/cli.mjs';
 
 const SHA = '1'.repeat(40);
 
 function setup(t, { deploymentEntrypoint = null, runDeployment = null } = {}) {
   const runtimeRoot = mkdtempSync(join(tmpdir(), 'release-control-'));
-  const policyPath = join(runtimeRoot, 'release-control-policy.json');
+  const policyPath = join(runtimeRoot, 'release-control', 'release-control-policy.json');
+  mkdirSync(join(runtimeRoot, 'release-control'), { recursive: true });
   writeFileSync(policyPath, `${JSON.stringify({ schema_version: 1, base_url: 'https://multiagentforge.cloud', deployment_target: 'current-server', deployment_entrypoint: deploymentEntrypoint })}\n`);
   const database = openKernelDatabase({ databasePath: join(runtimeRoot, 'control', 'kernel.db') });
   t.after(() => { database.close(); rmSync(runtimeRoot, { recursive: true, force: true }); });
@@ -73,4 +75,15 @@ test('Release 拒绝未绑定到当前候选提交和路径的部署', (t) => {
   approveDeployment(database, { workflowId: 'WF-Release-Deny', projectId: 'todo-list', candidateCommit: '2'.repeat(40), urlPath: '/todo-list' });
 
   assert.throws(() => control.deploy({ workflowId: 'WF-Release-Deny', projectId: 'todo-list', candidateCommit: SHA }), (error) => error.code === 'RELEASE_DEPLOYMENT_APPROVAL_MISSING');
+});
+
+test('Release CLI 只接受显式的受控部署参数', (t) => {
+  const { runtimeRoot } = setup(t);
+  const output = { value: '', write(text) { this.value += text; } };
+
+  const result = runReleaseControl(['preflight', '--workflow-id', 'WF-Release-Cli', '--project-id', 'todo-list', '--candidate-commit', SHA], output, { runtimeRoot });
+
+  assert.equal(result.final_url, 'https://multiagentforge.cloud/todo-list');
+  assert.deepEqual(JSON.parse(output.value), result);
+  assert.throws(() => runReleaseControl(['deploy', '--workflow-id', 'WF-Release-Cli', '--shell', 'whoami'], output, { runtimeRoot }), (error) => error.code === 'RELEASE_CONTROL_USAGE');
 });

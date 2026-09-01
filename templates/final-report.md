@@ -40,7 +40,7 @@
 
 ## 发布前判定（Pre-Release Verdict）
 - verdict: `<PLACEHOLDER: GO | NO_GO | HOLD>`
-- <PLACEHOLDER: `GO` 仅表示 `READY_FOR_OPERATIONS_HANDOFF`，不代表已部署；给出判定理由与依据引用。>
+- <PLACEHOLDER: `GO` 仅表示 `READY_TO_DEPLOY`，不代表已部署；实际部署须引用 DEPLOYED/DEPLOY_FAILED 证据。>
 
 ## 运维交接清单（Ops Handoff Checklist）
 <PLACEHOLDER: 部署前置条件、回滚计划位置、配置 / 密钥、监控 / 告警、责任人；引用 release-report。>

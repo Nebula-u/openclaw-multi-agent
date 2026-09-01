@@ -276,6 +276,12 @@ HR 必须返回结构化 JSON findings，category 只能是上述三类，且每
 
 Manager 请求必须符合 `contracts/manager-request.schema.json`，并绑定原始 `manager_session_id` 和 `manager_session_key`。新项目由受控 `manager-control` 自动创建并以 `project_ref` 传递，用户无需预先创建目录、初始化 Git 或提供绝对路径；入口从受保护的 runtime 安装位置定位项目登记表，且 `project_ref` 只能用于登记它的 workflow。Orchestrator 校验并冻结路线，Worker 不能写 Kernel、派发其他 Agent 或修改审批。
 
+### 受控部署
+
+请求部署时，Manager 必须在创建 workflow 前明确取得部署确认。部署路线在 Code Review 后固定执行 `RELEASE/PREFLIGHT → 人工确认候选 commit 与最终 URL → RELEASE/DEPLOY`。共享基础域名是 `https://multiagentforge.cloud`；Release 为每个项目登记不冲突的路径，并只通过安装器部署的 `release-control` 入口执行。
+
+安装后，运维需要在 `runtime/release-control/release-control-policy.json` 将 `deployment_entrypoint` 设置为服务器上的固定可执行部署脚本绝对路径。该脚本只接收 `--release-manifest <绝对路径>`；Release 不获得 SSH、任意 shell 或明文凭证权限。未配置入口时，Preflight 仍可分配路径，但部署会安全失败。
+
 常用只读命令：
 
 ```text

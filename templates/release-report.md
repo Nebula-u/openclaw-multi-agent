@@ -2,7 +2,7 @@
 
 > 由 release-agent 生成。散文用中文，字段名 / 命令 / 标识符用英文。
 > 凡涉及事实处必须用分类占位：`[OBSERVED: ...]` / `[INFERRED: ...]` / `[PROPOSED: ...]` / `[UNKNOWN: ...]`。禁止编造。
-> verdict 仅可为 `GO` | `NO_GO` | `HOLD`；`GO` 仅表示 `READY_FOR_OPERATIONS_HANDOFF`，不代表已部署。
+> verdict 仅可为 `GO` | `NO_GO` | `HOLD`；`GO` 仅表示 `READY_TO_DEPLOY`，不代表已部署。实际部署必须另记为 `DEPLOYED` 或 `DEPLOY_FAILED` 并附受控入口与线上验证证据。
 
 ## 元信息（Metadata）
 - workflow_id: `WF-00000000-0000-0000-0000-000000000000`
@@ -43,13 +43,16 @@
 - rollback_plan_present: `<PLACEHOLDER: true | false>`
 - <PLACEHOLDER: 回滚步骤、回滚目标 commit、数据 / 迁移回退注意事项。>
 
-## 运维交接与部署前置条件（Ops Handoff & Prerequisites）
+## 部署前置条件与路径分配（Deployment Preconditions & Path Allocation）
 - ops_handoff_present: `<PLACEHOLDER: true | false>`
-- <PLACEHOLDER: 部署前置条件、配置 / 密钥要求、监控 / 告警、责任人交接清单。>
+- base_url: `https://multiagentforge.cloud`
+- url_path: `<PLACEHOLDER: release-control 分配的项目路径>`
+- final_url: `<PLACEHOLDER: 完整 URL>`
+- <PLACEHOLDER: 部署前置条件、监控 / 告警、责任人交接清单；不得记录明文凭证。>
 
 ## 判定（Verdict）
 - verdict: `<PLACEHOLDER: GO | NO_GO | HOLD>`
-- verdict_meaning: `GO == READY_FOR_OPERATIONS_HANDOFF (not deployed)`
+- verdict_meaning: `GO == READY_TO_DEPLOY (not deployed)`
 - 重算规则：任一 `HOLD` / `UNKNOWN` / `NOT_APPLICABLE` → `HOLD`；否则任一 `FAIL` → `NO_GO`；非空且全 `PASS` → `GO`；空 checks → `HOLD`。
 - 理由：<PLACEHOLDER: 基于证据汇总、commit 一致性、回滚与运维交接完备性给出判定理由。>
 

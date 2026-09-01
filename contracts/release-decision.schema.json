@@ -14,8 +14,8 @@
     "verdict": { "type": "string", "enum": ["GO", "NO_GO", "HOLD"] },
     "verdict_meaning": {
       "type": "string",
-      "description": "GO 仅表示 READY_FOR_OPERATIONS_HANDOFF，非已部署",
-      "default": "GO == READY_FOR_OPERATIONS_HANDOFF (not deployed)"
+      "description": "GO 仅表示 READY_TO_DEPLOY，实际部署事实记录在受控 DEPLOY 结果中",
+      "default": "GO == READY_TO_DEPLOY (not deployed)"
     },
     "evaluated_at": { "type": "string", "format": "date-time" },
     "commit_matches_review_and_test": { "type": "boolean" },

@@ -551,9 +551,11 @@ fi
 SRC_COMMON="$PROJECT_ROOT/agents/common"
 SRC_TEMPLATES="$PROJECT_ROOT/templates"
 SRC_SYSTEM_SKILLS="$PROJECT_ROOT/agents/packages/system/skills"
-mkdir -p "$RUNTIME_ROOT_ABS/manager-control" "$RUNTIME_ROOT_ABS/runtime-core" "$RUNTIME_ROOT_ABS/control-kernel"
+mkdir -p "$RUNTIME_ROOT_ABS/manager-control" "$RUNTIME_ROOT_ABS/release-control" "$RUNTIME_ROOT_ABS/runtime-core" "$RUNTIME_ROOT_ABS/control-kernel"
 cp -Rf "$PROJECT_ROOT/scripts/manager-control/." "$RUNTIME_ROOT_ABS/manager-control/"
 cp -f "$PROJECT_ROOT/config/manager-control-policy.json" "$RUNTIME_ROOT_ABS/manager-control/manager-control-policy.json"
+cp -Rf "$PROJECT_ROOT/scripts/release-control/." "$RUNTIME_ROOT_ABS/release-control/"
+cp -f "$PROJECT_ROOT/config/release-control-policy.json" "$RUNTIME_ROOT_ABS/release-control/release-control-policy.json"
 cp -Rf "$PROJECT_ROOT/scripts/runtime-core/." "$RUNTIME_ROOT_ABS/runtime-core/"
 cp -Rf "$PROJECT_ROOT/scripts/control-kernel/." "$RUNTIME_ROOT_ABS/control-kernel/"
 for id in "${AGENT_IDS[@]}"; do
@@ -681,6 +683,7 @@ for id in "${AGENT_IDS[@]}"; do
 done
 
 MANAGER_EXEC_STATE="$RUNTIME_ROOT_ABS/control/manager-exec-allowlist.json"
+RELEASE_EXEC_STATE="$RUNTIME_ROOT_ABS/control/release-exec-allowlist.json"
 MANAGER_ENTRYPOINT="$RUNTIME_ROOT_ABS/manager-control/manager-control"
 chmod 755 "$MANAGER_ENTRYPOINT"
 [ -f "$MANAGER_ENTRYPOINT" ] || { restore_on_failure "缺少 Manager 受控执行入口"; exit 1; }
@@ -689,12 +692,25 @@ mkdir -p "$(dirname "$MANAGER_ENTRYPOINT_FILE")"
 manager_entrypoint_tmp="$(mktemp "${MANAGER_ENTRYPOINT_FILE}.tmp.XXXXXX")"
 printf '{"schema_version":1,"entrypoint":"%s"}\n' "$(json_escape "$MANAGER_ENTRYPOINT")" > "$manager_entrypoint_tmp"
 mv -f "$manager_entrypoint_tmp" "$MANAGER_ENTRYPOINT_FILE"
+RELEASE_ENTRYPOINT="$RUNTIME_ROOT_ABS/release-control/release-control"
+chmod 755 "$RELEASE_ENTRYPOINT"
+[ -f "$RELEASE_ENTRYPOINT" ] || { restore_on_failure "缺少 Release 受控执行入口"; exit 1; }
+RELEASE_ENTRYPOINT_FILE="${WS[release-agent]:-}/.orchestrator/release-control-entrypoint.json"
+if [ -n "${WS[release-agent]:-}" ]; then
+  mkdir -p "$(dirname "$RELEASE_ENTRYPOINT_FILE")"
+  release_entrypoint_tmp="$(mktemp "${RELEASE_ENTRYPOINT_FILE}.tmp.XXXXXX")"
+  printf '{"schema_version":1,"entrypoint":"%s"}\n' "$(json_escape "$RELEASE_ENTRYPOINT")" > "$release_entrypoint_tmp"
+  mv -f "$release_entrypoint_tmp" "$RELEASE_ENTRYPOINT_FILE"
+fi
 approval_snapshot="$(openclaw approvals get --json 2>/dev/null)" || { restore_on_failure "读取 Manager exec approvals 失败"; exit 1; }
 approval_tmp="$(mktemp)"
-if ! printf '%s' "$approval_snapshot" | jq --arg agent "$MANAGER_ID" --arg entry "$MANAGER_ENTRYPOINT" '
+if ! printf '%s' "$approval_snapshot" | jq --arg agent "$MANAGER_ID" --arg entry "$MANAGER_ENTRYPOINT" --arg release "release-agent" --arg release_entry "$RELEASE_ENTRYPOINT" '
   .file | .agents = (.agents // {}) | .agents[$agent] = {
     security: "allowlist", ask: "off", askFallback: "deny", autoAllowSkills: false,
     allowlist: [{ pattern: $entry }]
+  } | .agents[$release] = {
+    security: "allowlist", ask: "off", askFallback: "deny", autoAllowSkills: false,
+    allowlist: [{ pattern: $release_entry }]
   }
 ' > "$approval_tmp"; then
   rm -f "$approval_tmp"; restore_on_failure "生成 Manager exec approvals 失败"; exit 1
@@ -704,7 +720,8 @@ if ! openclaw approvals set --file "$approval_tmp" --json >/dev/null 2>&1; then
 fi
 rm -f "$approval_tmp"
 printf '{"schema_version":1,"agent_id":"%s","entrypoint":"%s"}\n' "$MANAGER_ID" "$MANAGER_ENTRYPOINT" > "$MANAGER_EXEC_STATE"
-CONFIG_CHANGES+=("replace $MANAGER_ID exec allowlist with manager-control")
+printf '{"schema_version":1,"agent_id":"release-agent","entrypoint":"%s"}\n' "$RELEASE_ENTRYPOINT" > "$RELEASE_EXEC_STATE"
+CONFIG_CHANGES+=("replace $MANAGER_ID exec allowlist with manager-control" "replace release-agent exec allowlist with release-control")
 
 # 7.6 可选：默认 Agent / binding
 if [ "$SET_MANAGER_DEFAULT" -eq 1 ]; then

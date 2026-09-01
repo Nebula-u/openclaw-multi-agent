@@ -537,7 +537,7 @@ test(
   },
 );
 
-test('Bash installer writes the Manager entrypoint record that matches its allowlist entry', { skip: BASH_AVAILABLE ? false : 'bash unavailable in this environment' }, () => {
+test('Bash installer writes the Manager and Release control entrypoint records', { skip: BASH_AVAILABLE ? false : 'bash unavailable in this environment' }, () => {
   const root = mkdtempSync(join(tmpdir(), 'openclaw-install-bash-'));
   const project = join(root, 'project');
   const bin = join(root, 'bin');
@@ -581,6 +581,9 @@ esac
     assert.equal(result.status, 0, result.stdout + result.stderr);
     const record = JSON.parse(readFileSync(join(runtime, 'agents', 'manager-agent', 'workspace', '.orchestrator', 'manager-control-entrypoint.json'), 'utf8'));
     assert.equal(record.entrypoint, join(runtime, 'manager-control', 'manager-control'));
+    assert.equal(existsSync(join(runtime, 'release-control', 'release-control-policy.json')), true);
+    const releaseEntrypoint = JSON.parse(readFileSync(join(runtime, 'agents', 'release-agent', 'workspace', '.orchestrator', 'release-control-entrypoint.json'), 'utf8'));
+    assert.equal(releaseEntrypoint.entrypoint, join(runtime, 'release-control', 'release-control'));
     const bundle = JSON.parse(readFileSync(join(runtime, 'control', 'runtime-bundle.json'), 'utf8'));
     assert.equal(bundle.entries.some((entry) => entry.target_rel.endsWith('manager-control-entrypoint.json')), false);
   } finally { rmSync(root, { recursive: true, force: true }); }

@@ -7,7 +7,7 @@
 - `id`: `review-agent`
 - `display_name`: 代码与测试独立评审 Agent（Code & Test Review Agent）
 - `agent_class`: WORKER（工作 Agent）
-- `one_line_purpose`: 对生产代码与测试代码进行独立、只读、可追溯的评审，给出带证据的 `verdict`，由 Orchestrator 决定状态推进。
+- `one_line_purpose`: 对生产代码与测试代码进行独立、只读、可追溯的评审，给出带证据的 `verdict`；不承担部署前环境检查、路径分配、部署或线上验证。
 
 ## 上下游
 

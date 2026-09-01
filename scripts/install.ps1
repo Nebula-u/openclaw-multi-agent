@@ -456,14 +456,19 @@ try {
   $systemSkillsSource = Join-Path $ProjectRoot 'agents\packages\system\skills'
   $managerControlSource = Join-Path $ProjectRoot 'scripts\manager-control'
   $managerControlPolicySource = Join-Path $ProjectRoot 'config\manager-control-policy.json'
+  $releaseControlSource = Join-Path $ProjectRoot 'scripts\release-control'
+  $releaseControlPolicySource = Join-Path $ProjectRoot 'config\release-control-policy.json'
   $runtimeCoreSource = Join-Path $ProjectRoot 'scripts\runtime-core'
   $controlKernelSource = Join-Path $ProjectRoot 'scripts\control-kernel'
   $managerControlTarget = Join-Path $RuntimeRootAbs 'manager-control'
+  $releaseControlTarget = Join-Path $RuntimeRootAbs 'release-control'
   $runtimeCoreTarget = Join-Path $RuntimeRootAbs 'runtime-core'
   $controlKernelTarget = Join-Path $RuntimeRootAbs 'control-kernel'
-  New-Item -ItemType Directory -Force -Path $managerControlTarget, $runtimeCoreTarget, $controlKernelTarget | Out-Null
+  New-Item -ItemType Directory -Force -Path $managerControlTarget, $releaseControlTarget, $runtimeCoreTarget, $controlKernelTarget | Out-Null
   Copy-Item -Path (Join-Path $managerControlSource '*') -Destination $managerControlTarget -Recurse -Force
   Copy-Item -LiteralPath $managerControlPolicySource -Destination (Join-Path $managerControlTarget 'manager-control-policy.json') -Force
+  Copy-Item -Path (Join-Path $releaseControlSource '*') -Destination $releaseControlTarget -Recurse -Force
+  Copy-Item -LiteralPath $releaseControlPolicySource -Destination (Join-Path $releaseControlTarget 'release-control-policy.json') -Force
   Copy-Item -Path (Join-Path $runtimeCoreSource '*') -Destination $runtimeCoreTarget -Recurse -Force
   Copy-Item -Path (Join-Path $controlKernelSource '*') -Destination $controlKernelTarget -Recurse -Force
   foreach ($p in $RegisteredPackages) {
@@ -555,12 +560,22 @@ try {
   }
 
   $managerExecStatePath = Join-Path $RuntimeRootAbs 'control\manager-exec-allowlist.json'
+  $releaseExecStatePath = Join-Path $RuntimeRootAbs 'control\release-exec-allowlist.json'
   $managerEntrypoint = Join-Path $RuntimeRootAbs $(if ($IsWindows) { 'manager-control\manager-control.cmd' } else { 'manager-control/manager-control' })
   if (-not $IsWindows) { & chmod 755 $managerEntrypoint }
   if (-not (Test-Path -LiteralPath $managerEntrypoint -PathType Leaf)) { throw "缺少 Manager 受控执行入口：$managerEntrypoint" }
   $managerEntrypointFile = Join-Path $Manager.workspace '.orchestrator\manager-control-entrypoint.json'
   New-Item -ItemType Directory -Force -Path (Split-Path -Parent $managerEntrypointFile) | Out-Null
   Write-JsonAtomic -Value ([ordered]@{ schema_version = 1; entrypoint = $managerEntrypoint }) -Path $managerEntrypointFile -Depth 4
+  $release = @($RegisteredPackages | Where-Object { $_.id -eq 'release-agent' }) | Select-Object -First 1
+  $releaseEntrypoint = Join-Path $RuntimeRootAbs $(if ($IsWindows) { 'release-control\release-control.cmd' } else { 'release-control/release-control' })
+  if (-not $IsWindows) { & chmod 755 $releaseEntrypoint }
+  if (-not (Test-Path -LiteralPath $releaseEntrypoint -PathType Leaf)) { throw "缺少 Release 受控执行入口：$releaseEntrypoint" }
+  if ($release) {
+    $releaseEntrypointFile = Join-Path $release.workspace '.orchestrator\release-control-entrypoint.json'
+    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $releaseEntrypointFile) | Out-Null
+    Write-JsonAtomic -Value ([ordered]@{ schema_version = 1; entrypoint = $releaseEntrypoint }) -Path $releaseEntrypointFile -Depth 4
+  }
   $approvalFile = (Get-OpenClawJsonWithRetry -OcArgs @('approvals','get','--json') -Description 'Manager exec approvals').file
   if (-not $approvalFile) { throw 'Manager exec approvals 返回中缺少 approvals 文件。' }
   if (-not ($approvalFile.PSObject.Properties.Name -contains 'agents') -or -not $approvalFile.agents) {
@@ -571,6 +586,13 @@ try {
     allowlist = @([ordered]@{ pattern = $managerEntrypoint })
   }
   $approvalFile.agents | Add-Member -NotePropertyName $Manager.id -NotePropertyValue $managerApproval -Force
+  if ($release) {
+    $releaseApproval = [ordered]@{
+      security = 'allowlist'; ask = 'off'; askFallback = 'deny'; autoAllowSkills = $false
+      allowlist = @([ordered]@{ pattern = $releaseEntrypoint })
+    }
+    $approvalFile.agents | Add-Member -NotePropertyName $release.id -NotePropertyValue $releaseApproval -Force
+  }
   $approvalTemp = Join-Path ([System.IO.Path]::GetTempPath()) ("openclaw-manager-approvals-" + [guid]::NewGuid().Guid + '.json')
   try {
     Write-JsonAtomic -Value $approvalFile -Path $approvalTemp -Depth 20
@@ -580,7 +602,9 @@ try {
     if (Test-Path -LiteralPath $approvalTemp) { Remove-Item -LiteralPath $approvalTemp -Force }
   }
   Write-JsonAtomic -Value ([ordered]@{ schema_version = 1; agent_id = $Manager.id; entrypoint = $managerEntrypoint }) -Path $managerExecStatePath -Depth 4
+  if ($release) { Write-JsonAtomic -Value ([ordered]@{ schema_version = 1; agent_id = $release.id; entrypoint = $releaseEntrypoint }) -Path $releaseExecStatePath -Depth 4 }
   $changes.Add("replace $($Manager.id) exec allowlist with manager-control")
+  if ($release) { $changes.Add("replace $($release.id) exec allowlist with release-control") }
 
   if ($SetManagerAsDefault) {
     $idx = Get-AgentIndex -List $listNow -Id $Manager.id

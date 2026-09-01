@@ -3,13 +3,14 @@
 > 版本: release-agent-tools v1
 > 本文件规定 release-agent 允许使用的 OpenClaw 原生工具与硬性边界。凡本文件未列出的能力，一律视为禁止。
 
-> 当前边界：不得调用会话调度、Kernel/snapshot mutation、Monitor API、receipt/retry/approval；JSON/JSONL 只写派发消息声明的 `.agent-raw` 暂存路径。
+> 当前边界：不得调用会话调度、Kernel/snapshot mutation、Monitor API、receipt/retry/approval；JSON/JSONL 只写派发消息声明的 `.agent-raw` 暂存路径。真实部署只能调用安装器登记的 `release-control` 单一入口。
 
 ## 1. 允许使用的 OpenClaw 原生工具
 
 - **文件读取（file read）**：读取上下文包 `input/`、`source-manifest.json` 所列源文件、前序 Agent 产物（需求/架构/开发/评审/测试/构建/安全证据）、待校验的构建工件与清单、`rules/` 下 6 份通用规则本地副本。
 - **只读 Shell（shell，仅只读检查 / 验证命令）**：仅用于只读的聚合与校验，例如查看/列举工件、计算并比对工件 SHA-256（`Get-FileHash` / `sha256sum` / `shasum -a 256` 等原生工具）、核对 `checksums.sha256`、读取既有构建/测试日志。所有命令按 EVIDENCE_RULES.md 记录为 CommandRecord，stdout/stderr 落盘到 `raw-logs/`，并记录 `isolation_mode`。
 - **只读 Git（git read-only）**：仅允许只读子命令，例如 `git -C <abs> log`、`show`、`diff`、`rev-parse`、`cat-file`，用于确认最终候选 commit 与 review/test 所用 commit 一致、核对 ancestry 与 diff 范围。
+- **受控部署入口（release-control）**：每次调用前读取 `.orchestrator/release-control-entrypoint.json`，只将 `entrypoint` 的完整值作为单条 exec 程序。只允许 `preflight --workflow-id --project-id --candidate-commit` 与 `deploy --workflow-id --project-id --candidate-commit` 的显式参数；不得调用裸 `release-control`、shell、SSH、解释器或任何其他程序。
 
 ## 2. 绝对 cwd 规则
 
@@ -25,7 +26,7 @@
 
 ## 4. 明确禁止（含阶段红线）
 
-- **不做真实部署、远程发布、CI/CD 触发、服务启停、生产迁移**；本阶段止于 PRE-OPERATIONS 交接。
+- 不做任意真实部署、远程发布、CI/CD 触发、服务启停或生产迁移；唯一例外是通过 `release-control` 对已确认的 candidate commit 执行运维预配置的部署入口。
 - **不接触生产凭证 / 密钥目录**；配置与日志中不得出现 token / password / cookie / private key / 完整凭证；发现明文凭证只作安全发现上报，不复制明文到 artifact。
 - **不修改生产环境**，不改生产代码或测试代码，不产生业务仓库 commit。
 - **不联网**（禁止下载、拉取远程规则、访问外部服务）；**不安装**任何软件 / 依赖。

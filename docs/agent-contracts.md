@@ -25,7 +25,7 @@ worker 只向 `<artifact_root>/.agent-raw/result.json.raw` 写一个符合 `cont
 - developer-agent：实现并提交代码；
 - test-agent：执行/补充测试并保存真实证据；
 - review-agent：绑定候选 commit 审查；
-- release-agent：核查发布与回滚准备，不执行部署；
+- release-agent：完成发布前检查、共享基础域名路径分配、经二次人工确认后的受控部署及上线验证；不做代码审查；
 - manager-agent：只在原始用户 Session 中解释路线和收集决定；
 - hr-agent：手动优先、只读脱敏 dossier，只检查三类边界问题；输出必须是严格 JSON findings，不创建文件或 commit。
 
