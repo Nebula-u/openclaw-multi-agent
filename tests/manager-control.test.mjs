@@ -182,6 +182,32 @@ test('manager control validates and publishes the same captured draft bytes when
   assert.equal(readFileSync(join(requestRoot, 'requests', 'deploy.json'), 'utf8'), raw);
 });
 
+test('manager control does not let an injected validator mutate the hash-bound published bytes', (t) => {
+  const { runtimeRoot, requestRoot, raw } = requestDraftFixture(t);
+  const expectedSha256 = createHash('sha256').update(raw, 'utf8').digest('hex');
+  const submission = createManagerRequestSubmission({
+    runtimeRoot,
+    projectRoot: ROOT,
+    runValidator(input) {
+      input.fill(0);
+      return {
+        status: 0,
+        stdout: JSON.stringify({
+          ok: true,
+          request_id: 'REQ-manager-draft-001',
+          request_type: 'CREATE',
+          workflow_id: 'WF-manager-draft-001',
+        }),
+      };
+    },
+  });
+
+  const result = submission.submitDraft('deploy.json', expectedSha256);
+
+  assert.equal(result.input_sha256, expectedSha256);
+  assert.equal(readFileSync(join(requestRoot, 'requests', 'deploy.json'), 'utf8'), raw);
+});
+
 test('manager control preserves authoritative validation details without publishing an invalid draft', (t) => {
   const { runtimeRoot, draftPath, requestRoot } = requestDraftFixture(t);
   const output = { value: '', write(value) { this.value += value; } };

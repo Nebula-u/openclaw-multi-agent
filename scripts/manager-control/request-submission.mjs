@@ -140,7 +140,7 @@ export function createManagerRequestSubmission({ projectRoot: projectRootInput =
 
   function validateReadDraft(draftFile) {
     const draft = readDraft(draftFile);
-    const validated = parseValidatorOutput(invokeValidator(draft.value));
+    const validated = parseValidatorOutput(invokeValidator(Buffer.from(draft.value)));
     if (!['CREATE', 'CHANGE'].includes(validated.request_type)) {
       fail('MANAGER_REQUEST_DRAFT_TYPE_INVALID', 'draft submission only accepts CREATE or CHANGE requests');
     }
@@ -159,7 +159,7 @@ export function createManagerRequestSubmission({ projectRoot: projectRootInput =
     if (typeof expectedSha256 !== 'string' || !SHA256.test(expectedSha256)) fail('MANAGER_REQUEST_EXPECTED_SHA256_INVALID', 'expected SHA-256 must be 64 lowercase hex characters');
     const draft = readDraft(draftFile);
     if (draft.inputSha256 !== expectedSha256) fail('MANAGER_REQUEST_DRAFT_HASH_MISMATCH', 'draft changed after validation', { expected_sha256: expectedSha256, actual_sha256: draft.inputSha256 });
-    const validated = parseValidatorOutput(invokeValidator(draft.value));
+    const validated = parseValidatorOutput(invokeValidator(Buffer.from(draft.value)));
     if (!['CREATE', 'CHANGE'].includes(validated.request_type)) {
       fail('MANAGER_REQUEST_DRAFT_TYPE_INVALID', 'draft submission only accepts CREATE or CHANGE requests');
     }
