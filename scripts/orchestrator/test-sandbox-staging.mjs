@@ -310,6 +310,8 @@ export function createTestSandboxStager({ workspaceRoot: workspaceRootInput, run
       const sourceTask = JSON.parse(readFileSync(nodePath.join(paths.executionInputRootAbs, 'task.json'), 'utf8'));
       const priorArtifacts = stagePriorArtifacts({ source: sourceTask, executionInputRootAbs: paths.executionInputRootAbs, containerInputRootAbs: paths.containerInputRootAbs });
       const executionTask = executionTaskInput({ source: sourceTask, task, inputRoot, paths, priorArtifacts });
+      // cpSync preserves the immutable source mode; the host must rewrite this staged copy before locking all input.
+      chmodSync(nodePath.join(paths.executionInputRootAbs, 'task.json'), 0o600);
       writeFileSync(nodePath.join(paths.executionInputRootAbs, 'task.json'), `${JSON.stringify(executionTask, null, 2)}\n`, 'utf8');
       const executionManifest = buildExecutionManifest({ source: sourceManifest, task, inputRoot, paths });
       writeFileSync(paths.executionContextManifestPathAbs, `${JSON.stringify(executionManifest, null, 2)}\n`, 'utf8');

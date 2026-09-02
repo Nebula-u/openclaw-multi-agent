@@ -333,6 +333,25 @@ test('staging permissions let configured image UID 10001 write repo/output/logs 
   await sandbox.cleanup(staged);
 });
 
+test('staging builds execution context from read-only source input and locks the staged input afterwards', async (t) => {
+  const value = fixture();
+  t.after(() => rmSync(value.root, { recursive: true, force: true }));
+  const inputRoot = join(value.task.artifactRootAbs, 'input');
+  chmodSync(join(inputRoot, 'task.json'), 0o444);
+  chmodSync(join(inputRoot, 'context-manifest.json'), 0o444);
+  const sandbox = createStager(value.workspace);
+
+  const staged = await sandbox.prepare(value.task);
+
+  assert.equal(statSync(join(staged.executionInputRootAbs, 'task.json')).mode & 0o222, 0);
+  assert.equal(statSync(join(staged.executionInputRootAbs, 'execution-context-manifest.json')).mode & 0o222, 0);
+  assert.equal(statSync(staged.executionInputRootAbs).mode & 0o222, 0);
+  assert.notEqual(statSync(staged.executionWorktreeAbs).mode & 0o222, 0);
+  assert.notEqual(statSync(staged.executionOutputRootAbs).mode & 0o222, 0);
+  assert.notEqual(statSync(staged.executionRawLogsRootAbs).mode & 0o222, 0);
+  await sandbox.cleanup(staged);
+});
+
 test('staging preserves special workspace mode bits while adding container traversal', {
   skip: process.platform !== 'linux' && 'requires a native Linux filesystem for POSIX special mode bits',
 }, async (t) => {
