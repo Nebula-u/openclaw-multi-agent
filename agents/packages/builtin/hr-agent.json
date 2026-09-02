@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "kind": "openclaw-agent-package",
+  "id": "hr-agent",
+  "display_name": "HR Agent",
+  "description": "手动优先地复核各 Agent Session 的脱敏思考摘要、最终输出和 Git 修改，不直接与用户交互。",
+  "origin": "builtin",
+  "protected": true,
+  "deletable": false,
+  "workspace_source_rel": "agents/hr-agent/workspace",
+  "runtime_subdir": "agents/hr-agent",
+  "role": "worker",
+  "capabilities": ["observability.session-review", "observability.git-review", "automation.review-hook"],
+  "model": "",
+  "delegation": { "callable_by_manager": false, "allow_agents": [] },
+  "sandbox_mode": null,
+  "assembly": { "include_common_rules": true, "include_templates": false },
+  "skills": [],
+  "lifecycle": { "register": true, "active": true }
+}

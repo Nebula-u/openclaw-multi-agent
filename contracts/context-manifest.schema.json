@@ -5,7 +5,7 @@
   "type": "object",
   "additionalProperties": true,
   "required": [
-    "schema_version", "workflow_id", "task_id", "run_id", "assigned_agent",
+    "schema_version", "workflow_id", "task_id", "run_id", "assigned_agent", "attempt",
     "created_at", "target_project_root_abs", "worktree_path_abs",
     "artifact_root_abs", "input_files", "rule_version", "rule_hash",
     "expected_output_paths_abs"
@@ -16,6 +16,7 @@
     "task_id": { "type": "string", "pattern": "^TASK-" },
     "run_id": { "type": "string", "pattern": "^RUN-" },
     "assigned_agent": { "type": "string" },
+    "attempt": { "type": "integer", "minimum": 1 },
     "created_at": { "type": "string", "format": "date-time" },
     "manager_session_reference": { "type": ["string", "null"] },
     "target_project_root_abs": { "type": "string", "minLength": 1 },

@@ -8,7 +8,7 @@
 - integration_branch: `sdlc/integration`
 - final_candidate_commit: `PLACEHOLDER_CANDIDATE_COMMIT_SHA`
 - generated_at: `2026-01-01T00:00:00Z`
-- isolation_mode: `<PLACEHOLDER: 按各阶段实际执行环境汇总>`
+- isolation_mode: `UNSANDBOXED_LOCAL`
 
 ## 各 Agent 原始总结（Per-Agent Raw Summaries）
 > 逐角色粘贴该 Agent 的 `summary_for_manager` 原文，标注来源角色与 result 文件绝对路径；不得改写其结论。
@@ -40,7 +40,7 @@
 
 ## 发布前判定（Pre-Release Verdict）
 - verdict: `<PLACEHOLDER: GO | NO_GO | HOLD>`
-- <PLACEHOLDER: `GO` 仅表示 `READY_FOR_OPERATIONS_HANDOFF`，不代表已部署；给出判定理由与依据引用。>
+- <PLACEHOLDER: `GO` 仅表示 `READY_TO_DEPLOY`，不代表已部署；实际部署须引用 DEPLOYED/DEPLOY_FAILED 证据。>
 
 ## 运维交接清单（Ops Handoff Checklist）
 <PLACEHOLDER: 部署前置条件、回滚计划位置、配置 / 密钥、监控 / 告警、责任人；引用 release-report。>

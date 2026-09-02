@@ -1,6 +1,9 @@
 # 多 Agent 软件开发与运维四周任务进度报告
 
+> **历史存档说明（2026-08-17 补注）**：本报告基于当时的 SQLite Control Kernel v2 + Orchestrator 三层架构撰写。该架构已在 2026-08-14 的重建（见 `docs/report/2026-08-14-stategraph-rebuild-handoff.md`）中被整体替换为 LangGraph `StateGraph + checkpointer` 单框架，`scripts/control-kernel.mjs`、`scripts/orchestrator.mjs`、`tests/control-kernel*.test.mjs` 等相关文件已被删除。本报告仅供历史参考，**不代表当前架构状态**，当前架构说明见 `docs/architecture.md`。
+>
 > 报告日期：2026-08-06
+
 >
 > 覆盖范围：以 2026-07-29 至 2026-08-06 的 Git 提交、`CHANGELOG.md`、现有测试记录与计划文档为依据。该区间共 69 个提交，最后一个提交在 2026-08-05；8 月 6 日没有新增提交。
 >
@@ -59,7 +62,7 @@
 | 任务分配 | 部分完成 | Control Kernel 已提供 task 注册、校验、查询、dispatch prepare/receipt/outbox 与 result ingest；派发前校验上下文身份、输入哈希、依赖、路径、Agent policy 和结构化输出声明。 | 真实 `sessions_spawn` 仍需收束为不可绕过的统一编排 API，并补 `agentId` 预检、计划持久化回执和实机演练。 |
 | Requirement → Architect | 机制完成，实机待验 | Requirement/Architect 角色、审批评估、架构变更 Gate、上下文与规则快照、HOLD/恢复机制均已具备。 | 尚未提交一条新的真实需求到架构业务 workflow 作为验收样本。 |
 | Developer 简单功能开发 | 基础样例存在，v2 待验 | 第一周 Demo 已有本地 branch/worktree/commit；v2 task 验证能约束 worktree、输入和结构化结果。 | 需要新建受控小程序任务，让 Developer 在 v2 工作流中实际提交代码，再由后续 Agent 验收。 |
-| 上下文管理 | 基本完成 | Manager 有 context identity、规则快照、input hash、task package、文件化恢复和会话软预算；模型通过配置按 Agent 静态选择。 | 尚未完成按 run 记录 token/cost 的完整台账；需防止 Manager 直接携带过量历史。 |
+| 上下文管理 | 基本完成 | Manager 有 context identity、规则快照、input hash、task package、文件化恢复和 80% 会话软预算；模型路由已统一到 DeepSeek V4 Pro Chat Completions。 | 尚未完成按 run 记录 token/cost 的完整台账；需防止 Manager 直接携带过量历史。 |
 | 审批机制 | 核心完成 | approval request/response、审批评估、风险 Gate、HOLD、恢复与作用域绑定已实现。 | 应在统一 dispatch 状态机中强制执行，覆盖大架构变更和大范围代码修改的真实场景。 |
 
 ### 第二周交付成熟度
@@ -107,7 +110,7 @@
 
 ### 建议的执行顺序
 
-1. 原 `docs/plan/2026-08-05-manager-orchestration-hardening.md` 已作为历史计划归档；当前实现和后续验收以 `docs/manager-orchestration.md`、`docs/control-kernel-v2.md` 为准。
+1. 原 `docs/archive/legacy/plan/2026-08-05-manager-orchestration-hardening.md`（已归档，原路径 `docs/plan/2026-08-05-manager-orchestration-hardening.md` 现已不存在）已作为历史计划归档；当前实现和后续验收以 `docs/manager-orchestration.md`、`docs/archive/legacy/control-kernel-v2.md`（旧架构存档，原路径 `docs/control-kernel-v2.md` 现已不存在）为准。
 2. 用一个受控小程序完成新的真实 v2 workflow：Requirement → Architect → Developer → Review → Test → Release，保存 commit、receipt、产物、Gate、audit 和 final report。
 3. 在该真实 workflow 中注入一次 Manager/Gateway 中断，验证按 PENDING dispatch intent 查询 session 后恢复，验证状态机设计而不是仅验证夹具。
 4. 为 Test Agent 建立受限 runner/sandbox；在此之前，以审批和 Gate 严格限制联网、安装依赖和破坏性命令。
@@ -117,7 +120,7 @@
 
 - Git 历史：2026-07-29 至 2026-08-06 共 69 个提交；P0–P5 分别在 2026-08-05 提交。
 - `CHANGELOG.md`：记录 P0–P5 的改动、原因、效果与验证；其中 P5 记录 Control Kernel 20 项测试，以及 Runtime Guard 105 项通过、Agent JSON 12 项通过、runtime bundle、迁移和安装测试通过的历史结果。
-- `scripts/control-kernel.mjs`、`scripts/control-core/` 与 `tests/control-kernel*.test.mjs`：事务、状态迁移、投影、审计、并发、崩溃和恢复实现/测试。
+- `scripts/control-kernel.mjs`、`scripts/control-core/` 与 `tests/control-kernel*.test.mjs`：事务、状态迁移、投影、审计、并发、崩溃和恢复实现/测试。**（2026-08-17 补注：这些文件已在 2026-08-14 重建中被删除，被 `scripts/stategraph/`、`scripts/workflow.mjs` 取代，此处仅作为报告撰写当时的证据记录保留。）**
 - `scripts/runtime-guard.mjs`、`scripts/agent-json-harness/`、`scripts/runtime-core/json-ingestion.mjs`：Guard、真实 LLM JSON Harness、保守清洗、重试和失败证据。
 - `docs/archive/legacy/plan/2026-08-05-manager-orchestration-hardening.md`：历史 Manager 编排、原子 JSON 与 Windows 恢复计划。
 

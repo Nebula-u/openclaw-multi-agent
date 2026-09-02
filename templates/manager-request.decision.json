@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "request_id": "REQ-<唯一标识>",
+  "request_type": "DECISION",
+  "workflow_id": "WF-<当前工作流>",
+  "submitted_by": "manager-agent",
+  "submitted_at": "2026-01-01T00:00:00Z",
+  "manager_session_id": "<current-openclaw-session-id>",
+  "manager_session_key": "<current-openclaw-session-key>",
+  "manager_delivery": null,
+  "decision_id": "DEC-<来自当前 pending decision 的 ID>",
+  "choice": "<来自当前 pending decision 选项的 ID>",
+  "notes": "<用户明确选择的说明>",
+  "user_authorized": {
+    "confirmed": true,
+    "actor": "human:cli-owner",
+    "message": "<用户明确授权原文>"
+  }
+}

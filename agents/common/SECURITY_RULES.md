@@ -32,19 +32,18 @@
 ## 5. 破坏性操作
 
 - 任何破坏性 / 不可逆 / 可能影响其他项目的操作 → 必须人工审批（见 APPROVAL_RULES.md）。
+- 按进程名或通配条件批量终止进程（如终止全部 `node` 进程）属于破坏性操作；Agent 必须返回 `HUMAN_DECISION_REQUIRED`，不得执行。
 - 默认选择非破坏性替代方案。
 
-## 6. test-agent 强制轻量级 sandbox
+## 6. TEST sandbox 开关
 
-- 新 test-agent run 必须使用 `isolation_mode=SANDBOXED_DOCKER`，OpenClaw `sandbox.mode=all`、Docker backend、session scope、`workspaceAccess=none`。
-- Docker Engine、镜像、动态挂载、有效配置或 runtime attestation 任一不可用，必须 `BLOCKED`；禁止使用 `UNSANDBOXED_LOCAL` 或回退宿主机执行。
-- 容器内只使用 `/worktree`、`/input`、`/agent-raw`、`/raw-logs` 和 `/workspace`；宿主机路径只作为审计元数据。
-- 每次测试必须记录：isolation_mode、runtime/container ID、image digest、workdir、挂载、资源限制、网络策略、是否涉及不受信任代码与已知风险。
-- 默认禁止：网络、依赖安装、系统配置修改、服务启动、计划任务、注册表修改、访问用户凭证目录。
-- 历史 artifact 可保留 `UNSANDBOXED_LOCAL` 事实，但不能用于新 test-agent run 的通过结论。
+- `OPENCLAW_TEST_SANDBOX_ENABLED` 默认 `true`。开启时，test-agent 只能在代码准备并校验的 Docker sandbox 中执行，`isolation_mode=SANDBOXED_DOCKER`。
+- Docker 模式必须满足：network none、只读 rootfs、drop ALL capabilities、非 root、PID/CPU/内存限制。由于 OpenClaw 当前版本不支持 per-run bind mount，Orchestrator 必须在 test-agent 的独占 staging workspace 中仅保留当前任务的 `/workspace/.task-sandbox/{repo,input,output,raw-logs}`；不得暴露宿主 runtime 路径或其他任务内容。每次执行必须保存由宿主交叉验证的 attestation；缺失或不一致时 fail closed。
+- 设置为 `false` 时，test-agent 只能在分配的本地 worktree 执行，`isolation_mode=UNSANDBOXED_LOCAL`。这不是 Docker 等价物：不得声称或要求 Docker attestation，仍禁止联网、安装依赖、访问凭证、启动服务或修改系统配置。
+- test-agent 不得修改 sandbox 配置、外部 bind、Docker daemon 或宿主 OpenClaw 配置。
 
 ## 7. 最小权限与最小上下文
 
-- manager-agent 传递上下文遵循最小必要原则。
-- 工作 Agent 不访问 manager 控制目录中与当前任务无关的内容。
+- Orchestrator dispatch 生成的上下文遵循最小必要原则。
+- 工作 Agent 不访问 runtime state、capability、锁或其他 workflow 数据。
 - 工作 Agent 的 subagent 白名单为空，不得再派生 Agent。

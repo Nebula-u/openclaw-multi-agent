@@ -52,6 +52,32 @@ function Invoke-OpenClawMutation {
   }
 }
 
+function Get-OpenClawJsonWithRetry {
+  param(
+    [Parameter(Mandatory)][string[]]$OcArgs,
+    [Parameter(Mandatory)][string]$Description,
+    [int]$MaxAttempts = 6
+  )
+  $lastDiagnostic = ''
+  for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
+    $result = Invoke-OpenClaw $OcArgs
+    if ($result.ExitCode -eq 0) {
+      try {
+        return ConvertFrom-OpenClawJsonOutput -Output $result.Output -Description $Description
+      } catch {
+        $lastDiagnostic = $_.Exception.Message
+      }
+    } else {
+      $lastDiagnostic = $result.Output
+    }
+    if ($attempt -lt $MaxAttempts) {
+      Write-Host "$Description 暂未返回完整 JSON，正在重读 ($attempt/$MaxAttempts)..." -ForegroundColor Yellow
+      Start-Sleep -Milliseconds (350 * $attempt)
+    }
+  }
+  throw "$Description 连续 $MaxAttempts 次未返回可验证 JSON：$lastDiagnostic"
+}
+
 function Get-OpenClawJsonListWithRetry {
   param(
     [Parameter(Mandatory)][string[]]$OcArgs,
@@ -112,7 +138,7 @@ function Get-AgentIndex {
 }
 
 function Set-OpenClawJson {
-  param([string]$Path, $Value, [AllowEmptyCollection()][System.Collections.Generic.List[string]]$Changes)
+  param([string]$Path, $Value, [System.Collections.Generic.List[string]]$Changes)
   $json = $Value | ConvertTo-Json -Depth 10 -Compress
   $dry = Invoke-OpenClaw @('config','set',$Path,$json,'--strict-json','--dry-run')
   if ($dry.ExitCode -ne 0) { throw "config set dry-run 失败：$Path`n$($dry.Output)" }
@@ -130,30 +156,42 @@ function Sync-ModelCatalog {
   $providers = @{}
   foreach ($p in @($Packages)) {
     if (-not $p.model -or $p.model -notmatch '^([^/]+)/(.+)$') { continue }
-    $provider = [string]$Matches[1]; $modelId = [string]$Matches[2]
+    $provider = [string]$Matches[1]
+    $modelId = [string]$Matches[2]
     if (-not $providers.ContainsKey($provider)) {
       $providers[$provider] = $p
       $providerConfig = Get-OpenClawJsonListWithRetry -OcArgs @('config','get',"models.providers.$provider",'--json') -Description "Provider $provider 输出"
-      if ($p.transport_api_explicit -and [string]$providerConfig.api -ne [string]$p.api) { Set-OpenClawJson -Path "models.providers.$provider.api" -Value ([string]$p.api) -Changes $Changes }
-      if ($p.transport_base_url_explicit -and [string]$providerConfig.baseUrl -ne [string]$p.base_url) { Set-OpenClawJson -Path "models.providers.$provider.baseUrl" -Value ([string]$p.base_url) -Changes $Changes }
+      if ($p.transport_api_explicit -and [string]$providerConfig.api -ne [string]$p.api) {
+        Set-OpenClawJson -Path "models.providers.$provider.api" -Value ([string]$p.api) -Changes $Changes
+      }
+      if ($p.transport_base_url_explicit -and [string]$providerConfig.baseUrl -ne [string]$p.base_url) {
+        Set-OpenClawJson -Path "models.providers.$provider.baseUrl" -Value ([string]$p.base_url) -Changes $Changes
+      }
     } else {
-      $providerPrior = $providers[$provider]
-      if (($p.transport_api_explicit -or $providerPrior.transport_api_explicit) -and [string]$p.api -ne [string]$providerPrior.api) { throw "Provider '$provider' 在 .env 中出现不一致的 API 配置。" }
-      if (($p.transport_base_url_explicit -or $providerPrior.transport_base_url_explicit) -and [string]$p.base_url -ne [string]$providerPrior.base_url) { throw "Provider '$provider' 在 .env 中出现不一致的 base URL 配置。" }
+      $priorProvider = $providers[$provider]
+      if (($p.transport_api_explicit -or $priorProvider.transport_api_explicit) -and [string]$p.api -ne [string]$priorProvider.api) {
+        throw "Provider '$provider' 在项目配置中出现不一致的 API 配置。"
+      }
+      if (($p.transport_base_url_explicit -or $priorProvider.transport_base_url_explicit) -and [string]$p.base_url -ne [string]$priorProvider.base_url) {
+        throw "Provider '$provider' 在项目配置中出现不一致的 base URL 配置。"
+      }
     }
+
     $key = "$provider/$modelId"
     if ($seen.ContainsKey($key)) {
       $prior = $seen[$key]
       if ($prior.context_window_tokens -ne $p.context_window_tokens -or $prior.max_output_tokens -ne $p.max_output_tokens -or $prior.max_tokens_field -ne $p.max_tokens_field) {
-        throw "模型 '$key' 被多个 Agent 使用，但 .env 为其设置了不同的 context/max output/token 字段；请统一配置或使用不同模型。"
+        throw "模型 '$key' 被多个 Agent 使用，但 context/max output/token 字段不一致。"
       }
       continue
     }
     $seen[$key] = $p
     $models = @(Get-OpenClawJsonListWithRetry -OcArgs @('config','get',"models.providers.$provider.models",'--json') -Description "模型目录 $provider 输出")
     $modelIndex = -1
-    for ($i = 0; $i -lt $models.Count; $i++) { if ([string]$models[$i].id -eq $modelId) { $modelIndex = $i; break } }
-    if ($modelIndex -lt 0) { throw "OpenClaw 模型目录中不存在 '$key'，无法将 .env 的 LLM 限制应用到实际调用。" }
+    for ($i = 0; $i -lt $models.Count; $i++) {
+      if ([string]$models[$i].id -eq $modelId) { $modelIndex = $i; break }
+    }
+    if ($modelIndex -lt 0) { throw "OpenClaw 模型目录中不存在 '$key'，无法应用项目声明的模型限制。" }
     $model = $models[$modelIndex]
     if ([int64]$model.contextWindow -ne [int64]$p.context_window_tokens) {
       Set-OpenClawJson -Path "models.providers.$provider.models[$modelIndex].contextWindow" -Value ([int64]$p.context_window_tokens) -Changes $Changes
@@ -184,6 +222,71 @@ function Restore-ConfigOnFailure {
   }
 }
 
+function Resolve-OpenClawConfigFilePath {
+  param([Parameter(Mandatory)]$Result)
+  if ($Result.ExitCode -eq 0 -and -not [string]::IsNullOrWhiteSpace($Result.Output)) {
+    $candidate = $Result.Output.Trim()
+    if ($candidate.StartsWith('~')) {
+      $candidate = Join-Path $HOME ($candidate.Substring(1).TrimStart([char[]]@('\', '/')))
+    }
+    return Get-NormalizedPath $candidate
+  }
+
+  # OpenClaw refuses `config file` when a removed plugin is still referenced.
+  # Its diagnostic contains the configured file path, which is safe to use only
+  # when it resolves to an existing local JSON file.
+  $match = [regex]::Match([string]$Result.Output, '(?ms)File:\s*(?<path>.+?)(?:\s+Problem:|\r?$)')
+  $candidate = if ($match.Success) { $match.Groups['path'].Value.Trim() } else { '' }
+  if ($candidate.StartsWith('~')) {
+    $candidate = Join-Path $HOME ($candidate.Substring(1).TrimStart([char[]]@('\', '/')))
+  }
+  if ($candidate -and (Test-Path -LiteralPath $candidate -PathType Leaf)) {
+    return Get-NormalizedPath $candidate
+  }
+  $defaultPath = Join-Path $HOME '.openclaw\openclaw.json'
+  if (Test-Path -LiteralPath $defaultPath -PathType Leaf) {
+    return Get-NormalizedPath $defaultPath
+  }
+  throw "无法获取 OpenClaw 配置文件，且未找到可恢复的本地配置路径：$($Result.Output)"
+}
+
+function Test-RetiredStateGraphWebChatPath {
+  param([AllowNull()][string]$Path)
+  return $Path -match '(?i)(?:^|[\\/])stategraph-webchat[\\/]*$'
+}
+
+function Get-RetiredStateGraphWebChatReferences {
+  param([Parameter(Mandatory)][string]$ConfigPath)
+  $config = Read-JsonFile $ConfigPath
+  $paths = @()
+  $entryPresent = $false
+  if ($config.PSObject.Properties.Name -contains 'plugins' -and $config.plugins) {
+    if ($config.plugins.PSObject.Properties.Name -contains 'load' -and $config.plugins.load -and
+        $config.plugins.load.PSObject.Properties.Name -contains 'paths') {
+      $paths = @($config.plugins.load.paths | Where-Object { Test-RetiredStateGraphWebChatPath ([string]$_) })
+    }
+    if ($config.plugins.PSObject.Properties.Name -contains 'entries' -and $config.plugins.entries) {
+      $entryPresent = $null -ne $config.plugins.entries.PSObject.Properties['stategraph-webchat']
+    }
+  }
+  return [pscustomobject]@{ config = $config; paths = $paths; entry_present = $entryPresent; found = ($paths.Count -gt 0 -or $entryPresent) }
+}
+
+function Remove-RetiredStateGraphWebChatReferences {
+  param(
+    [Parameter(Mandatory)]$Reference,
+    [Parameter(Mandatory)][string]$ConfigPath
+  )
+  if (-not $Reference.found) { return $false }
+  $plugins = $Reference.config.plugins
+  if ($Reference.paths.Count -gt 0) {
+    $plugins.load.paths = @($plugins.load.paths | Where-Object { -not (Test-RetiredStateGraphWebChatPath ([string]$_)) })
+  }
+  if ($Reference.entry_present) { [void]$plugins.entries.PSObject.Properties.Remove('stategraph-webchat') }
+  Write-JsonAtomic -Value $Reference.config -Path $ConfigPath -Depth 24
+  return $true
+}
+
 Write-Host "== openclaw-sdlc-multi-agent package 同步 ($Mode) ==" -ForegroundColor Cyan
 Write-Host "ProjectRoot : $ProjectRoot"
 Write-Host "RuntimeRoot : $RuntimeRootAbs"
@@ -192,8 +295,15 @@ Write-Host "调用时 PWD  : $((Get-Location).Path)（不用于路径解析）"
 if (-not (Get-Command openclaw -ErrorAction SilentlyContinue)) { throw '未找到 openclaw CLI。' }
 $versionResult = Invoke-OpenClaw @('--version')
 $configFileResult = Invoke-OpenClaw @('config','file')
-if ($configFileResult.ExitCode -ne 0) { throw "无法获取 OpenClaw 配置文件：$($configFileResult.Output)" }
-$ConfigFilePath = $configFileResult.Output.Trim()
+$ConfigFilePath = Resolve-OpenClawConfigFilePath -Result $configFileResult
+$retiredPluginReferences = Get-RetiredStateGraphWebChatReferences -ConfigPath $ConfigFilePath
+if ($retiredPluginReferences.found) {
+  $retiredSummary = @()
+  if ($retiredPluginReferences.paths.Count -gt 0) { $retiredSummary += "plugins.load.paths ($($retiredPluginReferences.paths -join ', '))" }
+  if ($retiredPluginReferences.entry_present) { $retiredSummary += 'plugins.entries.stategraph-webchat' }
+  Write-Host "检测到已移除的 StateGraph WebChat 配置：$($retiredSummary -join '；')" -ForegroundColor Yellow
+  if (-not $Apply) { Write-Host '[DRYRUN] APPLY 时将先备份并移除这些已废弃引用，再继续安装。' -ForegroundColor Yellow }
+}
 
 $Packages = @(Get-AgentPackages -ProjectRoot $ProjectRoot -RuntimeRootAbs $RuntimeRootAbs -ModelConfig $ModelConfig)
 if ($AgentIds) {
@@ -210,7 +320,16 @@ $Manager = Get-ManagerPackage $Packages
 if (-not $Manager.register -or -not $Manager.active) { throw 'manager package 必须 register=true 且 active=true。' }
 $ManagerAllow = @(Get-ManagerAllowAgents $Packages)
 
-$ExistingAgents = @(Get-OpenClawAgentsWithFallback)
+$ExistingAgents = if ($retiredPluginReferences.found) {
+  # The CLI cannot read an invalid config.  Its on-disk agents list is used
+  # only for preflight conflict detection; APPLY repairs the exact retired
+  # references from the backed-up file before any CLI mutation.
+  if ($retiredPluginReferences.config.PSObject.Properties.Name -contains 'agents' -and
+      $retiredPluginReferences.config.agents -and
+      $retiredPluginReferences.config.agents.PSObject.Properties.Name -contains 'list') {
+    @($retiredPluginReferences.config.agents.list)
+  } else { @() }
+} else { @(Get-OpenClawAgentsWithFallback) }
 $ExistingIds = @($ExistingAgents | ForEach-Object { [string]$_.id })
 
 $workspaceSeen = @($RegisteredPackages | ForEach-Object workspace | Sort-Object -Unique)
@@ -233,9 +352,10 @@ foreach ($p in $RegisteredPackages) {
 if ($conflicts.Count -gt 0) { throw "发现同名 Agent 冲突，不会覆盖用户 Agent：`n$($conflicts -join "`n")" }
 
 $RuntimeDirs = [System.Collections.Generic.List[string]]::new()
-foreach ($relative in @('control\v2','control\config-snapshots','control\component-requests','control\component-builds','worktrees','artifacts')) {
+foreach ($relative in @('control\v2','control\config-snapshots','control\component-requests','control\component-builds')) {
   $RuntimeDirs.Add((Join-Path $RuntimeRootAbs $relative))
 }
+$WorkRoot = Join-Path $ProjectRoot 'work'
 foreach ($p in $RegisteredPackages) {
   $RuntimeDirs.Add($p.workspace)
   $RuntimeDirs.Add($p.agentDir)
@@ -258,6 +378,7 @@ $Manifest = [ordered]@{
   project_root_abs = $ProjectRoot
   runtime_root_abs = $RuntimeRootAbs
   package_catalog_root_abs = (Join-Path $ProjectRoot 'agents\packages')
+  artifact_access_control = [ordered]@{ path_abs = $WorkRoot; applied = $false; protected = $false; mode = if ($IsWindows) { 'protected-dacl' } else { '0700' } }
   agents = @()
   config_backup = $null
   config_changes = @()
@@ -312,6 +433,9 @@ if (-not $Yes) {
 }
 
 foreach ($dir in $RuntimeDirs) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }
+New-Item -ItemType Directory -Force -Path $WorkRoot | Out-Null
+$artifactAcl = Set-RawArtifactAccessControl -Path $WorkRoot
+$Manifest.artifact_access_control = [ordered]@{ path_abs = $artifactAcl.path_abs; applied = $true; protected = $artifactAcl.protected; platform = $artifactAcl.platform; mode = $artifactAcl.mode }
 $snapshotDir = Join-Path $RuntimeRootAbs 'control\config-snapshots'
 $backupPath = $null
 if (Test-Path $ConfigFilePath) {
@@ -322,9 +446,31 @@ if (Test-Path $ConfigFilePath) {
 
 $changes = [System.Collections.Generic.List[string]]::new()
 try {
+  if (Remove-RetiredStateGraphWebChatReferences -Reference $retiredPluginReferences -ConfigPath $ConfigFilePath) {
+    $changes.Add('remove retired stategraph-webchat plugin references')
+    Write-Host '已移除已废弃的 StateGraph WebChat 插件配置。' -ForegroundColor Yellow
+  }
+  Sync-ModelCatalog -Packages $RegisteredPackages -Changes $changes
   $commonSource = Join-Path $ProjectRoot 'agents\common'
   $templatesSource = Join-Path $ProjectRoot 'templates'
   $systemSkillsSource = Join-Path $ProjectRoot 'agents\packages\system\skills'
+  $managerControlSource = Join-Path $ProjectRoot 'scripts\manager-control'
+  $managerControlPolicySource = Join-Path $ProjectRoot 'config\manager-control-policy.json'
+  $releaseControlSource = Join-Path $ProjectRoot 'scripts\release-control'
+  $releaseControlPolicySource = Join-Path $ProjectRoot 'config\release-control-policy.json'
+  $runtimeCoreSource = Join-Path $ProjectRoot 'scripts\runtime-core'
+  $controlKernelSource = Join-Path $ProjectRoot 'scripts\control-kernel'
+  $managerControlTarget = Join-Path $RuntimeRootAbs 'manager-control'
+  $releaseControlTarget = Join-Path $RuntimeRootAbs 'release-control'
+  $runtimeCoreTarget = Join-Path $RuntimeRootAbs 'runtime-core'
+  $controlKernelTarget = Join-Path $RuntimeRootAbs 'control-kernel'
+  New-Item -ItemType Directory -Force -Path $managerControlTarget, $releaseControlTarget, $runtimeCoreTarget, $controlKernelTarget | Out-Null
+  Copy-Item -Path (Join-Path $managerControlSource '*') -Destination $managerControlTarget -Recurse -Force
+  Copy-Item -LiteralPath $managerControlPolicySource -Destination (Join-Path $managerControlTarget 'manager-control-policy.json') -Force
+  Copy-Item -Path (Join-Path $releaseControlSource '*') -Destination $releaseControlTarget -Recurse -Force
+  Copy-Item -LiteralPath $releaseControlPolicySource -Destination (Join-Path $releaseControlTarget 'release-control-policy.json') -Force
+  Copy-Item -Path (Join-Path $runtimeCoreSource '*') -Destination $runtimeCoreTarget -Recurse -Force
+  Copy-Item -Path (Join-Path $controlKernelSource '*') -Destination $controlKernelTarget -Recurse -Force
   foreach ($p in $RegisteredPackages) {
     New-Item -ItemType Directory -Force -Path $p.workspace, $p.agentDir | Out-Null
     Copy-Item -Path (Join-Path $p.workspace_source '*') -Destination $p.workspace -Recurse -Force
@@ -347,7 +493,6 @@ try {
       }
     }
   }
-  Sync-ModelCatalog -Packages $RegisteredPackages -Changes $changes
 
   foreach ($p in $RegisteredPackages) {
     if ($ExistingIds -contains $p.id) { continue }
@@ -370,7 +515,9 @@ try {
       }
     }
     $subagents = if ($p.role -eq 'manager') {
-      [ordered]@{ delegationMode = 'prefer'; requireAgentId = $true; allowAgents = @($ManagerAllow) }
+      # OpenClaw accepts only suggest/prefer.  An empty allowlist preserves the
+      # Orchestrator-only dispatch boundary while keeping the native schema valid.
+      [ordered]@{ delegationMode = 'prefer'; requireAgentId = $true; allowAgents = @() }
     } else {
       [ordered]@{ allowAgents = @($p.allow_agents) }
     }
@@ -411,6 +558,54 @@ try {
       Set-OpenClawJson -Path "agents.list[$idx].tools" -Value $p.tools_config -Changes $changes
     }
   }
+
+  $managerExecStatePath = Join-Path $RuntimeRootAbs 'control\manager-exec-allowlist.json'
+  $releaseExecStatePath = Join-Path $RuntimeRootAbs 'control\release-exec-allowlist.json'
+  $managerEntrypoint = Join-Path $RuntimeRootAbs $(if ($IsWindows) { 'manager-control\manager-control.cmd' } else { 'manager-control/manager-control' })
+  if (-not $IsWindows) { & chmod 755 $managerEntrypoint }
+  if (-not (Test-Path -LiteralPath $managerEntrypoint -PathType Leaf)) { throw "缺少 Manager 受控执行入口：$managerEntrypoint" }
+  $managerEntrypointFile = Join-Path $Manager.workspace '.orchestrator\manager-control-entrypoint.json'
+  $managerRequestRoot = Split-Path -Parent $managerEntrypointFile
+  New-Item -ItemType Directory -Force -Path $managerRequestRoot, (Join-Path $managerRequestRoot 'drafts'), (Join-Path $managerRequestRoot 'requests'), (Join-Path $managerRequestRoot 'receipts') | Out-Null
+  Write-JsonAtomic -Value ([ordered]@{ schema_version = 1; entrypoint = $managerEntrypoint }) -Path $managerEntrypointFile -Depth 4
+  $release = @($RegisteredPackages | Where-Object { $_.id -eq 'release-agent' }) | Select-Object -First 1
+  $releaseEntrypoint = Join-Path $RuntimeRootAbs $(if ($IsWindows) { 'release-control\release-control.cmd' } else { 'release-control/release-control' })
+  if (-not $IsWindows) { & chmod 755 $releaseEntrypoint }
+  if (-not (Test-Path -LiteralPath $releaseEntrypoint -PathType Leaf)) { throw "缺少 Release 受控执行入口：$releaseEntrypoint" }
+  if ($release) {
+    $releaseEntrypointFile = Join-Path $release.workspace '.orchestrator\release-control-entrypoint.json'
+    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $releaseEntrypointFile) | Out-Null
+    Write-JsonAtomic -Value ([ordered]@{ schema_version = 1; entrypoint = $releaseEntrypoint }) -Path $releaseEntrypointFile -Depth 4
+  }
+  $approvalFile = (Get-OpenClawJsonWithRetry -OcArgs @('approvals','get','--json') -Description 'Manager exec approvals').file
+  if (-not $approvalFile) { throw 'Manager exec approvals 返回中缺少 approvals 文件。' }
+  if (-not ($approvalFile.PSObject.Properties.Name -contains 'agents') -or -not $approvalFile.agents) {
+    $approvalFile | Add-Member -NotePropertyName agents -NotePropertyValue ([pscustomobject]@{}) -Force
+  }
+  $managerApproval = [ordered]@{
+    security = 'allowlist'; ask = 'off'; askFallback = 'deny'; autoAllowSkills = $false
+    allowlist = @([ordered]@{ pattern = $managerEntrypoint })
+  }
+  $approvalFile.agents | Add-Member -NotePropertyName $Manager.id -NotePropertyValue $managerApproval -Force
+  if ($release) {
+    $releaseApproval = [ordered]@{
+      security = 'allowlist'; ask = 'off'; askFallback = 'deny'; autoAllowSkills = $false
+      allowlist = @([ordered]@{ pattern = $releaseEntrypoint })
+    }
+    $approvalFile.agents | Add-Member -NotePropertyName $release.id -NotePropertyValue $releaseApproval -Force
+  }
+  $approvalTemp = Join-Path ([System.IO.Path]::GetTempPath()) ("openclaw-manager-approvals-" + [guid]::NewGuid().Guid + '.json')
+  try {
+    Write-JsonAtomic -Value $approvalFile -Path $approvalTemp -Depth 20
+    $approved = Invoke-OpenClaw @('approvals','set','--file',$approvalTemp,'--json')
+    if ($approved.ExitCode -ne 0) { throw "配置 Manager exec allowlist 失败：$($approved.Output)" }
+  } finally {
+    if (Test-Path -LiteralPath $approvalTemp) { Remove-Item -LiteralPath $approvalTemp -Force }
+  }
+  Write-JsonAtomic -Value ([ordered]@{ schema_version = 1; agent_id = $Manager.id; entrypoint = $managerEntrypoint }) -Path $managerExecStatePath -Depth 4
+  if ($release) { Write-JsonAtomic -Value ([ordered]@{ schema_version = 1; agent_id = $release.id; entrypoint = $releaseEntrypoint }) -Path $releaseExecStatePath -Depth 4 }
+  $changes.Add("replace $($Manager.id) exec allowlist with manager-control")
+  if ($release) { $changes.Add("replace $($release.id) exec allowlist with release-control") }
 
   if ($SetManagerAsDefault) {
     $idx = Get-AgentIndex -List $listNow -Id $Manager.id

@@ -5,6 +5,7 @@ import { join, resolve } from 'node:path';
 import test from 'node:test';
 import { openTelemetryDatabase, createTelemetryRepository } from '../monitor/telemetry-repository.mjs';
 import { createSessionTailer } from '../monitor/session-tailer.mjs';
+import { parseSessionRecord } from '../monitor/session-parser.mjs';
 
 const ROOT = resolve(import.meta.dirname, '..');
 
@@ -21,8 +22,8 @@ test('session tailer exposes only user-visible assistant dialogue and waits for 
   const database = openTelemetryDatabase(':memory:');
   try {
     const telemetry = createTelemetryRepository(ROOT, database);
-    const controlDatabase = { prepare: () => ({ all: () => [{ dispatch_id: 'DSP-1', workflow_id: 'WF-1', task_id: 'TASK-1', run_id: 'RUN-1', agent_id: 'developer-agent', session_id: 'session-1' }] }) };
-    const tailer = createSessionTailer({ controlDatabase, telemetry, sessionRoot: directory });
+    const taskSource = () => [{ workflow_id: 'WF-1', task_id: 'TASK-1', run_id: 'RUN-1', agent_id: 'developer-agent', session_id: 'session-1', dispatches: [{ dispatch_id: 'DSP-1' }] }];
+    const tailer = createSessionTailer({ taskSource, telemetry, sessionRoot: directory });
     const first = tailer.scan();
     assert.equal(first.length, 1);
     assert.ok(first.every((event) => !JSON.stringify(event).includes('private')));
@@ -32,4 +33,19 @@ test('session tailer exposes only user-visible assistant dialogue and waits for 
     appendFileSync(path, '}\n');
     assert.equal(tailer.scan().length, 0);
   } finally { database.close(); rmSync(directory, { recursive: true, force: true }); }
+});
+
+test('session parser normalizes OpenClaw epoch message timestamps for monitor schema', () => {
+  const record = {
+    type: 'message',
+    timestamp: '2026-08-17T02:22:35.673Z',
+    message: {
+      role: 'assistant',
+      content: [{ type: 'text', text: 'NO_REPLY' }],
+      timestamp: 1786933349733,
+    },
+  };
+  const [parsed] = parseSessionRecord(JSON.stringify(record));
+  assert.equal(parsed.timestamp, '2026-08-17T02:22:29.733Z');
+  assert.match(parsed.timestamp, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/u);
 });

@@ -3,7 +3,18 @@
 set -uo pipefail
 
 SKIP_OPENCLAW=0
-[ "${1:-}" = "--skip-openclaw" ] && SKIP_OPENCLAW=1
+RUNTIME_ROOT="runtime"
+usage() {
+  printf '%s\n' '用法: validate-install.sh [--skip-openclaw] [--runtime-root <path>]'
+}
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --skip-openclaw) SKIP_OPENCLAW=1; shift ;;
+    --runtime-root) RUNTIME_ROOT="${2:?--runtime-root 需要参数}"; shift 2 ;;
+    -h|--help) usage; exit 0 ;;
+    *) echo "未知参数: $1" >&2; usage; exit 2 ;;
+  esac
+done
 
 SOURCE="${BASH_SOURCE[0]}"
 while [ -h "$SOURCE" ]; do
@@ -11,6 +22,20 @@ while [ -h "$SOURCE" ]; do
 done
 SCRIPT_DIR="$(cd -P "$(dirname "$SOURCE")" >/dev/null 2>&1 && pwd -P)"
 PROJECT_ROOT="$(cd -P "$SCRIPT_DIR/.." >/dev/null 2>&1 && pwd -P)"
+if [[ "$RUNTIME_ROOT" = /* || "$RUNTIME_ROOT" =~ ^[A-Za-z]:[\\/] ]]; then
+  RUNTIME_ROOT_ABS="$RUNTIME_ROOT"
+else
+  RUNTIME_ROOT_ABS="$PROJECT_ROOT/$RUNTIME_ROOT"
+fi
+
+if [ -z "${OPENCLAW_TEST_SANDBOX_ENABLED+x}" ] && [ -f "$PROJECT_ROOT/.env" ]; then
+  OPENCLAW_TEST_SANDBOX_ENABLED="$(sed -n 's/^[[:space:]]*OPENCLAW_TEST_SANDBOX_ENABLED[[:space:]]*=[[:space:]]*//p' "$PROJECT_ROOT/.env" | head -n 1 | tr -d '\r' | tr -d '\"')"
+fi
+case "$(printf '%s' "${OPENCLAW_TEST_SANDBOX_ENABLED:-true}" | tr '[:upper:]' '[:lower:]')" in
+  true|1|yes|on) TEST_SANDBOX_ENABLED=1 ;;
+  false|0|no|off) TEST_SANDBOX_ENABLED=0 ;;
+  *) TEST_SANDBOX_ENABLED=1 ;;
+esac
 
 native_path() {
   if command -v cygpath >/dev/null 2>&1; then cygpath -w "$1"; else printf '%s' "$1"; fi
@@ -24,6 +49,54 @@ check() {
   printf '\033[%sm[%s]\033[0m %s%s\n' "$c" "$2" "$1" "${d:+ — $d}"
   if command -v jq >/dev/null 2>&1; then LOG_LINES+=("$(jq -nc --arg c "$1" --arg s "$2" --arg d "$d" '{check:$c,status:$s,detail:$d}')"); fi
   case "$2" in PASS) PASS_N=$((PASS_N+1));; FAIL) FAIL_N=$((FAIL_N+1));; UNKNOWN) UNK_N=$((UNK_N+1));; esac
+}
+
+RUNTIME_ROOT_CANONICAL="$(cd -P "$RUNTIME_ROOT_ABS" >/dev/null 2>&1 && pwd -P || true)"
+safe_installed_directory() {
+  local path="$1" canonical
+  [ -n "$RUNTIME_ROOT_CANONICAL" ] && [ -d "$path" ] && [ ! -L "$path" ] || return 1
+  canonical="$(cd -P "$path" >/dev/null 2>&1 && pwd -P)" || return 1
+  [ "$canonical" = "$RUNTIME_ROOT_CANONICAL" ] || [[ "$canonical" = "$RUNTIME_ROOT_CANONICAL/"* ]]
+}
+safe_installed_file() {
+  local path="$1" parent canonical
+  [ -n "$RUNTIME_ROOT_CANONICAL" ] && [ -f "$path" ] && [ ! -L "$path" ] || return 1
+  parent="$(cd -P "$(dirname "$path")" >/dev/null 2>&1 && pwd -P)" || return 1
+  canonical="$parent/$(basename "$path")"
+  [[ "$canonical" = "$RUNTIME_ROOT_CANONICAL/"* ]]
+}
+
+check_installed_test_agent_sandbox() {
+  local agents_json sandbox workspace_access workdir binds_absent hardening detail
+  if ! agents_json="$(openclaw config get agents.list --json 2>/dev/null)"; then
+    check "已安装 test-agent sandbox workspaceAccess=rw" FAIL "无法读取 agents.list"
+    check "已安装 test-agent sandbox 工作目录为任务暂存 repo" FAIL "无法读取 agents.list"
+    check "已安装 test-agent sandbox 不含外部 bind 挂载" FAIL "无法读取 agents.list"
+    check "已安装 test-agent sandbox Docker 加固" FAIL "无法读取 agents.list"
+    return
+  fi
+  if ! sandbox="$(printf '%s' "$agents_json" | jq -ce '[.[] | select(.id == "test-agent") | .sandbox] | if length == 1 then .[0] else error("test-agent sandbox missing or duplicated") end' 2>/dev/null)"; then
+    check "已安装 test-agent sandbox workspaceAccess=rw" FAIL "test-agent sandbox 不存在或重复"
+    check "已安装 test-agent sandbox 工作目录为任务暂存 repo" FAIL "test-agent sandbox 不存在或重复"
+    check "已安装 test-agent sandbox 不含外部 bind 挂载" FAIL "test-agent sandbox 不存在或重复"
+    check "已安装 test-agent sandbox Docker 加固" FAIL "test-agent sandbox 不存在或重复"
+    return
+  fi
+
+  if [ "$TEST_SANDBOX_ENABLED" -eq 0 ]; then
+    [ "$(printf '%s' "$sandbox" | jq -r '.mode // ""')" = off ] && check "已安装 test-agent sandbox 已禁用" PASS || check "已安装 test-agent sandbox 已禁用" FAIL
+    return
+  fi
+
+  workspace_access="$(printf '%s' "$sandbox" | jq -r '.workspaceAccess // ""')"
+  [ "$workspace_access" = rw ] && check "已安装 test-agent sandbox workspaceAccess=rw" PASS "$workspace_access" || check "已安装 test-agent sandbox workspaceAccess=rw" FAIL "$workspace_access"
+  workdir="$(printf '%s' "$sandbox" | jq -r '.docker.workdir // ""')"
+  [ "$workdir" = /workspace/.task-sandbox/repo ] && check "已安装 test-agent sandbox 工作目录为任务暂存 repo" PASS "$workdir" || check "已安装 test-agent sandbox 工作目录为任务暂存 repo" FAIL "$workdir"
+  binds_absent="$(printf '%s' "$sandbox" | jq -r '(.docker | has("binds")) | not')"
+  [ "$binds_absent" = true ] && check "已安装 test-agent sandbox 不含外部 bind 挂载" PASS || check "已安装 test-agent sandbox 不含外部 bind 挂载" FAIL
+  hardening="$(printf '%s' "$sandbox" | jq -r '.backend == "docker" and .docker.network == "none" and .docker.readOnlyRoot == true and .docker.capDrop == ["ALL"] and .docker.pidsLimit == 256 and .docker.memory == "2g" and .docker.cpus == 2')"
+  detail="network=$(printf '%s' "$sandbox" | jq -r '.docker.network // ""') readOnlyRoot=$(printf '%s' "$sandbox" | jq -r '.docker.readOnlyRoot // ""') capDrop=$(printf '%s' "$sandbox" | jq -r '(.docker.capDrop // []) | join(",")')"
+  [ "$hardening" = true ] && check "已安装 test-agent sandbox Docker 加固" PASS "$detail" || check "已安装 test-agent sandbox Docker 加固" FAIL "$detail"
 }
 
 echo "== package 驱动静态验证 (Bash) =="
@@ -77,17 +150,50 @@ done
 for f in "$PROJECT_ROOT"/contracts/*.json; do jq empty "$(native_path "$f")" >/dev/null 2>&1 && check "contracts JSON: $(basename "$f")" PASS || check "contracts JSON: $(basename "$f")" FAIL; done
 for f in "$PROJECT_ROOT"/templates/*.json; do [ -e "$f" ] || continue; jq empty "$(native_path "$f")" >/dev/null 2>&1 && check "templates JSON: $(basename "$f")" PASS || check "templates JSON: $(basename "$f")" FAIL; done
 
+MANAGER_WORKSPACE="$RUNTIME_ROOT_ABS/agents/manager-agent/workspace"
+MANAGER_WORKSPACE_SAFE=1
+for directory in "$RUNTIME_ROOT_ABS/agents" "$RUNTIME_ROOT_ABS/agents/manager-agent" "$MANAGER_WORKSPACE" "$MANAGER_WORKSPACE/.orchestrator"; do
+  safe_installed_directory "$directory" || MANAGER_WORKSPACE_SAFE=0
+done
+for directory in drafts requests receipts; do
+  path="$MANAGER_WORKSPACE/.orchestrator/$directory"
+  [ "$MANAGER_WORKSPACE_SAFE" -eq 1 ] && safe_installed_directory "$path" && check "已安装 Manager $directory 目录" PASS "$path" || check "已安装 Manager $directory 目录" FAIL "$path"
+done
+MANAGER_DEPLOY_TEMPLATE="$MANAGER_WORKSPACE/templates/manager-request.deploy.json"
+if [ "$MANAGER_WORKSPACE_SAFE" -eq 1 ] && safe_installed_directory "$MANAGER_WORKSPACE/templates" && safe_installed_file "$MANAGER_DEPLOY_TEMPLATE" && jq empty "$(native_path "$MANAGER_DEPLOY_TEMPLATE")" >/dev/null 2>&1; then
+  check "已安装 Manager 部署请求模板" PASS "$MANAGER_DEPLOY_TEMPLATE"
+else
+  check "已安装 Manager 部署请求模板" FAIL "$MANAGER_DEPLOY_TEMPLATE"
+fi
+MANAGER_REQUEST_SUBMISSION="$RUNTIME_ROOT_ABS/manager-control/request-submission.mjs"
+safe_installed_directory "$RUNTIME_ROOT_ABS/manager-control" && safe_installed_file "$MANAGER_REQUEST_SUBMISSION" && check "已安装 Manager request-submission 控制模块" PASS "$MANAGER_REQUEST_SUBMISSION" || check "已安装 Manager request-submission 控制模块" FAIL "$MANAGER_REQUEST_SUBMISSION"
+MANAGER_AGENTS="$MANAGER_WORKSPACE/AGENTS.md"
+MANAGER_TOOLS="$MANAGER_WORKSPACE/TOOLS.md"
+if [ "$MANAGER_WORKSPACE_SAFE" -eq 1 ] && safe_installed_file "$MANAGER_AGENTS" && safe_installed_file "$MANAGER_TOOLS" \
+  && grep -q 'orchestrator-validate-request' "$MANAGER_AGENTS" 2>/dev/null && grep -q 'orchestrator-submit-request' "$MANAGER_AGENTS" 2>/dev/null \
+  && grep -q 'orchestrator-validate-request' "$MANAGER_TOOLS" 2>/dev/null && grep -q 'orchestrator-submit-request' "$MANAGER_TOOLS" 2>/dev/null; then
+  check "已安装 Manager 请求预校验协议" PASS
+else
+  check "已安装 Manager 请求预校验协议" FAIL "$MANAGER_AGENTS, $MANAGER_TOOLS"
+fi
+
 RUNTIME_GUARD="$PROJECT_ROOT/scripts/runtime-guard.mjs"
 RUNTIME_GUARD_TEST="$PROJECT_ROOT/tests/runtime-guard.test.mjs"
 if command -v node >/dev/null 2>&1; then
-  if [ -d "$PROJECT_ROOT/node_modules/ajv" ] && [ -d "$PROJECT_ROOT/node_modules/ajv-formats" ]; then
-    node "$(native_path "$RUNTIME_GUARD")" self-check --project-root "$(native_path "$PROJECT_ROOT")" >/dev/null 2>&1 && check "Runtime Guard contracts/templates 自检" PASS || check "Runtime Guard contracts/templates 自检" FAIL
-    node --test "$(native_path "$RUNTIME_GUARD_TEST")" >/dev/null 2>&1 && check "Runtime Guard 行为测试" PASS || check "Runtime Guard 行为测试" FAIL
+  NODE_VERSION="$(node -p 'process.versions.node' 2>/dev/null || true)"
+  if node -e 'const [a,b,c]=process.versions.node.split(".").map(Number); process.exit(a>22 || (a===22 && (b>13 || (b===13 && c>=0))) ? 0 : 1)' >/dev/null 2>&1; then
+    check "Node.js 22.13.0+（node:sqlite 必需）" PASS "$NODE_VERSION"
+    if [ -d "$PROJECT_ROOT/node_modules/ajv" ] && [ -d "$PROJECT_ROOT/node_modules/ajv-formats" ]; then
+      node "$(native_path "$RUNTIME_GUARD")" self-check --project-root "$(native_path "$PROJECT_ROOT")" >/dev/null 2>&1 && check "Runtime Guard contracts/templates 自检" PASS || check "Runtime Guard contracts/templates 自检" FAIL
+      node --test "$(native_path "$RUNTIME_GUARD_TEST")" >/dev/null 2>&1 && check "Runtime Guard 行为测试" PASS || check "Runtime Guard 行为测试" FAIL
+    else
+      check "Runtime Guard npm 依赖" FAIL "请先在项目根目录运行 npm install（需要 ajv 与 ajv-formats）"
+    fi
   else
-    check "Runtime Guard npm 依赖" FAIL "请先在项目根目录运行 npm install（需要 ajv 与 ajv-formats）"
+    check "Node.js 22.13.0+（node:sqlite 必需）" FAIL "当前版本：${NODE_VERSION:-unknown}"
   fi
 else
-  check "Node.js 可用（Runtime Guard 必需）" FAIL "OpenClaw 运行环境应提供 Node.js"
+  check "Node.js 22.13.0+（node:sqlite 必需）" FAIL "请安装 Node.js 22.13.0 或更高版本"
 fi
 
 INSTALL_SH="$SCRIPT_DIR/install.sh"
@@ -95,6 +201,7 @@ DRY_MANIFEST="$PROJECT_ROOT/artifacts/install-dryrun/install-manifest.dryrun.jso
 NONPROJ="$(mktemp -d)"
 VALIDATION_OPENCLAW_BIN="$(mktemp -d)"
 VALIDATION_OPENCLAW="$VALIDATION_OPENCLAW_BIN/openclaw"
+VALIDATION_OPENCLAW_CONFIG="$VALIDATION_OPENCLAW_BIN/validation-openclaw-config.json"
 cleanup_install_validation() {
   rm -rf "$NONPROJ" "$VALIDATION_OPENCLAW_BIN"
 }
@@ -102,11 +209,13 @@ trap cleanup_install_validation EXIT
 
 # 验证安装器的路径解析时不能读取宿主机 Agent 注册表：真实安装保留冲突保护，
 # 这里仅以受控、只读的 CLI 边界让 dry-run 的 agents list 返回空 catalog。
+printf '%s\n' '{"agents":{"list":[]}}' > "$VALIDATION_OPENCLAW_CONFIG"
+export VALIDATION_OPENCLAW_CONFIG
 cat > "$VALIDATION_OPENCLAW" <<'EOF'
 #!/usr/bin/env bash
 case "${1:-}" in
   --version) printf 'validation-openclaw 0\n' ;;
-  config) printf '/tmp/validation-openclaw-config.json\n' ;;
+  config) printf '%s\n' "$VALIDATION_OPENCLAW_CONFIG" ;;
   agents) printf '[]\n' ;;
   *) exit 0 ;;
 esac
@@ -116,7 +225,7 @@ chmod 700 "$VALIDATION_OPENCLAW"
 # 不允许失败安装遗留的旧 manifest 参与后续断言。
 rm -f "$DRY_MANIFEST"
 INSTALL_DRYRUN_EXIT=0
-(cd "$NONPROJ" && PATH="$VALIDATION_OPENCLAW_BIN:$PATH" bash "$INSTALL_SH" --runtime-root runtime >/dev/null 2>&1) || INSTALL_DRYRUN_EXIT=$?
+(cd "$NONPROJ" && PATH="$VALIDATION_OPENCLAW_BIN:$PATH" bash "$INSTALL_SH" --runtime-root "$RUNTIME_ROOT" >/dev/null 2>&1) || INSTALL_DRYRUN_EXIT=$?
 if [ "$INSTALL_DRYRUN_EXIT" -eq 0 ]; then
   check "install.sh 非项目 cwd dry-run 可执行" PASS "$NONPROJ"
 else
@@ -129,6 +238,10 @@ if [ "$INSTALL_DRYRUN_EXIT" -eq 0 ] && [ -f "$DRY_MANIFEST" ]; then
   count="$(jq_clean '.agents | length' "$dry_jq")"; [ "$count" -eq "$REGISTERED" ] && check "dry-run 数量来自 register=true packages" PASS "$count" || check "dry-run 数量来自 register=true packages" FAIL "$count/$REGISTERED"
   abs_ok="$(jq_clean -r '[.agents[] | (.manifest_abs,.workspace_source_abs,.workspace_abs,.agentDir_abs)] | all(startswith("/") or test("^[A-Za-z]:"))' "$dry_jq")"
   [ "$abs_ok" = true ] && check "dry-run 路径全为绝对路径" PASS || check "dry-run 路径全为绝对路径" FAIL
+  model_limits="$(jq_clean -r '[.agents[] | .context_window_tokens == 200000 and .max_output_tokens == 32000 and .max_tokens_field == "max_output_tokens"] | all' "$dry_jq")"
+  [ "$model_limits" = true ] && check "dry-run 模型限制为 200k context / 32k output" PASS || check "dry-run 模型限制为 200k context / 32k output" FAIL
+  acl_applied="$(jq_clean -r '.artifact_access_control.applied' "$dry_jq")"
+  [ "$acl_applied" = false ] && check "dry-run 不修改 artifact ACL" PASS || check "dry-run 不修改 artifact ACL" FAIL "$acl_applied"
   actual="$(jq_clean -r --arg id "$MANAGER_ID" '.agents[] | select(.id==$id) | .subagents_allow | sort | join(",")' "$dry_jq")"
   expected="$(printf '%s\n' "${EXPECTED_ALLOW[@]}" | sort | paste -sd, -)"
   [ "$actual" = "$expected" ] && check "manager 白名单来自 catalog" PASS "$actual" || check "manager 白名单来自 catalog" FAIL "actual=$actual expected=$expected"
@@ -145,6 +258,7 @@ if grep -rIlqE 'python[[:space:]]+-m[[:space:]]+src\.openclaw_sdlc|openclaw_sdlc
 
 if [ "$SKIP_OPENCLAW" -eq 0 ]; then
   if command -v openclaw >/dev/null 2>&1; then
+    check_installed_test_agent_sandbox
     openclaw config validate --json >/dev/null 2>&1 && check "openclaw config validate --json" PASS || check "openclaw config validate --json" FAIL
     openclaw skills info skill-creator --agent "$MANAGER_ID" --json >/dev/null 2>&1 && check "成熟 skill-creator 对 manager 可用" PASS || check "成熟 skill-creator 对 manager 可用" FAIL
   else check "openclaw CLI 可用" UNKNOWN; fi

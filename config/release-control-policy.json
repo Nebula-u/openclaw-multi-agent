@@ -1,0 +1,7 @@
+{
+  "schema_version": 1,
+  "base_url": "https://multiagentforge.cloud",
+  "deployment_target": "current-server",
+  "deployment_entrypoint": null,
+  "reserved_url_paths": ["/monitor", "/api"]
+}

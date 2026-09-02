@@ -1,0 +1,103 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://openclaw.local/contracts/kernel-execution.schema.json",
+  "title": "Control Kernel Execution",
+  "description": "一次任务执行的租约与生命周期记录。一个 task 同时最多一个活跃 execution（LEASED/RUNNING）。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "execution_id", "task_id", "run_id", "attempt", "cycle",
+    "worker_id", "state", "agent_id", "lease_expires_at",
+    "heartbeat_at", "started_at"
+  ],
+  "properties": {
+    "execution_id": {
+      "type": "string",
+      "pattern": "^EXE-[A-Za-z0-9][A-Za-z0-9-]*$",
+      "description": "执行唯一标识，格式 EXE-<run短签>-A<attempt>-C<cycle>-<随机>。"
+    },
+    "task_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9-]+$",
+      "description": "所属任务 ID。"
+    },
+    "run_id": {
+      "type": "string",
+      "pattern": "^RUN-[A-Za-z0-9][A-Za-z0-9-]*$",
+      "description": "所属 Run ID。"
+    },
+    "attempt": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "第几次尝试（从 task.attempt 同步）。"
+    },
+    "cycle": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "心跳周期计数。"
+    },
+    "worker_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "持有租约的 worker 标识。"
+    },
+    "state": {
+      "type": "string",
+      "enum": ["LEASED", "RUNNING", "SUCCEEDED", "FAILED", "LEASE_EXPIRED", "CANCELLED"],
+      "description": "执行状态机当前状态。"
+    },
+    "phase": {
+      "type": ["string", "null"],
+      "description": "执行阶段（由 agent 推进，COALESCE 语义）。"
+    },
+    "agent_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "执行此任务的 Agent 标识。"
+    },
+    "session_id": {
+      "type": ["string", "null"]
+    },
+    "pid": {
+      "type": ["integer", "null"],
+      "description": "Agent 进程 PID。"
+    },
+    "worktree_path_abs": {
+      "type": ["string", "null"],
+      "description": "Agent 工作工作树绝对路径。"
+    },
+    "artifact_root_abs": {
+      "type": ["string", "null"],
+      "description": "Agent 产物根目录绝对路径。"
+    },
+    "lease_expires_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "租约到期时间；heartbeat 刷新此值。"
+    },
+    "heartbeat_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "最近一次心跳时间。"
+    },
+    "started_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "finished_at": {
+      "type": ["string", "null"],
+      "format": "date-time"
+    },
+    "exit_code": {
+      "type": ["integer", "null"]
+    },
+    "error": {
+      "type": ["object", "null"],
+      "description": "错误信息对象，格式 { code, message, ... }。"
+    },
+    "sandbox_attestation": {
+      "type": ["object", "null"],
+      "description": "沙箱 attestation 数据。"
+    }
+  }
+}

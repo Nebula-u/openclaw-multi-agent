@@ -12,13 +12,11 @@ test('artifact watcher emits metadata only when a declared output signature chan
   const directory = mkdtempSync(join(tmpdir(), 'monitor-artifact-'));
   const output = join(directory, 'result.json');
   writeFileSync(output, '{"ok":true}\n');
-  const task = { workflow_id: 'WF-1', task_id: 'TASK-1', run_id: 'RUN-1', assigned_agent: 'developer-agent',
-    structured_outputs: [{ path_abs: output, format: 'json', required: true }] };
-  const controlDatabase = { prepare: () => ({ all: () => [{ task_json: JSON.stringify(task) }] }) };
+  const task = { workflow_id: 'WF-1', task_id: 'TASK-1', run_id: 'RUN-1', agent_id: 'developer-agent', output_path_abs: output };
   const database = openTelemetryDatabase(':memory:');
   try {
     const telemetry = createTelemetryRepository(ROOT, database);
-    const watcher = createArtifactWatcher({ controlDatabase, telemetry });
+    const watcher = createArtifactWatcher({ taskSource: () => [task], telemetry });
     const first = watcher.scan();
     assert.equal(first.length, 1);
     assert.equal(first[0].payload.size > 0, true);

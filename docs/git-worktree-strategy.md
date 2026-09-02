@@ -1,102 +1,99 @@
-# git-worktree-strategy.md — 本地 Git 与 worktree 策略
+# Git worktree、快照与回滚
 
-> 全程仅本地 Git。无远程、无网络。
-> 权威来源：`agents/common/GIT_RULES.md`、`agents/manager-agent/workspace/AGENTS.md`、重构 Prompt 第十四节。
-> 文档日期：2026-07-23
+## 目标
 
-## 1. 本文用途
+代码快照直接复用 Git，不在 SQLite 或 artifact 目录复制一份源码。Git object database 保存内容和历史；SQLite `snapshots` 保存 Agent、Session、task、execution、input/output commit 与变更摘要之间的索引。
 
-本文规定本项目的**本地 Git 隔离策略**：分支命名、worktree 绝对路径位置、谁能改哪个 worktree、commit 信息格式、`manager-agent` 合并前校验与**非 fast-forward 合并**、破坏性/远程操作的禁止清单，以及非 Git 目录或存在未提交修改时的人工审批要求。这是三层架构中的 **C 层（本地 Git 隔离层）**。
+这套方案的重量接近普通 Git 工作流：一个任务一个 detached worktree、一个已验证 commit、一个隐藏 ref。它不需要事件链、内容寻址副本服务或专用版本控制框架。
 
-## 2. 分支命名
+## 执行和验收
 
-- integration 分支：
-  ```text
-  sdlc/<workflow-id>/integration
-  ```
-  由 `manager-agent` 在 INTAKE 阶段基于 base commit 创建。
-- 任务分支：
-  ```text
-  sdlc/<workflow-id>/<task-id>/<agent-id>/attempt-<n>
-  ```
-  每个 `developer` / `test` 任务（含每次重做 attempt）一条独立分支。
+Orchestrator 为每个 task/attempt 创建隔离 worktree；重试增加 attempt 并使用不同路径，不复用已被 recovery commit 改变 HEAD 的失败 worktree。只有 `developer-agent` 和 `test-agent` 可以改变目标 Git；其他角色必须产出 `NO_CHANGE`，否则宿主返回 `SNAPSHOT_AGENT_CHANGE_UNAUTHORIZED`。Agent 不能创建快照记录或更新候选版本。
 
-## 3. worktree 绝对路径位置
+Agent 执行期间 Orchestrator 约每个 lease 周期的三分之一续租。心跳丢失会中止 Agent 并返回 `EXECUTION_LEASE_LOST`；重启后的 reaper 在同一 SQLite 事务中把过期 execution 标为 `LEASE_EXPIRED`、对应 RUNNING task 标为 `FAILED`，再按 bounded retry 创建下一 attempt。
 
-worktree **必须**位于（绝对路径示例基于 `runtime_root_abs = D:\MicroConnect\project\openclaw-multi-agent\runtime`）：
+`COMPLETED` 结果必须通过宿主验证：
+
+1. `input_commit` 和 `output_commit` 是完整 commit SHA；
+2. output commit 存在；
+3. output 是 input 的后代；
+4. output 等于该 worktree 的 HEAD；
+5. worktree clean；
+6. 文件新增、修改、删除、重命名和 stat 由宿主 Git 重新计算。
+
+通过后创建 `ACCEPTED` 或 `NO_CHANGE` snapshot，并用下列隐藏 ref 固定对象：
 
 ```text
-<ABS_RUNTIME_ROOT>\worktrees\<workflow-id>\<task-id>\<run-id>\repo
+refs/openclaw/snapshots/<snapshot-id>
 ```
 
-创建示例（在目标业务项目绝对路径上操作）：
+非 `COMPLETED`、进程崩溃或脏 worktree 使用 recovery 路径。宿主会把未提交内容创建为 `FAILED_RECOVERY` commit 并固定 ref，但不会推进 `runs.candidate_commit`。这使失败现场可查看和恢复，同时不会把半成品当作已接受代码。
+
+## 快照类型
+
+| 类型 | 含义 | 推进 candidate |
+| --- | --- | --- |
+| `ACCEPTED` | 已验证且有代码变化 | 是 |
+| `NO_CHANGE` | 输入与输出 commit 相同 | 成功结果可保持当前 candidate；恢复结果不推进 |
+| `FAILED_RECOVERY` | 失败或未完成现场 | 否 |
+| `RESTORE` | 从旧 snapshot 创建的新分支/worktree | 否 |
+| `REVERT` | 在当前目标分支创建的反向 commit | 是 |
+
+## 查看
 
 ```text
-git -C "D:\work\acme-service" worktree add -b sdlc/<wf>/<task>/<agent>/attempt-<n> \
-    "D:\MicroConnect\project\openclaw-multi-agent\runtime\worktrees\<wf>\<task>\<run>\repo" <input_commit>
+node scripts/orchestrator-cli.mjs snapshot-list --project-root . --run-id RUN-...
+node scripts/orchestrator-cli.mjs snapshot-list --project-root . --task-id TASK-...
+node scripts/orchestrator-cli.mjs snapshot-list --project-root . --agent-id developer-agent --session-id SESSION-...
+node scripts/orchestrator-cli.mjs snapshot-show --project-root . --snapshot-id SNP-...
+node scripts/orchestrator-cli.mjs snapshot-diff --project-root . --snapshot-id SNP-...
 ```
 
-路径规则（见 `GIT_RULES.md` 第 7 节）：所有 Git 命令必须显式在目标项目绝对路径或绝对 worktree 中执行（`git -C "<abs>"` 或原生 Shell 工具的绝对 cwd）。**禁止依赖当前工作目录**，**禁止相对运行时路径**（如 `./repo`、`../worktree`、`workspace/task`）。即使从 `C:\Windows\System32` 启动也须正确解析。
+历史 diff 从目标仓库读取，不依赖原 worktree 继续存在。
 
-## 4. 谁能改哪个 worktree
+## Restore 与 Revert
 
-| 角色 | worktree 写权限 | 说明 |
-|------|------------------|------|
-| `developer-agent` / `test-agent` | 只能改**被分配的** worktree | 代码/测试修改必须形成**真实本地 commit** |
-| `requirement` / `architect` / `review` / `release` | 默认**不改**业务仓库 | 正式报告写入 artifact，不为提交报告污染目标业务仓库；仅当任务明确要求更新业务仓库文档时才 commit |
-| `manager-agent` | 创建/校验/合并/决定是否清理 worktree | **不**替工作 Agent 写代码；**不**直接在 worktree 里改业务代码 |
-
-工作 Agent **不得**直接合并 integration 分支；合并只由 `manager-agent` 负责。Git identity 只写入任务 worktree 对应仓库的**本地**配置，**不改全局** Git 配置。
-
-## 5. commit 信息格式
-
-`developer` / `test` 的每个 commit 必须遵循：
+Restore：
 
 ```text
-<agent-id>: <task-id> <简要说明>
-
-Workflow-ID: <workflow-id>
-Task-ID: <task-id>
-Run-ID: <run-id>
-Agent-ID: <agent-id>
-Attempt: <n>
-Input-Commit: <hash>
+node scripts/orchestrator-cli.mjs snapshot-restore --project-root . --snapshot-id SNP-...
 ```
 
-`Input-Commit` 记录本次修改所基于的允许 input commit，供 `manager-agent` 做 ancestry 校验与来源追溯。
+它创建 `openclaw/restore/<new-snapshot-id>` 分支及 `runtime/restores/` 下的新 worktree，不修改当前分支。适合查看、继续开发或人工比较。
 
-## 6. manager-agent 合并规则
+Revert：
 
-1. **合并前校验**（与 `manager-orchestration.md` 第 5 节一致，任一失败不合并）：commit 真实存在、ancestry（基于允许的 input commit）、diff、角色修改范围（`allowed_write_paths_abs` / `forbidden_paths_abs`）、worktree 状态。
-   ```text
-   git -C "<worktree>" cat-file -t <output_commit>
-   git -C "<worktree>" merge-base --is-ancestor <input_commit> <output_commit>
-   git -C "<worktree>" diff --name-only <input_commit> <output_commit>
-   git -C "<worktree>" status --porcelain
-   ```
-2. 使用**非 fast-forward** 合并（`--no-ff`），并在合并记录中记录来源分支、commit、Gate、`task_id`、`run_id`：
-   ```text
-   git -C "<target_abs>" merge --no-ff <task-branch> -m "manager: merge <task-id> run <run-id> (gate PASS)"
-   ```
-3. **merge conflict 不由 `manager-agent` 猜测解决** → 重新分配给对应 `developer-agent` / `test-agent`（新 attempt / run / worktree）。
-4. 失败 / 脏状态 / 未合并 / 待审批的 worktree **默认保留**，不清理。
+```text
+node scripts/orchestrator-cli.mjs snapshot-revert --project-root . --snapshot-id SNP-... --confirm SNP-...
+```
 
-## 7. 绝对禁止
+它要求目标仓库 clean、snapshot output commit 是当前 HEAD 的祖先，并要求 `--confirm` 与 snapshot ID 完全一致。非祖先返回 `SNAPSHOT_REVERT_NOT_ANCESTOR`；成功时使用 `git revert` 创建反向 commit；发生冲突会 abort 并返回 `SNAPSHOT_REVERT_CONFLICT`。系统不使用 `git reset --hard`，也不静默重写历史。
 
-- 连接远程仓库；执行 `push` / `pull` / `fetch` / 修改 `remote` / 远程 PR。
-- 破坏用户数据的命令：`git reset --hard`、`git clean -fdx`、强制删除含未合并工作的分支/worktree。
-- 修改**全局** Git 配置。
+## 单写者与失败补偿
 
-## 8. 需要人工审批的 Git 情况
+前台 Orchestrator、一次性写 CLI、Kernel schema 初始化和独立 HR runner 共用 `runtime/orchestrator/service/foreground.lock`。任一写者运行时，其他写入口返回 `WORKFLOW_LOCK_CONFLICT`；`status`、`kernel-status`、snapshot list/show/diff 使用只读连接，不创建缺失的数据库。`stop` 只写服务控制文件，不写 Kernel，因此允许在前台写者持锁时调用。
 
-由 `manager-agent` 生成 `approval-request.json` 并将工作流置 `WAITING_HUMAN`（见 `human-approval.md` / `APPROVAL_RULES.md`）：
+Git 与 SQLite 是两个资源，轻量实现不引入分布式事务：
 
-- **输入目录不是 Git 仓库** → **不**擅自 `git init`，请求审批（trigger `INPUT_NOT_GIT_REPO`）。
-- **输入仓库存在未提交修改** → **不**自动 commit / stash / 丢弃 / 覆盖 / reset，请求用户选择处理方式（trigger `INPUT_DIRTY_WORKTREE`）。
-- 任何破坏性、不可逆或可能影响其他项目的 Git 操作（trigger `DESTRUCTIVE_OR_CROSS_PROJECT`）。
+- hidden ref 创建后若 SQLite snapshot 写入失败，删除刚创建且仍指向该 commit 的 ref；
+- Restore 索引失败时清理本次新建的 restore worktree 和分支；
+- accepted snapshot 已写入、candidate 更新失败时保留 snapshot 并让任务失败，供人工对账；
+- Revert commit 已创建但索引失败时不改写历史，返回 `SNAPSHOT_REVERT_INDEX_FAILED` 和实际 commit SHA。
 
-**不设自动超时同意**，用户沉默 ≠ 批准。
+因此不存在 Git/SQLite 跨资源 ACID 保证；错误返回和完整备份是恢复边界。
 
-## 9. 相关文档
+## 备份和保留
 
-`manager-orchestration.md`（合并前校验的完整清单）、`control-kernel-v2.md`（状态、投影与恢复）、`agent-contracts.md`（哪些角色需真实 commit）、`human-approval.md`（审批节点）。
+SQLite 索引本身不包含代码。完整备份必须同时覆盖：
+
+- `runtime/control/kernel.db`；
+- 目标 Git 仓库的 objects 和 `refs/openclaw/snapshots/*`；
+- 需要保留的 `runtime/artifacts/`。
+
+删除隐藏 ref 可能让不在普通分支上的 snapshot commit 被 Git GC。当前版本不自动清理 snapshot ref；制定保留策略前不要手动批量删除。
+
+## 限制
+
+- 仅跟踪 Git 仓库内的文件修改；数据库、外部服务或仓库外文件不属于代码快照。
+- 一个 revert 对应一个 snapshot output commit；复杂 merge commit 或与后续修改冲突时需要人工处理。
+- Git 仓库不可用时，SQLite 只能展示元数据，不能提供 diff 或恢复。

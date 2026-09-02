@@ -1,4 +1,4 @@
-const TERMINAL = new Map([['COMPLETED', 'COMPLETED'], ['FAILED', 'FAILED'], ['LOST', 'LOST'], ['CANCELLED', 'FAILED'], ['SUPERSEDED', 'FAILED']]);
+const TERMINAL = new Map([['COMPLETED', 'COMPLETED'], ['ACCEPTED', 'COMPLETED'], ['SUCCEEDED', 'COMPLETED'], ['FAILED', 'FAILED'], ['LOST', 'LOST'], ['CANCELLED', 'FAILED'], ['SUPERSEDED', 'FAILED']]);
 
 function ageSeconds(now, value) {
   const time = Date.parse(value ?? '');
@@ -45,7 +45,7 @@ export function createHealthClassifier({ telemetry, thresholds = {}, publish, no
         for (const task of workflow.tasks ?? []) {
           const classified = classifyTaskHealth(task, { telemetry, thresholds, now: now() });
           const value = { workflow_id: workflow.workflow_id, task_id: task.task_id, run_id: task.run_id,
-            dispatch_id: task.dispatches?.at(-1)?.dispatch_id ?? null, target_agent_id: task.assigned_agent ?? null,
+            dispatch_id: task.dispatches?.at(-1)?.dispatch_id ?? null, target_agent_id: task.assigned_agent ?? task.agent_id ?? null,
             ...classified, calculated_at: now().toISOString() };
           const prior = telemetry.health(task.task_id);
           telemetry.saveHealth(value);

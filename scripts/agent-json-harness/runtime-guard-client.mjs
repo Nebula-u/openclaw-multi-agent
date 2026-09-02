@@ -58,6 +58,7 @@ export function validateLlmResponse(response, scenario) {
       ingestion: ingestion ? {
         raw_sha256: ingestion.raw_sha256,
         cleaned_sha256: ingestion.cleaned_sha256,
+        cleaned_text: ingestion.text ?? null,
         transformations: ingestion.transformations,
         error: ingestion.error ?? null,
       } : null,

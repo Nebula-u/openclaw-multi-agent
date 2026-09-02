@@ -1,0 +1,67 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://openclaw.local/contracts/kernel-artifact.schema.json",
+  "title": "Control Kernel Artifact",
+  "description": "Control Kernel 产物索引——登记由执行产出的内容寻址文件。实际文件存储在 P7 的 CAS 层。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "artifact_id", "run_id", "task_id", "kind", "uri",
+    "sha256", "size_bytes", "media_type", "created_at"
+  ],
+  "properties": {
+    "artifact_id": {
+      "type": "string",
+      "pattern": "^ART-[A-Za-z0-9][A-Za-z0-9-]*$",
+      "description": "产物唯一标识，格式 ART-<run短签>-<随机>。"
+    },
+    "run_id": {
+      "type": "string",
+      "pattern": "^RUN-[A-Za-z0-9][A-Za-z0-9-]*$"
+    },
+    "task_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9-]+$"
+    },
+    "execution_id": {
+      "type": ["string", "null"],
+      "description": "产出该产物的执行 ID（删除执行时 SET NULL）。"
+    },
+    "kind": {
+      "type": "string",
+      "enum": [
+        "ROUTE_PLAN", "RESULT", "EVIDENCE", "GATE_RESULT",
+        "COMMAND_RECORD", "CONTEXT_MANIFEST", "INGESTION_RECEIPT",
+        "REVIEW_FINDINGS", "RELEASE_DECISION", "RAW_OUTPUT", "LOG"
+      ],
+      "description": "产物类型，必须与 schema.sql 的 CHECK 约束一致。"
+    },
+    "uri": {
+      "type": "string",
+      "minLength": 1,
+      "description": "产物内容的位置标识（file:/// URI 或 CAS hash）。"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$",
+      "description": "产物内容的 SHA-256 摘要。"
+    },
+    "size_bytes": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "产物文件大小（字节）。"
+    },
+    "media_type": {
+      "type": "string",
+      "description": "MIME 类型，默认 application/json。"
+    },
+    "commit_sha": {
+      "type": ["string", "null"],
+      "description": "产物对应的 git commit SHA。"
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  }
+}

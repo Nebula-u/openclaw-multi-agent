@@ -13,7 +13,7 @@
 - branch: `sdlc/task/TASK-00000000-0000-0000-0000-000000000000`
 - worktree_path_abs: `C:\path\to\openclaw-runtime\worktrees\developer-agent`
 - generated_at: `2026-01-01T00:00:00Z`
-- isolation_mode: `<PLACEHOLDER: 按本阶段实际执行环境填写>`
+- isolation_mode: `UNSANDBOXED_LOCAL`
 
 ## 实现摘要（Implementation Summary）
 <PLACEHOLDER: 概述本次实现做了什么、如何满足对应 AC；标注 `[OBSERVED: 对应 output_commit]`。>

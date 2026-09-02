@@ -35,7 +35,6 @@
         "manager_dispatch",
         "manager_receive",
         "local_output_ingestion",
-        "append_event",
         "gate",
         "workflow_check",
         "self_check"

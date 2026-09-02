@@ -1,5 +1,7 @@
 # Agent 边界、运行态与信息流审计及当前未完成问题
 
+> **历史存档说明（2026-08-17 补注）**：本文档记录的是 2026-08-07 时点、基于旧 Control Kernel + Orchestrator 三层架构的审计快照，其中提到的 `monitor/supervisor.mjs`、`scripts/control-kernel.mjs`、`test:control-kernel` 等文件/脚本已在 2026-08-14 的重建中被删除，被 `monitor/server.mjs`、`scripts/stategraph/`、`test:stategraph` 取代。本文档正文按原样保留作为历史记录，不代表当前系统状态；当前架构见 `docs/architecture.md`。
+
 - 审计时间：2026-08-07T02:40:47Z（UTC，Asia/Shanghai 为 10:40:47）
 - 审计范围：本仓库、`runtime/control/control.db`、`runtime/monitor/monitor.db`、本机 OpenClaw 配置和会话索引。
 - 结论口径：本文件记录该时间点仍未解决的问题；状态、告警和看板均以控制库与本地采集器为准，不能以 Agent 的聊天陈述为准。

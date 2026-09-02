@@ -1,124 +1,34 @@
-# agent-contracts.md — 7 个 Agent 的输入校验与强制产物
+# Agent 运行契约
 
-> 权威来源：`agents/common/COMMON_RULES.md`（第 2、8 节）、`contracts/result.schema.json`、重构 Prompt 第十二、十六节。
-> 文档日期：2026-07-29
+## 通用边界
 
-## 1. 本文用途
+每个 worker 只接受 Orchestrator 创建的 task。task 固定绑定 workflow、step、run、Agent、attempt、input commit、worktree、artifact root 与 context manifest。
 
-本文规定 7 个 Agent 的**输入校验（Preflight Check）**与**强制产物**，给出 `result.json` 关键字段与 `result_status` 五值，并逐角色列出产物清单（字段名以 `contracts/*.schema.json` 为准）。
+Agent 必须核对身份、路径和 manifest SHA，只完成被分配步骤；不得调用其他 Agent、写 Control Kernel、改变路线或审批、操作 Monitor，也不得替用户做决定。
 
-## 2. 通用输入校验（Preflight Check，所有工作 Agent）
+## 结构化结果
 
-工作 Agent 在动任何文件或命令前，必须校验并把结果写入 `result.json.self_validation`（`preflight_passed` + `checks[]`，每项 `status ∈ PASS / FAIL / UNKNOWN / NOT_APPLICABLE`）：
+worker 完成任务后最终回复只能是一个符合 `contracts/result.schema.json` 的对象。Orchestrator 从最终回复提取 JSON，原子写入 `<artifact_root>/.agent-raw/result.json.raw`，再校验 schema、workflow/task/run/Agent/attempt、worktree、artifact root、input commit 与 context manifest SHA，最后发布到 `output/result.json`。
 
-1. 读 `input/context-manifest.json`，确认 `workflow_id` / `task_id` / `run_id` / `assigned_agent` 与派发一致，且 `assigned_agent` == 自己的 Agent ID。
-2. `target_project_root_abs` / `worktree_path_abs` / `artifact_root_abs` 均为**绝对路径**且存在。
-3. worktree 路径位于允许根目录（`<runtime>\worktrees\...`）内，规范化后无 `..` / 符号链接逃逸。
-4. `input_commit` 与当前 worktree `HEAD` 一致（需改代码的角色）。
-5. `input/` 各文件 SHA-256 与 `context-manifest.json` 一致。
+`result_status`：`COMPLETED`、`NEEDS_REWORK`、`BLOCKED`、`HUMAN_DECISION_REQUIRED`、`FAILED`。非完成结果仍会捕获 recovery snapshot，但不会作为成功候选推进。
 
-任一失败 → 不开始工作，返回 `result_status = BLOCKED`，在 `unresolved_issues` 写明失败项。
+## Git
 
-### 2.1 派发身份确认（所有工作 Agent）
+只有 developer-agent 和 test-agent 可以在授权 worktree 中修改并正常提交。其他角色只能发布 artifact/结构化结果，目标仓库必须保持 `NO_CHANGE`；即使任务涉及业务文档，也应路由给 Developer/Test 修改。宿主而非 Agent 决定快照是否可信：验证 commit 存在、血缘、HEAD 和 clean 状态，并重新计算文件 diff。Agent 不创建 `refs/openclaw/snapshots/*`。
 
-若 manager 的派发消息提供 `dispatch_id` 与 input manifest SHA-256，工作 Agent 在上述 Preflight 中还必须确认二者与 `context-manifest.json`、当前 workflow/task/run/agent 身份一致。成功后只向 manager 发送 ACK；Agent 不得直接改写 `dispatch/` 中的 intent、receipt、completion 或 dead-letter。完成时先落盘并自检全部产物，通知中给出 `dispatch_id`、`result.json` 绝对路径、SHA-256 和真实 `result_status`；Manager 的独立验证与 completion receipt 才是流程事实。
+失败或脏 worktree 可能由宿主生成 recovery commit。Restore/Revert 只能通过宿主 CLI 执行；Agent 禁止用 `reset --hard` 代替回滚。
 
-## 3. 通用强制产物（所有工作 Agent）
+## 角色
 
-来源 `COMMON_RULES.md` 第 8 节，每个工作 Agent 完成后至少产出：
+- requirement-agent：范围、边界、验收标准；
+- architect-agent：架构/设计、接口、风险和测试策略；
+- developer-agent：实现并提交代码；
+- test-agent：执行/补充测试并保存真实证据；
+- review-agent：绑定候选 commit 审查；
+- release-agent：完成发布前检查、共享基础域名路径分配、经二次人工确认后的受控部署及上线验证；不做代码审查；
+- manager-agent：只在原始用户 Session 中解释路线和收集决定；
+- hr-agent：手动优先、只读脱敏 dossier，只检查三类边界问题；输出必须是严格 JSON findings，不创建文件或 commit。
 
-- `output/result.json`
-- `output/user-summary.md`
-- `output/manager-summary.md`
-- 角色正式报告（见 §6）
-- `output/evidence.jsonl`
-- `output/command-records.jsonl`
-- `checksums.sha256`
-- 需改代码的角色（developer / test）还需**真实本地 Git commit**
+## Session 与重试
 
-所有 JSON / JSONL 产物都必须用 `scripts/runtime-guard.mjs validate-file` + Ajv 按对应 `contracts/*.schema.json` 本地强校验。空输出、截断、JSON parse error、enum/type 违规和 schema drift 共用首次调用之外最多两次的 JSON-only 重写预算；重写只生成失败 JSON / JSONL，不重新完整分析。校验错误写入 `raw-logs/json-validation-errors.jsonl`，记录格式见 `contracts/json-validation-error.schema.json`。
-
-新建任务**必须**设置 `output_contract_version=1`，并按 `config/task-output-contracts.json` 声明且要求 `result.json`、`evidence.jsonl`、`command-records.jsonl`。`task-validate` 与 `dispatch-prepare` 会拒绝缺失版本、版本不匹配或漏声明默认产物的新任务。历史 task 只作为数据库中的不可变记录读取，不回写或伪造旧 run 的声明。
-
-JSON ingestion 保留原文/清洗后 SHA-256。只允许确定性转换：移除 UTF-8 BOM、解包唯一 JSON Markdown fence，或从解释性前后缀提取唯一完整 JSON 值/JSONL 连续块；多个候选一律 fail-closed。不会自动补字段、修 enum、修改 ID 或篡改业务结论。JSONL 受 5 MiB 总量、1 MiB 单行限制；空 JSONL 与 evidence/command record 重复 ID 均 fail-closed。
-
-## 4. `result.json` 关键字段（以 contract 为准）
-
-来源 `contracts/result.schema.json`。`required`：
-
-`schema_version`、`workflow_id`、`task_id`、`run_id`、`agent_id`、`role`、`attempt`、`started_at`、`finished_at`、`result_status`、`summary_for_user`、`summary_for_manager`、`worktree_path_abs`、`artifact_root_abs`、`isolation_mode`、`self_validation`。
-
-其他常用字段：`input_commit`、`output_commit`、`branch`、`modified_files`、`created_files`、`deleted_files`、`report_files`、`command_record_refs`、`evidence_refs`、`claims[]`、`findings[]`、`unresolved_issues`、`known_limitations`、`decisions_required[]`、`recommended_next_action`、`git_status_after_completion`、`artifact_manifest_hash`。
-
-约束：
-
-- `isolation_mode` 契约保留 `UNSANDBOXED_LOCAL` 以读取历史 artifact；新 `test-agent` run 只能使用 `SANDBOXED_DOCKER`，并必须提供有效 `sandbox_attestation`。
-- `self_validation.checks[].status ∈ PASS / FAIL / UNKNOWN / NOT_APPLICABLE`。
-- `claims[]` 每项含 `claim_id`、`statement`、`classification ∈ OBSERVED / INFERRED / PROPOSED / UNKNOWN`、`evidence_refs`、`limitations`、`observed_at`。
-
-## 5. `result_status` 五值
-
-来源 `contracts/result.schema.json`：
-
-| 值 | 含义 |
-|----|------|
-| `COMPLETED` | 任务达成且自检通过 |
-| `NEEDS_REWORK` | 需上游修正或本任务需重做 |
-| `BLOCKED` | 环境 / 工具 / 权限阻塞，无法推进 |
-| `HUMAN_DECISION_REQUIRED` | 触发人工审批节点（见 `human-approval.md`） |
-| `FAILED` | 执行失败 |
-
-工作 Agent **不擅自决定**审批节点；遇到时返回 `HUMAN_DECISION_REQUIRED` 并在 `decisions_required[]` 列出选项与影响，交由 `manager-agent` 发起审批。
-
-`HOLD` 不属于 `result_status`，不得写入 `result.json`。它是 Control Kernel 的控制条件；任务等待人工决定用 `task.status=WAITING_HUMAN`，环境或权限阻塞用 `task.status=BLOCKED`。Manager 将 Agent 结果交给 `result-ingest`，workflow 状态由 `control-state-machine-v2.json` 的 reducer 计算。
-
-## 6. 各角色产物清单（引用重构 Prompt §16）
-
-### 6.0 manager-agent
-
-`manager-agent` 不产出 `result.json`，也不直接维护控制状态文件；它提交 Control Kernel 命令、审批请求、task/dispatch 事实和 Gate 输入。SQLite `control.db` 保存 workflow/task/run/dispatch/approval 的当前状态，不可变事件和幂等记录；`runtime/control/v2/**` 只是只读投影。Manager 对每个工作 Agent 结果执行 §2/§4 校验与 Gate（见 `manager-orchestration.md`），并由 `result-ingest` 对所有声明的 JSON / JSONL 输出再次执行 Ajv schema 校验。Runtime Guard 不调度 Agent，只负责 Agent 自检和当前契约自检；Orchestrator 才负责真实 session、receipt、completion 和重试事实。
-
-### 6.A requirement-agent（§16.A）
-
-`requirements.md`、`scope.md`、`acceptance-criteria.json`、`assumptions.json`、`unresolved-questions.json`、`requirement-traceability.json`、`user-summary.md`、`manager-summary.md`、`result.json`。
-- `acceptance-criteria.json` 以 `contracts/acceptance-criteria.schema.json` 为准：每条 `criteria[]` 含 `id`（`^AC-[0-9]{3,}$`）、`statement`、`verification_method`、`status ∈ PROPOSED/APPROVED/IMPLEMENTED/VERIFIED/FAILED/UNKNOWN`，可含 `priority ∈ MUST/SHOULD/COULD/WONT`。
-
-### 6.B architect-agent（§16.B）
-
-`architecture.md`、`project-structure.md`、`interfaces.md`、`data-model.md`、`threat-model.md`、`test-strategy.md`、`implementation-plan.json`、`risk-register.json`、`adr/ADR-*.md`、`architecture-traceability.json`、`user-summary.md`、`manager-summary.md`、`result.json`。
-- 若为 HTTP API，生成实际适用的 OpenAPI 文件；**非 API 项目不得伪造 OpenAPI**。
-
-### 6.C developer-agent（§16.C）
-
-完整生产代码与必要配置、必要迁移与开发文档、`development-report.md`、`change-manifest.json`、`implementation-traceability.json`、`user-summary.md`、`manager-summary.md`、`result.json`，以及**真实本地 Git commit**。
-- 所有修改只在被分配的绝对 worktree 内；不得声称代码可运行，除非实际执行过命令并保存真实日志。
-
-### 6.D review-agent（§16.D）
-
-`code-review.md` 或 `test-code-review.md`、`review-findings.json`、`security-review.md`、`dependency-license-review.md`、`review-traceability.json`、`user-summary.md`、`manager-summary.md`、`result.json`。
-- `review-findings.json` 以 `contracts/review-findings.schema.json` 为准：`verdict ∈ APPROVE / REQUEST_CHANGES / BLOCKED`；每个 `findings[]` 含 `finding_id`（`^FIND-`）、`severity ∈ BLOCKER/CRITICAL/HIGH/MEDIUM/LOW/INFO`、`category`、`title`、`description`、`file`、`line`、`commit`、`evidence`、`remediation`、`blocking`、`status ∈ OPEN/RESOLVED/WONT_FIX/UNKNOWN/NOT_EXECUTED`。
-- 顶层 `workflow_id` / `task_id` / `reviewed_commit` 必须绑定承载该文件的 `CODE_REVIEW` 或 `TEST_CODE_REVIEW` / `review-agent` task，且 `reviewed_commit == task.input_commit`。schema 不增加 `run_id`；run authority 来自文件所在的精确 current task snapshot `artifact_root_abs`、该 snapshot 的 `task_id` / `run_id` 和已验证 task event。每条 finding 的 `evidence` 只能引用同 task/run 的 `evidence.jsonl`。
-- Gate 只聚合 current candidate 的 findings；同 candidate + `finding_id` 用 review task 的最后 event `seq` 选择唯一最新状态，允许后续 `RESOLVED` 覆盖旧 `OPEN`，歧义则 fail-closed。旧 candidate findings 只作历史记录。
-- 默认只读；静态工具未装/未执行标 `UNKNOWN` 或 `NOT_EXECUTED`，不能用"看起来没问题"代替证据。
-
-### 6.E test-agent（§16.E）
-
-新增单元测试、新增集成测试、测试配置与 fixture、`test-plan.md`、`test-cases.json`、`test-report.md`、`coverage-report.json`（**仅当工具真实生成数据时**）、`test-traceability.json`、`command-records.jsonl`、原始 stdout/stderr 日志、`user-summary.md`、`manager-summary.md`、`result.json`，以及**真实本地 Git commit**。
-- `test-report.md` 必须列出：命令、退出码、发现/成功/失败/跳过/错误数量、日志路径、哈希、重试、flaky、验收标准覆盖、`UNKNOWN` 项、是否修改生产代码。
-- 每次新测试记录 `isolation_mode=SANDBOXED_DOCKER`，并保留 runtime/container ID、镜像 digest、挂载、资源边界、网络策略与 attestation；沙箱不可用即 `BLOCKED`，未经授权不得改生产代码；不得自行宣布"测试通过"或"可发布"，只报告执行事实。第一次失败即使重试成功也**保留第一次失败**并标记潜在 flaky。
-
-### 6.F release-agent（§16.F）
-
-`release-decision.json`、`release-decision.md`、`release-notes.md`、`operations-handoff.md`、`deployment-prerequisites.md`、`rollback-plan.md`、`known-issues.md`、`artifact-manifest.json`、`build-verification.md`、`security-verification.md`、`checksums.sha256`、`user-summary.md`、`manager-summary.md`、`result.json`。
-- `release-decision.json` 以 `contracts/release-decision.schema.json` 为准：必含 `workflow_id`、`task_id`、`run_id`、`candidate_commit`、`verdict ∈ GO / NO_GO / HOLD`、`checks[]` 与顶层 `evidence_refs`；每个 check 必含 `name`、`status ∈ PASS/FAIL/HOLD/UNKNOWN/NOT_APPLICABLE` 和非空 `evidence_refs`。这些 ID、candidate 与证据必须绑定承载该文件的 current `RELEASE_VERIFICATION` / `release-agent` task/run。
-- verdict 由 checks 保守重算：任一 `HOLD` / `UNKNOWN` / `NOT_APPLICABLE` → `HOLD`；否则任一 `FAIL` → `NO_GO`；非空且全 `PASS` → `GO`；空 checks → `HOLD`。`GO` 仅代表 `READY_FOR_OPERATIONS_HANDOFF`（非已部署）。
-- 缺关键证据不得给 `GO`（应 `HOLD`）；有失败测试/严重安全问题/无法验证的关键构建环节应 `NO_GO` 或 `HOLD`；不执行部署、不改生产环境、不访问生产凭证。
-
-## 7. 命令记录与证据（配套产物字段）
-
-- `command-records.jsonl`（`contracts/command-record.schema.json`）：每行含 `command_record_id`、`executable`、`cwd_abs`、`started_at`、`finished_at`、`exit_code`、`timed_out`、`stdout_path_abs`、`stderr_path_abs`、`attempt`、`invoked_by_agent`、`task_id`、`run_id`、`isolation_mode`（新 test-agent run 为 `SANDBOXED_DOCKER`）、`sandbox_runtime_id`、`sandbox_cwd_abs`、`sandbox_attestation_ref` 等；stdout/stderr 落盘为独立原始文件，重试生成**新**记录不覆盖失败。
-- `evidence.jsonl`（`contracts/evidence.schema.json`）：每行含 `evidence_id`（`^EVD-`）、`source_type ∈ file/git/command/doc/user_input/config/other`、`locator_abs` 或 `git_locator`、`sha256`、`line_start`/`line_end`、`collected_at`、`collector`、`command_record_id`、`notes`。
-
-## 8. 相关文档
-
-`context-and-rule-passing.md`（上下文包与输入）、`manager-orchestration.md`（校验与 Gate）、`control-kernel-v2.md`（状态、审批与恢复）、`git-worktree-strategy.md`（commit 与 worktree）、`evidence-and-claims.md`（证据分类）。
+Orchestrator 为每个 task/attempt 生成确定性 Session ID，并为每个 retry attempt 创建新的 worktree。OpenClaw 保存对话，SQLite execution/snapshot 记录其绑定。Agent 不能自行更换 Session 或把其他 Session 产物冒充为当前任务结果。执行期间宿主周期续租；租约所有权丢失会中止 Agent，避免过期执行与新 attempt 并发写入。

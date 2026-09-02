@@ -50,9 +50,7 @@ explicit_test_commands:
   - name: "build"
     argv: ["npm", "run", "build"]
 
-# ---- 测试隔离（强制轻量级 Docker sandbox）----
+# ---- 测试隔离（本阶段无沙箱）----
 testing:
-  isolation_mode: SANDBOXED_DOCKER    # 新 test-agent run 固定值
-  require_sandbox: true               # 沙箱不可用即阻断
-  allow_host_fallback: false          # 禁止宿主机回退
-  sandbox_policy_path: config/test-sandbox-policy.json
+  isolation_mode: UNSANDBOXED_LOCAL   # 本阶段固定值；测试直接在分配的绝对 worktree 内执行
+  require_isolation_disclosure: true  # 必须披露无沙箱风险，不得声称“已完全隔离”

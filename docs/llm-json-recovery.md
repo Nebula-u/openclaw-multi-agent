@@ -1,37 +1,44 @@
-# LLM JSON 回复清洗与重写
+# Agent JSON 接收与失败恢复
 
-本文件定义所有 Agent 生成或接收 JSON/JSONL 契约时的失败处理。权威数据仍是通过 Runtime Guard + Ajv 的 artifact；会话文本只用于通知或重写。
-
-## 处理顺序
-
-1. 保存原始回复和 SHA-256。
-2. 仅做确定性清洗：BOM、唯一 JSON/JSONL Markdown fence、唯一解释性前后缀中的完整值。
-3. 保存清洗后 SHA-256 和转换记录；多个候选或无法完整解析时拒绝猜测。
-4. 用对应 Schema 运行 Ajv。`enum`、`type` 单独分类；`required`、`additionalProperties`、`const`、`pattern` 等归为 schema drift。
-5. 首次调用之外最多重写两次；空 content、截断、解析错误和 Schema 失败共用预算。失败链路完整保留。
-
-不得自动“修复”业务值，也不得把 enum/type 违规改成猜测值。对模型的重写必须不改变已知事实、证据、命令结果或审批决定。
-
-## 固定模板摘录
-
-enum/type：
+worker 完成任务后只返回：
 
 ```text
-JSON_REWRITE_REQUEST kind=ENUM_VIOLATION retry=1/2.
-只返回一个完整的 JSON 对象（JSONL 时每行一个完整 JSON 对象）；不得输出 Markdown、代码围栏、解释或前后缀。
-校验诊断：[{"path":"/result_status","schema_keyword":"enum","message":"must be equal to one of the allowed values","params":{"allowedValues":["COMPLETED","BLOCKED"]}}]
-指定字段的类型或 enum 值不合法。仅修正诊断指向的字段，使其使用 Schema 中允许的类型和枚举值；其它事实保持不变。
+一个完整的 `result.schema.json` JSON 对象（最终回复）。
 ```
 
-截断：
+接收器允许确定性的 BOM、唯一 code fence 或唯一前后解释文本清理；不会在多个候选 JSON 中猜测、补业务字段、修复截断 JSON 或把聊天回复当成 result。
+
+清理后必须通过 `contracts/result.schema.json`，并精确匹配 task 身份、授权路径、input commit 和 context manifest SHA。只有全部通过后才原子发布到 `output/result.json` 并写 ingestion receipt。
+
+生产 Orchestrator 在每次正常执行后提取最终回复，并由宿主原子写入
+`<artifact_root>/.agent-raw/result.json.raw`，再执行解析、schema 和身份校验。失败时保留原始回复、failure receipt 与 Git recovery snapshot；JSON 修复回合继续复用同一 Session。缺少结果文件归类为 `OUTPUT_FILE_MISSING`，不再伪装成 `EMPTY_RESPONSE`。
+
+原始 stdout/stderr、raw output 和错误摘要保留在 task artifact。失败内容不会覆盖上一次 attempt，也不会推进 candidate。
+
+## Agent Schema 生成与清洗测试矩阵
+
+真实 Gateway 测试由主矩阵和 `test-agent` 专用矩阵组成，共覆盖所有 19 个由
+Agent 生成的 Schema：每份 Schema 固定三项不同的业务生成要求，每项独立
+执行十次，共 570 个逻辑测试。报告逐个 Schema 汇总 `通过次数 / 有效执行次数`
+与正确率；通信异常不计入质量分母。每次首次 JSON 清洗或 Schema 校验失败时，
+测试脚本会在同一 Session 内最多请求两次 JSON 修复；修复请求明确说明这是
+JSON 清洗工作流测试，不得调用工具或返回 JSON/JSONL 之外的内容。
+
+```powershell
+npm run agent-json:matrix -- `
+  --run-id schema-matrix-<YYYYMMDD-HHMM> `
+  --concurrency 1 `
+  --timeout-seconds 120
+```
+
+重复次数固定为每个样例 10 次，不能通过命令行降低。结果写入：
 
 ```text
-JSON_REWRITE_REQUEST kind=OUTPUT_TRUNCATED retry=2/2.
-上一轮 JSON 在结束前截断。请从头输出一个更精简但完整、闭合的 JSON；不要续写片段，确保不超过输出预算。
+artifacts/agent-json-workflow/schema-matrix-<YYYYMMDD-HHMM>/summary.json
+artifacts/agent-json-workflow/schema-matrix-<YYYYMMDD-HHMM>/report.md
+artifacts/agent-json-workflow/schema-matrix-<YYYYMMDD-HHMM>/failures/
 ```
 
-实际模板实现位于 `scripts/agent-json-harness/json-repair-prompts.mjs`；该模块同时覆盖空 content、JSON parse error 与 schema drift。
-
-## Provider 无关边界
-
-项目不向模型请求附加结构化输出模式。所有模型回复都经过相同的原文留存、确定性清洗、Ajv 校验和失败证据链。空 content 是通用失败类型，不关联特定厂商；纯工具调用无文本仍是有效中间状态。
+每个无效回复（即使随后修复成功）均保留原始未清洗文本、清洗结果、提示、
+Runtime Guard 错误和中文诊断。通信异常会标记整个报告为 `INCOMPLETE`，并
+从 JSON 质量通过率分母中排除。

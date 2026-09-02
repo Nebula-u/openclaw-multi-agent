@@ -1,9 +1,0 @@
-{
-  "task_id": "TASK-chat-demo-requirements",
-  "run_id": "RUN-CHAT-DEMO-REQ-002",
-  "attempt": 2,
-  "occurred_at": "2026-08-11T10:00:00.000Z",
-  "reason": "补全 input 包后重试：已添加 context.md、task.json、rules.md、acceptance-criteria.json 四份输入文件，并更新 context-manifest 的 input_files",
-  "worktree_path_abs": "D:\\MicroConnect\\project\\openclaw-multi-agent\\runtime\\worktrees\\WF-chat-demo\\TASK-chat-demo-requirements\\RUN-CHAT-DEMO-REQ-001\\repo",
-  "context_manifest_path_abs": "D:\\MicroConnect\\project\\openclaw-multi-agent\\runtime\\worktrees\\WF-chat-demo\\TASK-chat-demo-requirements\\RUN-CHAT-DEMO-REQ-001\\context-manifest.json"
-}

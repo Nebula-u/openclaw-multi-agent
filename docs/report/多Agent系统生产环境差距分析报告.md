@@ -1,5 +1,7 @@
 # 多 Agent 系统生产环境差距分析报告
 
+> **历史存档说明（2026-08-17 补注）**：本报告基于 2026-07-30 时点的旧 Control Kernel + Orchestrator 三层架构撰写。该架构已在 2026-08-14 的重建中被 LangGraph `StateGraph + checkpointer` 单框架取代（见 `docs/report/2026-08-14-stategraph-rebuild-handoff.md`）。本报告正文按原样保留作为历史参考，不代表当前架构状态；当前架构见 `docs/architecture.md`。
+>
 > 报告日期：2026-07-30  
 > 评估对象：OpenClaw 多 Agent 软件开发系统  
 > 系统定位：面向个人/小团队/中小型软件项目的自动化研发协作平台  
@@ -185,13 +187,13 @@
 
 - `README.md`
 - `docs/architecture.md`
-- `docs/control-kernel-v2.md`
+- `docs/archive/legacy/control-kernel-v2.md`（历史架构存档，原路径 `docs/control-kernel-v2.md` 现已不存在）
 - `docs/manager-orchestration.md`
 - `docs/agent-contracts.md`
 - `docs/gate-checklists.md`
 - `docs/context-and-rule-passing.md`
 - `docs/current-progress-assessment.md`
 - `docs/component-management.md`
-- `docs/unsandboxed-test-policy.md`
+- `docs/archive/legacy/unsandboxed-test-policy.md`（历史存档，原路径 `docs/unsandboxed-test-policy.md` 现已不存在）
 - `docs/architecture.md`
 

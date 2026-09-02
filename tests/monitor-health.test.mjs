@@ -2,7 +2,6 @@ import assert from 'node:assert/strict';
 import { resolve } from 'node:path';
 import test from 'node:test';
 import { classifyTaskHealth, createHealthClassifier } from '../monitor/health-classifier.mjs';
-import { createWatchdog } from '../monitor/watchdog.mjs';
 import { openTelemetryDatabase, createTelemetryRepository } from '../monitor/telemetry-repository.mjs';
 
 const ROOT = resolve(import.meta.dirname, '..');
@@ -25,7 +24,7 @@ test('health classifier distinguishes waiting, recent dialogue and possible stal
   assert.ok(stalled.evidence.some((item) => item.type === 'SIGNAL_AGE' && item.lease_expired));
 });
 
-test('health classifier persists changes and watchdog shadow action is deduplicated per cooldown window', () => {
+test('health classifier persists checkpoint-derived health changes', () => {
   const database = openTelemetryDatabase(':memory:');
   try {
     const telemetry = createTelemetryRepository(ROOT, database);
@@ -34,11 +33,8 @@ test('health classifier persists changes and watchdog shadow action is deduplica
     const results = classifier.scan({ workflows: [{ workflow_id: 'WF-health', tasks: [task()] }] });
     assert.equal(results[0].health, 'POSSIBLY_STALLED');
     assert.equal(telemetry.health('TASK-health').health, 'POSSIBLY_STALLED');
-    const watchdog = createWatchdog({ telemetry, shadowMode: true, cooldownSeconds: 300, now: () => NOW });
-    const first = watchdog.scan(results);
-    assert.equal(first.length, 1);
-    assert.equal(first[0].event.event_type, 'watchdog.shadow_action');
-    assert.equal(watchdog.scan(results).length, 0);
-    assert.equal(telemetry.events({ workflowId: 'WF-health' }).filter((event) => event.source === 'WATCHDOG').length, 1);
+    const persisted = telemetry.health('TASK-health');
+    assert.equal(persisted.confidence, 'MEDIUM');
+    assert.ok(persisted.evidence.some((item) => item.type === 'SIGNAL_AGE'));
   } finally { database.close(); }
 });

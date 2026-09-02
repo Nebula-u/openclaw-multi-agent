@@ -11,9 +11,15 @@
   "runtime_subdir": "agents/manager-agent",
   "role": "manager",
   "capabilities": ["workflow.orchestration", "agent.lifecycle", "skill.lifecycle"],
-  "model": "deepseek/deepseek-v4-pro",
-  "delegation": { "callable_by_manager": false, "allow_agents": [], "require_agent_id": true, "delegation_mode": "prefer" },
-  "sandbox_mode": null,
+  "model": "",
+  "delegation": { "callable_by_manager": false, "allow_agents": [], "require_agent_id": true, "delegation_mode": "off" },
+  "sandbox_mode": "off",
+  "tools_config": {
+    "profile": "minimal",
+    "alsoAllow": ["read", "write", "edit", "exec"],
+    "deny": ["apply_patch", "browser", "web_search", "web_fetch", "image_generate", "message"],
+    "exec": { "host": "gateway", "security": "allowlist", "ask": "off", "strictInlineEval": true, "timeoutSec": 120 }
+  },
   "assembly": { "include_common_rules": true, "include_templates": true },
   "skills": ["skill-creator", "agent-package-manager"],
   "lifecycle": { "register": true, "active": true }

@@ -94,6 +94,14 @@ export function buildBundle(projectRootInput, runtimeRootInput, { agentIds = nul
         join(projectRoot, 'agents', 'packages', 'system', 'skills', skill),
         join(targetWorkspace, 'skills', skill), 'skill');
     }
+    if (manifest.id === 'manager-agent') {
+      addTree(entries, projectRoot, runtimeRoot, join(projectRoot, 'scripts', 'manager-control'), join(runtimeRoot, 'manager-control'), 'manager-control');
+      addTree(entries, projectRoot, runtimeRoot, join(projectRoot, 'scripts', 'runtime-core'), join(runtimeRoot, 'runtime-core'), 'manager-control-runtime');
+      addTree(entries, projectRoot, runtimeRoot, join(projectRoot, 'scripts', 'control-kernel'), join(runtimeRoot, 'control-kernel'), 'manager-control-kernel');
+      const policySource = join(projectRoot, 'config', 'manager-control-policy.json');
+      const policyTarget = join(runtimeRoot, 'manager-control', 'manager-control-policy.json');
+      entries.push({ kind: 'manager-control-policy', source_rel: safeRelative(projectRoot, policySource), target_rel: safeRelative(runtimeRoot, policyTarget), sha256: sha256File(policySource) });
+    }
   }
   entries.sort((left, right) => left.target_rel.localeCompare(right.target_rel, 'en')
     || left.source_rel.localeCompare(right.source_rel, 'en'));

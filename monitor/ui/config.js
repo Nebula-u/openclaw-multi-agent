@@ -1,3 +1,3 @@
 window.MONITOR_CONFIG = {
-  apiUrl: 'http://127.0.0.1:4319'
+  apiUrl: window.location.protocol === 'file:' ? 'http://127.0.0.1:4319' : window.location.origin
 };

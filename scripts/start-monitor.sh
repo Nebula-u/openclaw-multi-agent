@@ -7,4 +7,4 @@ export OPENCLAW_PROJECT_ROOT="$PROJECT_ROOT"
 export OPENCLAW_RUNTIME_ROOT="${OPENCLAW_RUNTIME_ROOT:-$PROJECT_ROOT/runtime}"
 export MONITOR_PORT="${MONITOR_PORT:-4319}"
 
-exec node "$PROJECT_ROOT/monitor/supervisor.mjs"
+exec node "$PROJECT_ROOT/monitor/main.mjs"

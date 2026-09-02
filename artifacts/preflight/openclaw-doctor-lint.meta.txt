@@ -1,9 +1,0 @@
-slug=openclaw-doctor-lint
-command=openclaw doctor --lint --json
-executable=openclaw
-cwd=/d/MicroConnect/project/openclaw-multi-agent
-exit_code=1
-started_at=2026-07-23T08:32:58Z
-finished_at=2026-07-23T08:33:33Z
-stdout_file=/d/MicroConnect/project/openclaw-multi-agent/artifacts/preflight/openclaw-doctor-lint.stdout.txt
-stderr_file=/d/MicroConnect/project/openclaw-multi-agent/artifacts/preflight/openclaw-doctor-lint.stderr.txt

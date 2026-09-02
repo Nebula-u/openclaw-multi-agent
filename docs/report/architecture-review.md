@@ -1,5 +1,7 @@
 # Architecture Review and Target Design
 
+> **历史存档说明（2026-08-17 补注）**：本报告基于 2026-07-30 时点的旧三层架构撰写，已被 2026-08-14 的 LangGraph `StateGraph + checkpointer` 重建取代（见 `docs/report/2026-08-14-stategraph-rebuild-handoff.md`）。仅供历史参考，当前架构见 `docs/architecture.md`。
+>
 > 报告日期：2026-07-30  
 > 主题：面向个人/小团队的多 Agent 软件开发系统最终架构建议  
 > 资源约束：单服务器、4 核 CPU、4GB 内存、API 调用模型。

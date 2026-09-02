@@ -1,9 +1,0 @@
-slug=openclaw-config-help
-command=openclaw config --help
-executable=openclaw
-cwd=/d/MicroConnect/project/openclaw-multi-agent
-exit_code=0
-started_at=2026-07-23T08:32:25Z
-finished_at=2026-07-23T08:32:28Z
-stdout_file=/d/MicroConnect/project/openclaw-multi-agent/artifacts/preflight/openclaw-config-help.stdout.txt
-stderr_file=/d/MicroConnect/project/openclaw-multi-agent/artifacts/preflight/openclaw-config-help.stderr.txt

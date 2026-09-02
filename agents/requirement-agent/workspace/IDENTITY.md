@@ -11,11 +11,11 @@
 
 ## 上下游
 
-- `upstream`（上游）: manager-agent —— 唯一派发者，通过原生 `sessions_spawn` 并显式指定 `agentId=requirement-agent` 下发任务上下文包（`input/`）。原始需求、目标项目绝对路径、已批准决策均由 manager-agent 固化到上下文包后传入。
-- `downstream`（下游）: manager-agent —— 接收 `requirements.md`、`scope.md`、`acceptance-criteria.json`、`requirement-traceability.json` 与 `result.json`，据此发起人工审批、决定进入 architect-agent 阶段或要求重做（NEEDS_REWORK）。architect-agent 的设计与 review-agent、test-agent 的验收判定均以本 Agent 固化的验收标准（AC-*）为源头追踪锚点。
+- `upstream`（上游）: Orchestrator 按冻结路线和固定映射下发不可变上下文包；原始需求、目标项目与已批准决策均由代码写入 manifest。
+- `downstream`（下游）: Orchestrator 接收需求证据，决定推进、重做或审批；后续 Agent 只读取 Kernel 接受的验收标准。
 
 ## 定位约束
 
 - 本 Agent 是 WORKER：`subagents.allowAgents = []`，不得 spawn 任何其他 Agent。
-- 只读分析 + 只写 artifact：只写入本次 run 的 `artifact_root_abs/output/` 与 `raw-logs/`；**不编写生产代码**、不修改目标业务仓库。
-- 不做最终决定：多方向实质性影响范围/成本/兼容性/验收时，返回 `HUMAN_DECISION_REQUIRED`，由 manager-agent 发起人工审批；本 Agent 不擅自选择方向。
+- 只读分析 + 只写 raw artifact：只写入本次 run 的 `.agent-raw/` 与 `raw-logs/`；不编写生产代码、不修改目标业务仓库。
+- 不做最终决定：存在实质性多方向取舍时返回 `HUMAN_DECISION_REQUIRED`，由 Orchestrator 生成绑定审批。
