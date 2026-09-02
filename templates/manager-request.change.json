@@ -13,7 +13,7 @@
     "workflow_id": "WF-<当前工作流>",
     "request_class": "FEATURE",
     "summary": "<只概括用户确认的修订请求>",
-    "display_title": "<保留首次请求的十字以内标题>",
+    "display_title": "<保留首次请求的二十字以内标题>",
     "risk_flags": [],
     "steps": [
       { "step_id": "requirements", "kind": "REQUIREMENTS", "title": "由需求 Agent 给出推荐需求", "rationale": "需求细节由 requirement-agent 分析。", "human_approval_after": true, "approval_reason": "用户确认推荐需求后才进入后续阶段。" },

@@ -115,7 +115,7 @@ test('Manager request queue preserves request identity when route validation rej
     manager_session_id: 'manager-session', manager_session_key: 'agent:manager:source', project_path_abs: ROOT, original_request: 'Build a demo', route_plan: routePlan('WF-rejected-route'),
     user_authorized: { confirmed: true, actor: 'human:liuxu', message: 'Run the confirmed route.' },
   };
-  request.route_plan.display_title = 'This title is too long';
+  request.route_plan.display_title = 'This title is definitely too long';
   atomicWriteJson(join(queue.requests, 'rejected-route.json'), request);
 
   const receipt = await queue.processFile('rejected-route.json');
@@ -134,7 +134,7 @@ test('Manager request validation rejects invalid route metadata before orchestra
     manager_session_id: 'manager-session', manager_session_key: 'agent:manager:source', project_path_abs: ROOT, original_request: 'Review code', route_plan: routePlan('WF-Route-002'),
     user_authorized: { confirmed: true, actor: 'human:liuxu', message: 'Please run this reviewed route.' },
   };
-  request.route_plan.display_title = 'This title is too long';
+  request.route_plan.display_title = 'This title is definitely too long';
   assert.throws(() => assertManagerRequest(ROOT, request), (error) => error.code === 'ROUTE_PLAN_SCHEMA_INVALID');
   request.route_plan.display_title = 'Review';
   request.route_plan.risk_flags = ['local_persistence'];

@@ -18,6 +18,7 @@ import { archiveJsonRegeneration, archiveOutputBoundaryFailure, isJsonRegenerabl
 import { extractFinalAssistantText, extractFinalAssistantVisibleText, runOpenClawAgent } from './openclaw-runner.mjs';
 import { compileRoutePlan, GATE_CHECKS_BY_KIND } from './route-policy.mjs';
 import { createTestSandboxStager } from './test-sandbox-staging.mjs';
+import { shouldNotifyManager } from './notification-policy.mjs';
 
 function now(clock) { const value = clock(); return value instanceof Date ? value.toISOString() : value; }
 function taskSession(task) { return `orc-${task.runId.toLowerCase()}-${task.taskId.toLowerCase()}-a${task.attempt}`.slice(0, 120); }
@@ -242,6 +243,12 @@ export function createOrchestrator({ projectRoot: projectRootInput, database = n
     const selected = notificationIds ? pending.filter((item) => notificationIds.includes(item.notificationId)) : pending;
     const delivered = [];
     for (const notification of selected) {
+      if (!shouldNotifyManager(notification.type)) {
+        // Keep the event in the control plane for audit/history, but do not
+        // wake the Manager for internal lifecycle and self-healing events.
+        delivered.push(await selectedRepository.updateNotification(notification.notificationId, { status: 'DELIVERED', incrementAttempts: true }));
+        continue;
+      }
       const run = await selectedRepository.getRunById(notification.runId);
       if (!run?.managerSessionId || !run.managerSessionKey) {
         delivered.push(await selectedRepository.updateNotification(notification.notificationId, { status: 'FAILED', incrementAttempts: true, lastError: { code: 'MANAGER_SESSION_MISSING', message: 'originating Manager session metadata is missing' } }));

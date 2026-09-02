@@ -22,7 +22,7 @@
       "enum": ["SMALL_CODE", "FEATURE", "TEST_ONLY", "ANALYSIS_ONLY", "RELEASE_ONLY"]
     },
     "summary": { "type": "string", "minLength": 1, "maxLength": 4000 },
-    "display_title": { "type": "string", "minLength": 1, "maxLength": 10 },
+    "display_title": { "type": "string", "minLength": 1, "maxLength": 20 },
     "risk_flags": {
       "type": "array",
       "uniqueItems": true,

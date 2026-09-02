@@ -15,7 +15,7 @@
     "workflow_id": "WF-<唯一标识>",
     "request_class": "FEATURE",
     "summary": "<只概括用户请求的工作流摘要>",
-    "display_title": "<十字以内标题>",
+    "display_title": "<二十字以内标题>",
     "risk_flags": [
       "external_side_effect",
       "manual_acceptance",

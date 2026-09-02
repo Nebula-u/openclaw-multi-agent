@@ -139,7 +139,7 @@ test('manager control refuses submission when a validated draft changes', (t) =>
   const { runtimeRoot, draftPath, requestRoot, raw } = requestDraftFixture(t);
   const output = { value: '', write(value) { this.value += value; } };
   const validated = runManagerControl(['orchestrator-validate-request', '--draft-file', 'deploy.json'], output, { runtimeRoot, projectRoot: ROOT });
-  writeFileSync(draftPath, raw.replace('Web Deploy', 'This title is too long'));
+  writeFileSync(draftPath, raw.replace('Web Deploy', 'This title is definitely too long'));
 
   assert.throws(
     () => runManagerControl(['orchestrator-submit-request', '--draft-file', 'deploy.json', '--expected-sha256', validated.input_sha256], output, { runtimeRoot, projectRoot: ROOT }),
@@ -212,7 +212,7 @@ test('manager control preserves authoritative validation details without publish
   const { runtimeRoot, draftPath, requestRoot } = requestDraftFixture(t);
   const output = { value: '', write(value) { this.value += value; } };
   const invalid = deploymentRequest();
-  invalid.route_plan.display_title = 'This title is too long';
+  invalid.route_plan.display_title = 'This title is definitely too long';
   invalid.route_plan.risk_flags = ['deployment'];
   writeFileSync(draftPath, `${JSON.stringify(invalid)}\n`);
 
@@ -454,7 +454,7 @@ test('manager control reports a bound rejected request before it is stored in SQ
     schema_version: 1, request_id: 'REQ-rejected-status', request_type: 'CREATE', workflow_id: 'WF-rejected-status', submitted_by: 'manager-agent',
     manager_session_id: 'manager-session', manager_session_key: 'manager-key', project_path_abs: ROOT, original_request: 'Build a demo',
     route_plan: {
-      schema_version: 1, workflow_id: 'WF-rejected-status', request_class: 'ANALYSIS_ONLY', summary: 'Review the codebase.', display_title: 'This title is too long', risk_flags: [],
+      schema_version: 1, workflow_id: 'WF-rejected-status', request_class: 'ANALYSIS_ONLY', summary: 'Review the codebase.', display_title: 'This title is definitely too long', risk_flags: [],
       steps: [{ step_id: 'review', kind: 'CODE_REVIEW', title: 'Review', rationale: 'The user requested a review.', human_approval_after: false, approval_reason: null }],
       skipped_stages: ['REQUIREMENTS', 'ARCHITECTURE', 'DESIGN', 'DEVELOPMENT', 'TEST', 'RELEASE'].map((kind) => ({ kind, reason: 'Not required for this request.' })),
     },
