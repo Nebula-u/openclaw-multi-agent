@@ -73,13 +73,14 @@ function fixture() {
   };
 }
 
-function createStager(workspace) {
+function createStager(workspace, options = {}) {
   return createTestSandboxStager({
     projectRoot: ROOT,
     workspaceRoot: workspace,
     inspectSandbox: () => SANDBOX_PROFILE,
     platform: 'linux',
     acquireLease: async () => ({ async release() {} }),
+    ...options,
   });
 }
 
@@ -279,6 +280,24 @@ test('failed preparation removes staging and releases the OS lease before propag
   assert.equal(existsSync(join(value.workspace, '.task-sandbox')), false);
   const lease = await acquireTestSandboxLease(value.workspace);
   await lease.release();
+});
+
+test('failed preparation identifies the failing staging phase and original filesystem error', async (t) => {
+  const value = fixture();
+  t.after(() => rmSync(value.root, { recursive: true, force: true }));
+  const original = Object.assign(new Error('permission denied while cloning'), {
+    code: 'EACCES', syscall: 'open', path: value.task.worktreePathAbs,
+  });
+  const stager = createStager(value.workspace, { runGit: () => { throw original; } });
+
+  await assert.rejects(stager.prepare(value.task), (error) => {
+    assert.equal(error.code, 'EACCES');
+    assert.equal(error.details.preparation_phase, 'CLONE_WORKTREE');
+    assert.equal(error.details.syscall, 'open');
+    assert.equal(error.details.path, value.task.worktreePathAbs);
+    assert.equal(error.cause, original);
+    return true;
+  });
 });
 
 test('collection copies only staged result and raw logs to the canonical artifact root', async (t) => {

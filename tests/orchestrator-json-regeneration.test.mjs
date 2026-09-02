@@ -4,7 +4,7 @@ import { existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, rmSync, sym
 import { tmpdir } from 'node:os';
 import test from 'node:test';
 import { openKernelDatabase } from '../scripts/control-kernel/database.mjs';
-import { createOrchestrator } from '../scripts/orchestrator/service.mjs';
+import { createOrchestrator, tryWriteTestSandboxPreparationDiagnostic, writeTestSandboxPreparationDiagnostic } from '../scripts/orchestrator/service.mjs';
 import { archiveJsonRegeneration, readRegularFileNoFollow } from '../scripts/orchestrator/json-regeneration.mjs';
 
 const ROOT = resolve(import.meta.dirname, '..');
@@ -59,6 +59,53 @@ function fixture(t, workflowId, runner, { maxAttempts = 3, worktrees = {}, snaps
     notificationRunner: async () => ({ exitCode: 0, stdout: '', stderr: '' }),
   });
 }
+
+test('TEST sandbox preparation failure persists a host-owned diagnostic artifact', (t) => {
+  const artifactRoot = join(ROOT, 'runtime', 'artifacts', `sandbox-diagnostic-${Date.now()}`);
+  t.after(() => rmSync(artifactRoot, { recursive: true, force: true }));
+  const task = { taskId: 'TASK-sandbox', runId: 'RUN-sandbox', workflowId: 'WF-sandbox', attempt: 2, artifactRootAbs: artifactRoot };
+  const error = Object.assign(new Error('permission denied'), {
+    code: 'EACCES', syscall: 'open', path: '/protected/source',
+    details: { preparation_phase: 'CLONE_WORKTREE', workspace_root_abs: '/runtime/test-agent/workspace' },
+  });
+
+  const diagnostic = writeTestSandboxPreparationDiagnostic(task, error, '2026-09-02T05:00:00.000Z');
+
+  assert.equal(diagnostic.path_abs, join(artifactRoot, '.orchestrator', 'test-sandbox-preparation', 'attempt-2.diagnostic.json'));
+  assert.equal(diagnostic.value.preparation_phase, 'CLONE_WORKTREE');
+  assert.equal(diagnostic.value.error.code, 'EACCES');
+  assert.equal(diagnostic.value.error.syscall, 'open');
+  assert.equal(diagnostic.value.error.path, '/protected/source');
+  assert.equal(JSON.parse(readFileSync(diagnostic.path_abs, 'utf8')).task_id, task.taskId);
+});
+
+test('TEST sandbox diagnostic preserves filesystem fields from a wrapped staging error', (t) => {
+  const artifactRoot = join(ROOT, 'runtime', 'artifacts', `sandbox-wrapped-diagnostic-${Date.now()}`);
+  t.after(() => rmSync(artifactRoot, { recursive: true, force: true }));
+  const task = { taskId: 'TASK-sandbox', runId: 'RUN-sandbox', workflowId: 'WF-sandbox', attempt: 1, artifactRootAbs: artifactRoot };
+  const error = Object.assign(new Error('permission denied'), {
+    code: 'EACCES', details: {
+      preparation_phase: 'CLONE_WORKTREE', syscall: 'open', path: '/protected/source', dest: '/workspace/.task-sandbox/repo',
+    },
+  });
+
+  const diagnostic = writeTestSandboxPreparationDiagnostic(task, error, '2026-09-02T05:00:00.000Z');
+
+  assert.equal(diagnostic.value.error.syscall, 'open');
+  assert.equal(diagnostic.value.error.path, '/protected/source');
+  assert.equal(diagnostic.value.error.dest, '/workspace/.task-sandbox/repo');
+});
+
+test('TEST sandbox diagnostic write failure preserves the BLOCKED execution path', () => {
+  const task = { taskId: 'TASK-sandbox', runId: 'RUN-sandbox', workflowId: 'WF-sandbox', attempt: 1, artifactRootAbs: '/unwritable' };
+  const error = Object.assign(new Error('permission denied'), { code: 'EACCES', details: { preparation_phase: 'COPY_INPUT' } });
+  const result = tryWriteTestSandboxPreparationDiagnostic(task, error, '2026-09-02T05:00:00.000Z', {
+    writeDiagnostic: () => { throw Object.assign(new Error('diagnostic write denied'), { code: 'EACCES', syscall: 'mkdir', path: '/unwritable' }); },
+  });
+
+  assert.equal(result.diagnostic, null);
+  assert.deepEqual(result.write_error, { code: 'EACCES', syscall: 'mkdir', path: '/unwritable' });
+});
 
 async function createRun(orchestrator, workflowId) {
   return orchestrator.createRun({
