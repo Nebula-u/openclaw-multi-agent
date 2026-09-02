@@ -10,7 +10,7 @@ Agent ID、workspace source、runtime 路径、能力、delegation、sandbox 和
 - 生成 Agent：`agents/packages/generated/agents/<id>/agent.json`
 - 生成 Skill：`agents/packages/generated/skills/<slug>/skill.json`
 - 策略：`config/component-policy.json`
-- 契约：`contracts/agent-package.schema.json`、`skill-package.schema.json`、`component-request.schema.json`
+- 契约：`contracts/agent-package.schema.json`、`skill-package.schema.json`、`component-request.schema.json`、`component-build-result.schema.json`（`New-BuildResult` 生成的构建结果对应此契约）
 
 内置包只引用原来的 `agents/<id>/workspace`，不会移动或重写这些 workspace。
 
@@ -105,12 +105,20 @@ pwsh -File scripts/manage-components.ps1 -Command ApplySkill `
   -Apply -Yes
 ```
 
-`ProposeSkill` 要求目标生成 Agent 已注册但未必激活；`ApplySkill` 要求第二次审批。未应用 Skill 可直接保留为生成包，或经 `DELETE` 审批删除。
+`ProposeSkill` 要求目标生成 Agent 已注册但未必激活；`ApplySkill` 要求第二次审批。未应用 Skill 可直接保留为生成包，或经 `RemoveSkill` 命令、`DELETE` 审批删除：
+
+```powershell
+pwsh -File scripts/manage-components.ps1 -Command RemoveSkill `
+  -Id <skill-slug> -TargetAgent <generated-agent-id> `
+  -Request <delete-request.json> `
+  -ApprovalResponse <delete-approval-response.json> `
+  -Apply -Yes
+```
 
 ## 7. Bash 支持
 
 `install.sh` 与 `validate-install.sh` 已改为读取相同 package manifest，支持静态 package 的发现、同步与验证。审批式内容生成和破坏性删除以 PowerShell 实现为权威入口；Bash 不会绕过该边界自行删除组件。
 
-## 8. 后续 LangGraph 接入
+## 8. 与当前 Orchestrator 的集成
 
-后续可把 `List/Validate/NewAgent/SetAgentState/RemoveAgent` 封装成 LangGraph 节点或工具。package manifest 和审批协议保持不变，不需要再次迁移 Agent。
+`List/Validate/NewAgent/SetAgentState/RemoveAgent` 继续由现有 Node Orchestrator 和安装脚本调用。组件管理不引入第二套工作流框架，也不直接写 SQLite；package manifest 和审批协议仍是 Agent 注册与状态变更的边界。

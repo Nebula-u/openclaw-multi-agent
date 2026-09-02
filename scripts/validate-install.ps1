@@ -4,14 +4,21 @@
   清单驱动的静态安装验证；不修改 OpenClaw 配置。
 #>
 [CmdletBinding()]
-param([switch]$SkipOpenClaw)
+param(
+  [switch]$SkipOpenClaw,
+  [string]$RuntimeRoot = 'runtime'
+)
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $ScriptDir = $PSScriptRoot
 $ProjectRoot = [System.IO.Path]::GetFullPath((Join-Path $ScriptDir '..'))
 . (Join-Path $ScriptDir 'component-lib.ps1')
-$RuntimeRootAbs = Get-NormalizedPath (Join-Path $ProjectRoot 'runtime')
+$RuntimeRootAbs = if ([System.IO.Path]::IsPathRooted($RuntimeRoot)) {
+  Get-NormalizedPath $RuntimeRoot
+} else {
+  Get-NormalizedPath (Join-Path $ProjectRoot $RuntimeRoot)
+}
 
 $Results = [System.Collections.Generic.List[object]]::new()
 function Add-Check([string]$Name, [bool]$Pass, [string]$Detail = '') {
@@ -24,6 +31,46 @@ function Test-Json([string]$Path) {
 }
 function Test-Throws([scriptblock]$Action) {
   try { & $Action; return $false } catch { return $true }
+}
+function Test-InstalledRealPath([string]$Path, [ValidateSet('Container','Leaf')][string]$PathType, [string]$Root) {
+  if (-not (Test-Path -LiteralPath $Path -PathType $PathType)) { return $false }
+  $item = Get-Item -Force -LiteralPath $Path
+  if (($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) { return $false }
+  return Test-PathWithin -Path $item.FullName -Root $Root
+}
+function Get-OptionalPropertyValue($Object, [string]$Name) {
+  if ($null -ne $Object -and $Object.PSObject.Properties.Name -contains $Name) { return $Object.$Name }
+  return $null
+}
+function Add-InstalledTestAgentSandboxChecks([object[]]$Agents, [bool]$SandboxEnabled, [string]$ErrorDetail = '') {
+  $testAgents = @($Agents | Where-Object { [string]$_.id -eq 'test-agent' })
+  $sandbox = if ($testAgents.Count -eq 1) { Get-OptionalPropertyValue $testAgents[0] 'sandbox' } else { $null }
+  if ($null -eq $sandbox) {
+    $detail = if ($ErrorDetail) { $ErrorDetail } else { 'test-agent sandbox 不存在或重复' }
+    Add-Check '已安装 test-agent sandbox workspaceAccess=rw' $false $detail
+    Add-Check '已安装 test-agent sandbox 工作目录为任务暂存 repo' $false $detail
+    Add-Check '已安装 test-agent sandbox 不含外部 bind 挂载' $false $detail
+    Add-Check '已安装 test-agent sandbox Docker 加固' $false $detail
+    return
+  }
+
+  if (-not $SandboxEnabled) {
+    Add-Check '已安装 test-agent sandbox 已禁用' ([string](Get-OptionalPropertyValue $sandbox 'mode') -eq 'off') ([string](Get-OptionalPropertyValue $sandbox 'mode'))
+    return
+  }
+
+  $docker = Get-OptionalPropertyValue $sandbox 'docker'
+  $workspaceAccess = [string](Get-OptionalPropertyValue $sandbox 'workspaceAccess')
+  Add-Check '已安装 test-agent sandbox workspaceAccess=rw' ($workspaceAccess -eq 'rw') $workspaceAccess
+  $workdir = [string](Get-OptionalPropertyValue $docker 'workdir')
+  Add-Check '已安装 test-agent sandbox 工作目录为任务暂存 repo' ($workdir -eq '/workspace/.task-sandbox/repo') $workdir
+  $hasBinds = $null -ne (Get-OptionalPropertyValue $docker 'binds')
+  Add-Check '已安装 test-agent sandbox 不含外部 bind 挂载' (-not $hasBinds)
+  $network = [string](Get-OptionalPropertyValue $docker 'network')
+  $readOnlyRoot = Get-OptionalPropertyValue $docker 'readOnlyRoot'
+  $capDrop = @(Get-OptionalPropertyValue $docker 'capDrop' | ForEach-Object { [string]$_ })
+  $hardening = ([string](Get-OptionalPropertyValue $sandbox 'backend') -eq 'docker') -and $network -eq 'none' -and $readOnlyRoot -eq $true -and $capDrop.Count -eq 1 -and $capDrop[0] -eq 'ALL' -and [int](Get-OptionalPropertyValue $docker 'pidsLimit') -eq 256 -and [string](Get-OptionalPropertyValue $docker 'memory') -eq '2g' -and [double](Get-OptionalPropertyValue $docker 'cpus') -eq 2
+  Add-Check '已安装 test-agent sandbox Docker 加固' $hardening "network=$network readOnlyRoot=$readOnlyRoot capDrop=$($capDrop -join ',')"
 }
 
 Write-Host '== package 驱动静态验证 ==' -ForegroundColor Cyan
@@ -56,54 +103,96 @@ if ($Packages.Count -gt 0) {
   Add-Check 'manager allowAgents 由 active/callable packages 计算' ($allow.Count -eq @($Packages | Where-Object { $_.role -ne 'manager' -and $_.register -and $_.active -and $_.callable_by_manager }).Count) ($allow -join ',')
   Add-Check '工作 Agent 默认不派生' (@($Packages | Where-Object { $_.role -ne 'manager' -and @($_.allow_agents).Count -ne 0 }).Count -eq 0)
 }
+$testSandboxEnabled = @($Packages | Where-Object id -eq 'test-agent')[0].sandbox_mode -ne 'off'
 
 $contractsDir = Join-Path $ProjectRoot 'contracts'
 Get-ChildItem -LiteralPath $contractsDir -Filter '*.json' -File | ForEach-Object { Add-Check "contracts JSON: $($_.Name)" (Test-Json $_.FullName) }
 $templatesDir = Join-Path $ProjectRoot 'templates'
 Get-ChildItem -LiteralPath $templatesDir -Filter '*.json' -File | ForEach-Object { Add-Check "templates JSON: $($_.Name)" (Test-Json $_.FullName) }
 
+$managerWorkspace = Join-Path $RuntimeRootAbs 'agents\manager-agent\workspace'
+$managerWorkspaceSafe = $true
+foreach ($path in @(
+  (Join-Path $RuntimeRootAbs 'agents'),
+  (Join-Path $RuntimeRootAbs 'agents\manager-agent'),
+  $managerWorkspace,
+  (Join-Path $managerWorkspace '.orchestrator')
+)) {
+  if (-not (Test-InstalledRealPath -Path $path -PathType Container -Root $RuntimeRootAbs)) { $managerWorkspaceSafe = $false }
+}
+foreach ($directory in @('drafts','requests','receipts')) {
+  $path = Join-Path $managerWorkspace ".orchestrator\$directory"
+  Add-Check "已安装 Manager $directory 目录" ($managerWorkspaceSafe -and (Test-InstalledRealPath -Path $path -PathType Container -Root $RuntimeRootAbs)) $path
+}
+$managerDeployTemplate = Join-Path $managerWorkspace 'templates\manager-request.deploy.json'
+$managerTemplates = Join-Path $managerWorkspace 'templates'
+Add-Check '已安装 Manager 部署请求模板' ($managerWorkspaceSafe -and (Test-InstalledRealPath -Path $managerTemplates -PathType Container -Root $RuntimeRootAbs) -and (Test-InstalledRealPath -Path $managerDeployTemplate -PathType Leaf -Root $RuntimeRootAbs) -and (Test-Json $managerDeployTemplate)) $managerDeployTemplate
+$managerRequestSubmission = Join-Path $RuntimeRootAbs 'manager-control\request-submission.mjs'
+$managerControlRoot = Join-Path $RuntimeRootAbs 'manager-control'
+Add-Check '已安装 Manager request-submission 控制模块' ((Test-InstalledRealPath -Path $managerControlRoot -PathType Container -Root $RuntimeRootAbs) -and (Test-InstalledRealPath -Path $managerRequestSubmission -PathType Leaf -Root $RuntimeRootAbs)) $managerRequestSubmission
+$managerAgentsPath = Join-Path $managerWorkspace 'AGENTS.md'
+$managerToolsPath = Join-Path $managerWorkspace 'TOOLS.md'
+$managerProtocolInstalled = $false
+if ($managerWorkspaceSafe -and (Test-InstalledRealPath -Path $managerAgentsPath -PathType Leaf -Root $RuntimeRootAbs) -and (Test-InstalledRealPath -Path $managerToolsPath -PathType Leaf -Root $RuntimeRootAbs)) {
+  $managerAgentsText = Get-Content -Raw -LiteralPath $managerAgentsPath
+  $managerToolsText = Get-Content -Raw -LiteralPath $managerToolsPath
+  $managerProtocolInstalled = $managerAgentsText -match 'orchestrator-validate-request' -and $managerAgentsText -match 'orchestrator-submit-request' -and $managerToolsText -match 'orchestrator-validate-request' -and $managerToolsText -match 'orchestrator-submit-request'
+}
+Add-Check '已安装 Manager 请求预校验协议' $managerProtocolInstalled "$managerAgentsPath, $managerToolsPath"
+
 $runtimeGuard = Join-Path $ProjectRoot 'scripts\runtime-guard.mjs'
 $runtimeGuardTest = Join-Path $ProjectRoot 'tests\runtime-guard.test.mjs'
 if (Get-Command node -ErrorAction SilentlyContinue) {
-  $ajvDir = Join-Path $ProjectRoot 'node_modules\ajv'
-  $ajvFormatsDir = Join-Path $ProjectRoot 'node_modules\ajv-formats'
-  if ((Test-Path -LiteralPath $ajvDir) -and (Test-Path -LiteralPath $ajvFormatsDir)) {
-    $guardOutput = & node $runtimeGuard self-check --project-root $ProjectRoot 2>&1
-    Add-Check 'Runtime Guard contracts/templates 自检' ($LASTEXITCODE -eq 0) ($guardOutput -join "`n")
-    $guardTestOutput = & node --test $runtimeGuardTest 2>&1
-    Add-Check 'Runtime Guard 行为测试' ($LASTEXITCODE -eq 0) (($guardTestOutput -join "`n") | Select-Object -Last 8)
+  $nodeVersionText = (& node --version).Trim().TrimStart('v')
+  $nodeVersionOk = try { [version]$nodeVersionText -ge [version]'22.13.0' } catch { $false }
+  Add-Check 'Node.js 22.13.0+（node:sqlite 必需）' $nodeVersionOk $nodeVersionText
+  if ($nodeVersionOk) {
+    $ajvDir = Join-Path $ProjectRoot 'node_modules\ajv'
+    $ajvFormatsDir = Join-Path $ProjectRoot 'node_modules\ajv-formats'
+    if ((Test-Path -LiteralPath $ajvDir) -and (Test-Path -LiteralPath $ajvFormatsDir)) {
+      $guardOutput = & node $runtimeGuard self-check --project-root $ProjectRoot 2>&1
+      Add-Check 'Runtime Guard contracts/templates 自检' ($LASTEXITCODE -eq 0) ($guardOutput -join "`n")
+      $guardTestOutput = & node --test $runtimeGuardTest 2>&1
+      Add-Check 'Runtime Guard 行为测试' ($LASTEXITCODE -eq 0) (($guardTestOutput -join "`n") | Select-Object -Last 8)
+    } else {
+      Add-Check 'Runtime Guard npm 依赖' $false '请先在项目根目录运行 npm install（需要 ajv 与 ajv-formats）'
+    }
   } else {
-    Add-Check 'Runtime Guard npm 依赖' $false '请先在项目根目录运行 npm install（需要 ajv 与 ajv-formats）'
+    Add-Check 'Runtime Guard 自检' $false 'Node.js 版本过低，无法使用稳定 node:sqlite'
   }
 } else {
-  Add-Check 'Node.js 可用（Runtime Guard 必需）' $false 'OpenClaw 运行环境应提供 Node.js'
+  Add-Check 'Node.js 22.13.0+（node:sqlite 必需）' $false '请安装 Node.js 22.13.0 或更高版本'
 }
 
 $installPs1 = Join-Path $ScriptDir 'install.ps1'
 $dryManifest = Join-Path $ProjectRoot 'artifacts\install-dryrun\install-manifest.dryrun.json'
 $nonProjectCwd = if ($env:SystemRoot -and (Test-Path (Join-Path $env:SystemRoot 'System32'))) { Join-Path $env:SystemRoot 'System32' } else { [System.IO.Path]::GetTempPath() }
 $validationBin = Join-Path ([System.IO.Path]::GetTempPath()) ("openclaw-install-validation-{0}" -f [guid]::NewGuid().Guid)
+$validationConfig = Join-Path $validationBin 'validation-openclaw-config.json'
 $previousPath = $env:PATH
+$previousValidationConfig = [Environment]::GetEnvironmentVariable('VALIDATION_OPENCLAW_CONFIG')
 $pushedLocation = $false
 $installDryRunSucceeded = $false
 try {
   New-Item -ItemType Directory -Force -Path $validationBin | Out-Null
+  Set-Content -LiteralPath $validationConfig -Value '{"agents":{"list":[]}}' -NoNewline
+  $env:VALIDATION_OPENCLAW_CONFIG = $validationConfig
   @'
 #!/usr/bin/env sh
 case "${1:-}" in
   --version) printf 'validation-openclaw 0\n' ;;
-  config) printf '/tmp/validation-openclaw-config.json\n' ;;
+  config) printf '%s\n' "$VALIDATION_OPENCLAW_CONFIG" ;;
   agents) printf 'validation diagnostic before JSON\n' >&2; printf '[]\n' ;;
   *) exit 0 ;;
 esac
 '@ | Set-Content -LiteralPath (Join-Path $validationBin 'openclaw') -NoNewline
-  @'
+  @"
 @echo off
 if "%~1"=="--version" (echo validation-openclaw 0 & exit /b 0)
-if "%~1"=="config" (echo C:\validation-openclaw-config.json & exit /b 0)
+if "%~1"=="config" (echo $validationConfig & exit /b 0)
 if "%~1"=="agents" (1>&2 echo validation diagnostic before JSON & echo [] & exit /b 0)
 exit /b 0
-'@ | Set-Content -LiteralPath (Join-Path $validationBin 'openclaw.cmd') -NoNewline
+"@ | Set-Content -LiteralPath (Join-Path $validationBin 'openclaw.cmd') -NoNewline
   if (-not $IsWindows) {
     & chmod +x (Join-Path $validationBin 'openclaw')
     if ($LASTEXITCODE -ne 0) { throw '无法为验证专用 fake openclaw 添加可执行权限。' }
@@ -115,7 +204,7 @@ exit /b 0
   $env:PATH = "$validationBin$([System.IO.Path]::PathSeparator)$previousPath"
   Push-Location $nonProjectCwd
   $pushedLocation = $true
-  & pwsh -NoProfile -File $installPs1 -RuntimeRoot runtime | Out-Null
+  & pwsh -NoProfile -File $installPs1 -RuntimeRoot $RuntimeRoot | Out-Null
   if ($LASTEXITCODE -ne 0) { throw "install.ps1 dry-run 退出码：$LASTEXITCODE" }
   $installDryRunSucceeded = $true
   Add-Check 'install.ps1 非项目 cwd dry-run 可执行' $true $nonProjectCwd
@@ -124,6 +213,8 @@ exit /b 0
 } finally {
   if ($pushedLocation) { Pop-Location }
   $env:PATH = $previousPath
+  if ($null -eq $previousValidationConfig) { Remove-Item Env:VALIDATION_OPENCLAW_CONFIG -ErrorAction SilentlyContinue }
+  else { $env:VALIDATION_OPENCLAW_CONFIG = $previousValidationConfig }
   if (Test-Path -LiteralPath $validationBin) { Remove-Item -LiteralPath $validationBin -Recurse -Force }
 }
 
@@ -140,6 +231,11 @@ if ($installDryRunSucceeded -and (Test-Path -LiteralPath $dryManifest)) {
     }
   }
   Add-Check 'dry-run package/source/runtime 路径全为绝对路径' $allAbsolute
+  $modelLimitsMatch = @($manifest.agents | Where-Object {
+    [int64]$_.context_window_tokens -ne 200000 -or [int64]$_.max_output_tokens -ne 32000 -or [string]$_.max_tokens_field -ne 'max_output_tokens'
+  }).Count -eq 0
+  Add-Check 'dry-run 模型限制为 200k context / 32k output' $modelLimitsMatch
+  Add-Check 'dry-run 不修改 artifact ACL' (-not [bool]$manifest.artifact_access_control.applied) ([string]$manifest.artifact_access_control.mode)
   if ($Packages.Count -gt 0) {
     $manager = Get-ManagerPackage $Packages
     $managerManifest = @($manifest.agents | Where-Object id -eq $manager.id)[0]
@@ -210,6 +306,13 @@ Add-Check '运行时 Prompt 不依赖旧 Python 控制面' ($badLegacy.Count -eq
 
 if (-not $SkipOpenClaw) {
   if (Get-Command openclaw -ErrorAction SilentlyContinue) {
+    try {
+      $installedAgentsOut = & openclaw config get agents.list --json 2>&1
+      if ($LASTEXITCODE -ne 0) { throw ($installedAgentsOut -join "`n") }
+      Add-InstalledTestAgentSandboxChecks @(ConvertFrom-OpenClawJsonOutput -Output ($installedAgentsOut -join "`n") -Description '已安装 agents.list 输出') $testSandboxEnabled
+    } catch {
+      Add-InstalledTestAgentSandboxChecks @() $testSandboxEnabled $_.Exception.Message
+    }
     $validateOut = & openclaw config validate --json 2>&1
     Add-Check 'openclaw config validate --json' ($LASTEXITCODE -eq 0) ($validateOut -join "`n")
     $skillOut = & openclaw skills info skill-creator --agent (Get-ManagerPackage $Packages).id --json 2>&1

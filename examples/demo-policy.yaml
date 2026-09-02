@@ -46,13 +46,11 @@ command_boundaries:
   allow_service_control: false            # 服务启停：默认禁止
   allow_registry_or_scheduled_tasks: false # 注册表 / 计划任务：默认禁止
 
-# ---- 测试隔离（强制轻量级 Docker sandbox）----
+# ---- 测试隔离（本阶段无沙箱）----
 testing:
-  isolation_mode: SANDBOXED_DOCKER        # 新 test-agent run 固定值
-  require_sandbox: true                   # 沙箱不可用即阻断
-  require_isolation_disclosure: true      # 必须记录真实 sandbox attestation
-  allow_host_fallback: false              # 禁止宿主机回退
-  sandbox_policy_path: config/test-sandbox-policy.json
+  isolation_mode: UNSANDBOXED_LOCAL       # 本阶段固定值；不启用 sandbox
+  require_sandbox: false                  # 不以 sandbox 为前置
+  require_isolation_disclosure: true      # 必须披露无沙箱风险，不得声称“已完全隔离”
 
 # ---- Git（本地 only）----
 git:

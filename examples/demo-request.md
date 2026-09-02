@@ -33,7 +33,7 @@
 - **不做**真实部署 / 发布 / CI-CD 接入 / 服务启停 / 生产迁移（本阶段止于运维前交付）。
 - 不修改与本子命令无关的既有功能与公共接口；如需变更公共 API 或数据格式，请先提审批。
 - 测试命令**只能**来自本项目自身的 build / package 配置，或我在项目配置中显式给出的命令；**不要凭语言猜一个通用命令**。工具缺失时请标 `BLOCKED` / `UNKNOWN`，不要假装执行。
-- 新 test-agent run **强制使用轻量级 Docker sandbox**（`isolation_mode = SANDBOXED_DOCKER`）；沙箱、动态挂载或 attestation 不可用时必须 `BLOCKED`，禁止宿主机回退。
+- 本阶段测试**无沙箱**（`isolation_mode = UNSANDBOXED_LOCAL`），请在测试报告中如实披露该风险，不要声称“已完全隔离”。
 - 所有改动形成**真实本地 Git commit**；不要执行破坏性 Git 命令（如 `git reset --hard`、`git clean -fdx`）。
 
 ## 验收期望（Acceptance Expectations）
@@ -51,7 +51,7 @@
 
 - 目标仓库 worktree 内的真实 commit（含实现与测试）。
 - 结构化结果与人类可读报告（需求 / 开发 / 评审 / 测试 / 发布就绪各阶段产物按流程生成）。
-- 明确的 UNKNOWN / 风险 / 限制列表（含 sandbox attestation、Docker Engine 和真实 E2E 验证状态）。
+- 明确的 UNKNOWN / 风险 / 限制列表（含 `UNSANDBOXED_LOCAL` 披露）。
 
 ## 备注
 

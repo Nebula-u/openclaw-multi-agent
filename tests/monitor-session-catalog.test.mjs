@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import test from 'node:test';
 import { createSessionCatalog } from '../monitor/session-catalog.mjs';
 
-test('session catalog includes package and persisted agents and exposes only safe dialogue', async () => {
+test('session catalog includes package and persisted agents but exposes only redacted user-visible dialogue', async () => {
   const root = await mkdtemp(join(tmpdir(), 'monitor-sessions-'));
   try {
     const project = join(root, 'project');
@@ -23,10 +23,9 @@ test('session catalog includes package and persisted agents and exposes only saf
       JSON.stringify({ type: 'message', timestamp: '2026-08-01T00:00:01Z', message: { role: 'assistant', content: [
         { type: 'thinking', thinking: 'private chain' }, { type: 'text', text: '安全答复' }, { type: 'toolCall', name: 'exec', arguments: { password: 'x' } },
       ] } }),
-      JSON.stringify({ type: 'message', message: { role: 'toolResult', content: [{ type: 'text', text: 'private result' }] } }),
+      JSON.stringify({ type: 'message', message: { role: 'toolResult', content: 'private result' } }),
       JSON.stringify({ type: 'message', message: { role: 'system', content: 'private prompt' } }),
     ].join('\n'));
-
     const catalog = createSessionCatalog({ sessionRoot: sessions, projectRoot: project });
     assert.deepEqual(catalog.agents().map((item) => item.agent_id), ['idle-agent', 'worker-agent']);
     assert.equal(catalog.sessions('idle-agent').length, 0);

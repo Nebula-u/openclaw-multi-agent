@@ -64,6 +64,98 @@ function Test-ProjectEnvironmentKey {
   return (($null -ne $processValue -and $processValue -ne '') -or ($DotEnv.ContainsKey($Name) -and [string]$DotEnv[$Name] -ne ''))
 }
 
+function Get-TestSandboxEnabled {
+  param([Parameter(Mandatory)][hashtable]$DotEnv)
+  $value = (Get-ProjectEnvironmentValue -DotEnv $DotEnv -Name 'OPENCLAW_TEST_SANDBOX_ENABLED' -Default 'true').Trim().ToLowerInvariant()
+  if ($value -in @('true','1','yes','on')) { return $true }
+  if ($value -in @('false','0','no','off')) { return $false }
+  throw 'OPENCLAW_TEST_SANDBOX_ENABLED 必须为 true 或 false。'
+}
+
+function Set-DirectoryDaclOnly {
+  param(
+    [Parameter(Mandatory)][string]$Path,
+    [Parameter(Mandatory)][System.Security.AccessControl.DirectorySecurity]$Acl
+  )
+  # Set-Acl can request the SACL security-information bit in PowerShell 7 on
+  # Windows, even when its input changed only Access rules.  Calling
+  # SetNamedSecurityInfo with DACL_SECURITY_INFORMATION explicitly prevents
+  # that privilege escalation and leaves owner, group and SACL untouched.
+  if ($null -eq ('OpenClaw.NativeArtifactAcl' -as [type])) {
+    Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+namespace OpenClaw {
+  public static class NativeArtifactAcl {
+    [DllImport("advapi32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    public static extern uint SetNamedSecurityInfo(
+      string objectName, int objectType, uint securityInformation,
+      IntPtr owner, IntPtr group, IntPtr dacl, IntPtr sacl);
+  }
+}
+'@ -ErrorAction Stop
+  }
+  $descriptor = New-Object System.Security.AccessControl.RawSecurityDescriptor($Acl.GetSecurityDescriptorBinaryForm(), 0)
+  if ($null -eq $descriptor.DiscretionaryAcl) { throw "artifact 目录没有可写入的 DACL：$Path" }
+  $daclBytes = New-Object byte[] $descriptor.DiscretionaryAcl.BinaryLength
+  $descriptor.DiscretionaryAcl.GetBinaryForm($daclBytes, 0)
+  $daclPointer = [System.Runtime.InteropServices.Marshal]::AllocHGlobal($daclBytes.Length)
+  try {
+    [System.Runtime.InteropServices.Marshal]::Copy($daclBytes, 0, $daclPointer, $daclBytes.Length)
+    # DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION.
+    $securityInformation = [Convert]::ToUInt32('80000004', 16)
+    $result = [OpenClaw.NativeArtifactAcl]::SetNamedSecurityInfo($Path, 1, $securityInformation, [IntPtr]::Zero, [IntPtr]::Zero, $daclPointer, [IntPtr]::Zero)
+    if ($result -ne 0) { throw (New-Object ComponentModel.Win32Exception([int]$result)) }
+  } finally {
+    [System.Runtime.InteropServices.Marshal]::FreeHGlobal($daclPointer)
+  }
+}
+
+function Set-RawArtifactAccessControl {
+  param([Parameter(Mandatory)][string]$Path)
+  $pathAbs = Get-NormalizedPath $Path
+  if (-not (Test-Path -LiteralPath $pathAbs -PathType Container)) { throw "artifact 目录不存在：$pathAbs" }
+  if (-not $IsWindows) {
+    & chmod 700 $pathAbs
+    if ($LASTEXITCODE -ne 0) { throw "无法为 artifact 目录设置 0700：$pathAbs" }
+    $mode = [System.IO.File]::GetUnixFileMode($pathAbs)
+    $expected = [System.IO.UnixFileMode]::UserRead -bor [System.IO.UnixFileMode]::UserWrite -bor [System.IO.UnixFileMode]::UserExecute
+    if ($mode -ne $expected) { throw "artifact 目录权限不是 0700：$pathAbs ($mode)" }
+    return [pscustomobject]@{ platform = 'unix'; protected = $true; mode = '0700'; path_abs = $pathAbs }
+  }
+
+  # Start with the existing descriptor so ownership and audit configuration
+  # stay intact while only this directory's access rules are replaced.
+  $acl = Get-Acl -LiteralPath $pathAbs
+  $acl.SetAccessRuleProtection($true, $false)
+  $inheritance = [System.Security.AccessControl.InheritanceFlags]::ContainerInherit -bor [System.Security.AccessControl.InheritanceFlags]::ObjectInherit
+  $propagation = [System.Security.AccessControl.PropagationFlags]::None
+  $allow = [System.Security.AccessControl.AccessControlType]::Allow
+  $currentSid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
+  $existingSids = @($acl.Access | ForEach-Object {
+    $_.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value
+  } | Sort-Object -Unique)
+  foreach ($sidValue in $existingSids) {
+    $acl.PurgeAccessRules((New-Object System.Security.Principal.SecurityIdentifier($sidValue)))
+  }
+  foreach ($entry in @(
+    @($currentSid, [System.Security.AccessControl.FileSystemRights]::FullControl),
+    @((New-Object System.Security.Principal.SecurityIdentifier([System.Security.Principal.WellKnownSidType]::LocalSystemSid, $null)), [System.Security.AccessControl.FileSystemRights]::FullControl),
+    @((New-Object System.Security.Principal.SecurityIdentifier([System.Security.Principal.WellKnownSidType]::BuiltinAdministratorsSid, $null)), [System.Security.AccessControl.FileSystemRights]::FullControl)
+  )) {
+    $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($entry[0], $entry[1], $inheritance, $propagation, $allow)))
+  }
+  Set-DirectoryDaclOnly -Path $pathAbs -Acl $acl
+  $effective = Get-Acl -LiteralPath $pathAbs
+  if (-not $effective.AreAccessRulesProtected) { throw "artifact 目录 DACL 未受保护：$pathAbs" }
+  $currentRule = @($effective.Access | Where-Object {
+    $_.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value -eq $currentSid.Value -and
+    $_.AccessControlType -eq $allow -and ($_.FileSystemRights -band [System.Security.AccessControl.FileSystemRights]::Modify)
+  })
+  if ($currentRule.Count -eq 0) { throw "artifact 目录缺少当前用户写权限：$pathAbs" }
+  return [pscustomobject]@{ platform = 'windows'; protected = $true; mode = 'protected-dacl'; path_abs = $pathAbs }
+}
+
 function ConvertFrom-OpenClawJsonOutput {
   param(
     [Parameter(Mandatory)][AllowEmptyString()][string]$Output,
@@ -127,6 +219,7 @@ function Get-AgentPackages {
 
   $modelOverrides = $null
   $dotEnv = Read-DotEnv -ProjectRoot $projectAbs
+  $testSandboxEnabled = Get-TestSandboxEnabled -DotEnv $dotEnv
   if ($ModelConfig) {
     $modelPath = if ([System.IO.Path]::IsPathRooted($ModelConfig)) {
       Get-NormalizedPath $ModelConfig
@@ -180,44 +273,58 @@ function Get-AgentPackages {
     }
 
     $model = if ($m.PSObject.Properties.Name -contains 'model') { [string]$m.model } else { '' }
-    $envModelKey = 'OPENCLAW_AGENT_' + $id.Replace('-', '_').ToUpperInvariant() + '_MODEL'
+    $agentOverride = $null
     if ($modelOverrides -and $modelOverrides.PSObject.Properties.Name -contains 'agents') {
       $agentProperty = $modelOverrides.agents.PSObject.Properties[$id]
-      if ($agentProperty -and $agentProperty.Value -and $agentProperty.Value.PSObject.Properties.Name -contains 'model') {
-        $override = [string]$agentProperty.Value.model
+      if ($agentProperty -and $agentProperty.Value) {
+        $agentOverride = $agentProperty.Value
+      }
+      if ($agentOverride -and $agentOverride.PSObject.Properties.Name -contains 'model') {
+        $override = [string]$agentOverride.model
         if ($override) { $model = $override }
       }
     }
-    $processModel = [Environment]::GetEnvironmentVariable($envModelKey)
-    $fileModel = if ($dotEnv.ContainsKey($envModelKey)) { [string]$dotEnv[$envModelKey] } else { '' }
-    $globalProcessModel = [Environment]::GetEnvironmentVariable('OPENCLAW_LLM_MODEL')
-    $globalFileModel = if ($dotEnv.ContainsKey('OPENCLAW_LLM_MODEL')) { [string]$dotEnv.OPENCLAW_LLM_MODEL } else { '' }
-    if ($processModel) { $model = $processModel }
-    elseif ($fileModel) { $model = $fileModel }
-    elseif ($globalProcessModel) { $model = $globalProcessModel }
-    elseif ($globalFileModel) { $model = $globalFileModel }
 
     $agentPrefix = 'OPENCLAW_AGENT_' + $id.Replace('-', '_').ToUpperInvariant() + '_'
     $provider = Get-ProjectEnvironmentValue -DotEnv $dotEnv -Name ($agentPrefix + 'PROVIDER') -Default (Get-ProjectEnvironmentValue -DotEnv $dotEnv -Name 'OPENCLAW_LLM_PROVIDER')
-    if ($model -match '/') { $provider = $model.Split('/', 2)[0] }
+    $modelProvider = ''
+    if ($model -match '^([^/]+)/(.+)$') { $modelProvider = [string]$Matches[1]; $provider = $modelProvider }
+    if ($agentOverride -and $agentOverride.PSObject.Properties.Name -contains 'provider' -and [string]$agentOverride.provider) { $provider = [string]$agentOverride.provider }
+    if ($modelProvider -and $provider -ne $modelProvider) { throw "Agent '$id' 的 provider '$provider' 与模型引用 '$model' 不一致。" }
     $providerPrefix = if ($provider) { 'OPENCLAW_PROVIDER_' + $provider.Replace('-', '_').ToUpperInvariant() + '_' } else { '' }
     $api = Get-ProjectEnvironmentValue -DotEnv $dotEnv -Name ($agentPrefix + 'API') -Default (Get-ProjectEnvironmentValue -DotEnv $dotEnv -Name ($providerPrefix + 'API') -Default (Get-ProjectEnvironmentValue -DotEnv $dotEnv -Name 'OPENCLAW_LLM_API' -Default 'openai-completions'))
     $baseUrl = Get-ProjectEnvironmentValue -DotEnv $dotEnv -Name ($agentPrefix + 'BASE_URL') -Default (Get-ProjectEnvironmentValue -DotEnv $dotEnv -Name ($providerPrefix + 'BASE_URL') -Default (Get-ProjectEnvironmentValue -DotEnv $dotEnv -Name 'OPENCLAW_LLM_BASE_URL' -Default 'https://api.openai.com/v1'))
-    $contextWindowTokens = [int64](Get-ProjectEnvironmentValue -DotEnv $dotEnv -Name ($agentPrefix + 'CONTEXT_WINDOW_TOKENS') -Default (Get-ProjectEnvironmentValue -DotEnv $dotEnv -Name 'OPENCLAW_LLM_CONTEXT_WINDOW_TOKENS' -Default '128000'))
-    $maxOutputTokens = [int64](Get-ProjectEnvironmentValue -DotEnv $dotEnv -Name ($agentPrefix + 'MAX_OUTPUT_TOKENS') -Default (Get-ProjectEnvironmentValue -DotEnv $dotEnv -Name 'OPENCLAW_LLM_MAX_OUTPUT_TOKENS' -Default '49152'))
-    $maxTokensField = Get-ProjectEnvironmentValue -DotEnv $dotEnv -Name ($agentPrefix + 'MAX_TOKENS_FIELD') -Default (Get-ProjectEnvironmentValue -DotEnv $dotEnv -Name 'OPENCLAW_LLM_MAX_TOKENS_FIELD' -Default 'max_completion_tokens')
-    if ($contextWindowTokens -le 0 -or $maxOutputTokens -le 0) { throw "Agent '$id' 的 context/max output 必须为正整数。" }
+    $contextWindowTokens = [int64](Get-ProjectEnvironmentValue -DotEnv $dotEnv -Name ($agentPrefix + 'CONTEXT_WINDOW_TOKENS') -Default (Get-ProjectEnvironmentValue -DotEnv $dotEnv -Name 'OPENCLAW_LLM_CONTEXT_WINDOW_TOKENS' -Default '200000'))
+    $maxOutputTokens = [int64](Get-ProjectEnvironmentValue -DotEnv $dotEnv -Name ($agentPrefix + 'MAX_OUTPUT_TOKENS') -Default (Get-ProjectEnvironmentValue -DotEnv $dotEnv -Name 'OPENCLAW_LLM_MAX_OUTPUT_TOKENS' -Default '32000'))
+    $maxTokensField = Get-ProjectEnvironmentValue -DotEnv $dotEnv -Name ($agentPrefix + 'MAX_TOKENS_FIELD') -Default (Get-ProjectEnvironmentValue -DotEnv $dotEnv -Name 'OPENCLAW_LLM_MAX_TOKENS_FIELD' -Default 'max_output_tokens')
+    foreach ($propertyName in @('api','base_url','context_window_tokens','max_output_tokens','max_tokens_field')) {
+      if ($agentOverride -and $agentOverride.PSObject.Properties.Name -contains $propertyName -and $null -ne $agentOverride.$propertyName -and [string]$agentOverride.$propertyName -ne '') {
+        switch ($propertyName) {
+          'api' { $api = [string]$agentOverride.api }
+          'base_url' { $baseUrl = [string]$agentOverride.base_url }
+          'context_window_tokens' { $contextWindowTokens = [int64]$agentOverride.context_window_tokens }
+          'max_output_tokens' { $maxOutputTokens = [int64]$agentOverride.max_output_tokens }
+          'max_tokens_field' { $maxTokensField = [string]$agentOverride.max_tokens_field }
+        }
+      }
+    }
+    if ($contextWindowTokens -le 0 -or $contextWindowTokens -gt 200000) { throw "Agent '$id' 的 context window 必须是 1..200000 的整数。" }
+    if ($maxOutputTokens -le 0 -or $maxOutputTokens -gt $contextWindowTokens) { throw "Agent '$id' 的 max output 必须是正整数且不超过 context window。" }
+    if ([string]::IsNullOrWhiteSpace($maxTokensField)) { throw "Agent '$id' 的 max_tokens_field 不能为空。" }
     $qualifiedModel = $model -match '/'
     $globalTransport = (-not $qualifiedModel) -or ($provider -eq 'openai')
-    $apiExplicit = (Test-ProjectEnvironmentKey -DotEnv $dotEnv -Name ($agentPrefix + 'API')) -or (($providerPrefix) -and (Test-ProjectEnvironmentKey -DotEnv $dotEnv -Name ($providerPrefix + 'API'))) -or ($globalTransport -and (Test-ProjectEnvironmentKey -DotEnv $dotEnv -Name 'OPENCLAW_LLM_API'))
-    $baseUrlExplicit = (Test-ProjectEnvironmentKey -DotEnv $dotEnv -Name ($agentPrefix + 'BASE_URL')) -or (($providerPrefix) -and (Test-ProjectEnvironmentKey -DotEnv $dotEnv -Name ($providerPrefix + 'BASE_URL'))) -or ($globalTransport -and (Test-ProjectEnvironmentKey -DotEnv $dotEnv -Name 'OPENCLAW_LLM_BASE_URL'))
+    $apiExplicit = (Test-ProjectEnvironmentKey -DotEnv $dotEnv -Name ($agentPrefix + 'API')) -or (($providerPrefix) -and (Test-ProjectEnvironmentKey -DotEnv $dotEnv -Name ($providerPrefix + 'API'))) -or ($globalTransport -and (Test-ProjectEnvironmentKey -DotEnv $dotEnv -Name 'OPENCLAW_LLM_API')) -or ($agentOverride -and $agentOverride.PSObject.Properties.Name -contains 'api')
+    $baseUrlExplicit = (Test-ProjectEnvironmentKey -DotEnv $dotEnv -Name ($agentPrefix + 'BASE_URL')) -or (($providerPrefix) -and (Test-ProjectEnvironmentKey -DotEnv $dotEnv -Name ($providerPrefix + 'BASE_URL'))) -or ($globalTransport -and (Test-ProjectEnvironmentKey -DotEnv $dotEnv -Name 'OPENCLAW_LLM_BASE_URL')) -or ($agentOverride -and $agentOverride.PSObject.Properties.Name -contains 'base_url')
 
     $sandbox = $null
     if ($m.PSObject.Properties.Name -contains 'sandbox_mode' -and $null -ne $m.sandbox_mode) { $sandbox = [string]$m.sandbox_mode }
-    $sandboxConfig = $null
-    if ($m.PSObject.Properties.Name -contains 'sandbox_config' -and $null -ne $m.sandbox_config) { $sandboxConfig = $m.sandbox_config }
-    $toolsConfig = $null
-    if ($m.PSObject.Properties.Name -contains 'tools_config' -and $null -ne $m.tools_config) { $toolsConfig = $m.tools_config }
+    $sandboxConfig = if ($m.PSObject.Properties.Name -contains 'sandbox_config') { $m.sandbox_config } else { $null }
+    $toolsConfig = if ($m.PSObject.Properties.Name -contains 'tools_config') { $m.tools_config } else { $null }
+    if ($id -eq 'test-agent' -and -not $testSandboxEnabled) {
+      $sandbox = 'off'
+      $sandboxConfig = [ordered]@{ mode = 'off' }
+      $toolsConfig = [ordered]@{ exec = [ordered]@{ host = 'gateway' }; elevated = [ordered]@{ enabled = $false } }
+    }
     $skills = @()
     if ($m.PSObject.Properties.Name -contains 'skills') { $skills = @($m.skills | ForEach-Object { [string]$_ }) }
 

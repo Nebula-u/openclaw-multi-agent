@@ -1,20 +1,17 @@
 # CONTEXT_PROTOCOL.md — 上下文与规则传递协议
 
-> 版本: context-protocol v1
-> manager-agent 是本协议的执行者；工作 Agent 是消费者。
+> 版本: context-protocol v2
+> Orchestrator dispatch 是本协议的执行者；工作 Agent 是只读消费者。
 
 ## 1. 任务上下文包结构
 
-manager-agent 在每次派发前，于 `<artifact_root_abs>/input/` 创建完整上下文包：
+Orchestrator 在每次派发前，于 `<artifact_root_abs>/input/` 创建不可变上下文包：
 
 ```
 <ABS_ARTIFACT_RUN_ROOT>/input/
 ├── task.json                 # 任务定义（见 contracts/task.schema.json）
 ├── context.md                # 人类可读上下文（见下）
 ├── rules.md                  # 角色规则 + 任务规则（见下）
-├── acceptance-criteria.json  # 相关验收标准
-├── approved-decisions.json   # 已批准的人工决策
-├── source-manifest.json      # 相关源文件清单（路径+哈希，只读引用）
 └── context-manifest.json     # 机器可读清单（见 contracts/context-manifest.schema.json）
 ```
 
@@ -22,14 +19,9 @@ manager-agent 在每次派发前，于 `<artifact_root_abs>/input/` 创建完整
 
 - workflow 摘要 / 当前阶段 / 当前任务目标
 - 明确范围与非范围
-- 已批准的需求摘要
-- 与本任务相关的架构摘要
-- 当前候选 commit
-- 前序 Agent 结论摘要
-- 已知风险与未解决问题
-- 要求产生的输出
+- 当前候选 commit、已知风险与未解决问题（可用时）
 - 允许修改的绝对路径 / 禁止修改的路径
-- 需要执行的验证
+- 需要执行的验证与当前阶段 Gate
 
 所有上下文摘要必须区分 `OBSERVED` / `INFERRED` / `PROPOSED` / `UNKNOWN`。
 
@@ -43,17 +35,17 @@ manager-agent 在每次派发前，于 `<artifact_root_abs>/input/` 创建完整
 
 ## 4. `context-manifest.json` 必含字段
 
-`schema_version`、`workflow_id`、`task_id`、`run_id`、`assigned_agent`、`created_at`、`manager_session_reference`、`target_project_root_abs`、`worktree_path_abs`、`artifact_root_abs`、`input_files`（含各文件 SHA-256）、`rule_version`、`rule_hash`、`input_commit`、`expected_output_paths_abs`。
+`schema_version`、`workflow_id`、`task_id`、`run_id`、`assigned_agent`、`attempt`、`created_at`、`target_project_root_abs`、`worktree_path_abs`、`artifact_root_abs`、`input_files`（含各文件 SHA-256）、`rule_version`、`rule_hash`、`input_commit`、`expected_output_paths_abs`。
 
 ## 5. 上下文传递规则（硬性）
 
 1. **不**向工作 Agent 复制完整用户聊天历史。
 2. **不**要求工作 Agent 读取 manager 的私有会话历史。
-3. 派发消息只提供：任务摘要、`dispatch_id`、input manifest SHA-256、绝对 `context-manifest.json` 路径、绝对 `task.json` 路径、绝对输出目录 + 绝对 worktree 路径。
+3. 派发消息只提供：任务摘要、`dispatch_id`、input manifest SHA-256、绝对 `context-manifest.json` 路径、绝对输出目录 + 绝对 worktree 路径。
 4. 工作 Agent **先读取并校验**上下文包，再开始工作。
 5. 上下文不足 → 只返回缺失项，不自行扩大范围。
-6. manager 更新规则后，**不篡改**已派发任务的 input；必须创建新 attempt + 新 run_id + 新规则快照。
-7. manager 每阶段结束更新 `context-summary.md`，只保留后续阶段真正需要的事实/决策/限制/证据引用。
+6. 规则更新后，**不篡改**已派发任务的 input；Orchestrator 必须创建新 attempt + 新 run_id + 新规则快照。
+7. Control Kernel 只保存后续阶段需要的事实、决策、限制与证据引用；原始日志留在本 run artifact，代码版本留在 Git snapshot。
 8. 最小充分原则：只传递完成当前任务所必需的上下文。
 9. Monitor endpoint 只通过运行环境提供；上下文包可以声明“activity enabled”，但不得包含
    `MONITOR_TOKEN` 或其他凭据。
@@ -61,14 +53,21 @@ manager-agent 在每次派发前，于 `<artifact_root_abs>/input/` 创建完整
 ## 7. Dispatch 启动与完成确认
 
 1. 工作 Agent 启动后，先比对派发消息中的 `dispatch_id`、workflow/task/run/agent ID 与 `context-manifest.json`，并计算/核对 input manifest SHA-256；不一致即 `BLOCKED`，不写产物、不开始工作。
-2. 校验完成后向 manager-agent 发送简短启动确认，明确 `dispatch_id` 与已核对的 manifest SHA-256；该确认是消息信号，Manager 才能将其持久化为 `ACKNOWLEDGED` / `RUNNING` receipt，Agent 不得自行修改 dispatch ledger。
-3. 先完整落盘并自检所有结构化结果、报告、日志、校验和与（适用时）Git commit，再发送完成通知。完成消息必须包含 `dispatch_id`、result 路径、result SHA-256 与真实结果状态；消息本身不代表完成事实。
-4. 若 Manager 明确通知当前 run 已 superseded、取消或终结，立即停止新增写入并如实报告；不得调度其他 Agent 或自行重试。
+2. 校验完成后开始当前任务；启动状态由 runner 的真实进程事实记录，Agent 不发送会改变状态的 ACK。
+3. 先完整落盘所有结构化原文、报告、日志、校验和与（适用时）Git commit；进程退出后由 Orchestrator 校验结果并创建快照，Agent 自述不代表完成事实。
+4. 若 runner 终止当前 run，立即停止新增写入并如实退出；不得调度其他 Agent或自行重试。
 
 ## 6. 工作 Agent 侧消费步骤
 
 1. 用派发消息给的绝对路径读取 `context-manifest.json`。
 2. 逐一校验（见 COMMON_RULES 第 2 节）。
-3. 读取 `context.md` / `rules.md` / `task.json` / `acceptance-criteria.json` / `approved-decisions.json` / `source-manifest.json`。
+3. 读取 manifest 声明的 `context.md` / `rules.md` / `task.json` 与规则快照；不得要求未在 manifest 中声明的模板文件。
 4. 若发现哈希不一致、路径非法或 `assigned_agent` 不匹配 → `BLOCKED`。
 5. 开始工作，只在允许范围内读写。
+
+## 8. Result 产物与同一 Session JSON 重生成
+
+1. 首次写入 `result.schema.json` 前必须逐项核对契约必填字段；`artifact_manifest_hash` 必须逐字复制派发消息中的 `context_manifest_sha256`，为 64 位小写十六进制字符串。
+2. 若 Orchestrator 返回 `JSON_REWRITE_REQUEST`，这是同一 Session 内的 JSON 重生成，不是新的任务 attempt。只能依据提示中列出的缺失字段、类型、枚举或格式错误生成一个完整 JSON，不得重新执行任务、调用工具、修改 worktree、运行命令、重新测试、创建提交、重新收集证据或改变既有事实与审批结论。
+3. JSON 重生成时只在最终回复中返回一个完整 JSON 对象，不自行写文件；Orchestrator 从 OpenClaw JSON stdout 提取最终回复并原子覆盖本次暂存 result。不得返回 JSON Patch、Markdown、解释、确认文本或多个候选对象。
+4. 同一 Session JSON 重生成最多两次；是否接受、是否进入新的完整任务 attempt 由 Orchestrator 决定，Agent 不自行重试或调度。

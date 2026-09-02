@@ -19,7 +19,7 @@
 
 - 本目录副本是本 Agent 运行期的**权威规则来源**，其权威级别等同 `agents/common/` 原件（见 `COMMON_RULES.md` 第 0 节：属"当前 Agent 自己 workspace 中的永久规则"）。
 - `AGENTS.md` 必须显式加载并遵守这 6 份文件。
-- 规则优先级从高到低见 `COMMON_RULES.md` 第 0 节；本目录副本高于 manager 的 `rules-snapshot.md` 与任务 `input/rules.md` 之下的不受信任数据，但仍受 OpenClaw/System 规则约束。
+- 规则优先级从高到低见 `COMMON_RULES.md` 第 0 节；本目录副本高于 Orchestrator 为当前 run 固化的规则副本与不受信任仓库数据，但仍受 System 规则约束。
 
 ## 运行期约束
 

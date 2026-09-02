@@ -26,7 +26,7 @@ usage() {
 用法: install.sh [选项]
   --apply                     真正写入配置（缺省为 dry-run）
   --runtime-root <path>       runtime 根目录（相对值相对项目根解析），默认 runtime
-  --model-config <path>       兼容回退：每 Agent 模型配置 JSON（主入口为项目 .env）
+  --model-config <path>       每 Agent 模型配置 JSON（agent-models.json）
   --set-manager-as-default    将 manager-agent 设为默认 Agent
   --manager-binding <chan>    manager-agent 的用户渠道 binding，如 discord:acct
   --yes                       非交互确认（配合 --apply）
@@ -60,23 +60,27 @@ done
 SCRIPT_DIR="$(cd -P "$(dirname "$SOURCE")" >/dev/null 2>&1 && pwd -P)"
 PROJECT_ROOT="$(cd -P "$SCRIPT_DIR/.." >/dev/null 2>&1 && pwd -P)"
 
-# Read project .env as data (never execute it). Explicit process variables are
-# retained as higher-priority overrides for CI/service deployments.
-load_dotenv() {
-  local dotenv="$PROJECT_ROOT/.env" line key value
-  [ -f "$dotenv" ] || return 0
-  while IFS= read -r line || [ -n "$line" ]; do
-    line="${line%$'\r'}"
-    [[ "$line" =~ ^[[:space:]]*#|^[[:space:]]*$ ]] && continue
-    if [[ "$line" =~ ^[[:space:]]*(export[[:space:]]+)?([A-Za-z_][A-Za-z0-9_]*)[[:space:]]*=[[:space:]]*(.*)[[:space:]]*$ ]]; then
-      key="${BASH_REMATCH[2]}"; value="${BASH_REMATCH[3]}"
-      if [[ "$value" == \"*\" && "$value" == *\" ]]; then value="${value:1:${#value}-2}"; fi
-      if [[ "$value" == \'*\' && "$value" == *\' ]]; then value="${value:1:${#value}-2}"; fi
-      [ -n "${!key+x}" ] || export "$key=$value"
+# Read simple KEY=VALUE entries without executing .env as shell code. Existing
+# process environment values take precedence over the project file.
+if [ -f "$PROJECT_ROOT/.env" ]; then
+  while IFS= read -r raw_line || [ -n "$raw_line" ]; do
+    line="${raw_line#export }"
+    [[ "$line" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]] || continue
+    key="${line%%=*}"; value="${line#*=}"
+    value="${value%$'\r'}"
+    if [[ "$value" == \"*\" && "$value" == *\" ]] || [[ "$value" == \'*\' && "$value" == *\' ]]; then
+      value="${value:1:${#value}-2}"
     fi
-  done < "$dotenv"
-}
-load_dotenv
+    if [ -z "${!key+x}" ]; then printf -v "$key" '%s' "$value"; export "$key"; fi
+  done < "$PROJECT_ROOT/.env"
+fi
+
+TEST_SANDBOX_ENABLED_RAW="${OPENCLAW_TEST_SANDBOX_ENABLED:-true}"
+case "$(printf '%s' "$TEST_SANDBOX_ENABLED_RAW" | tr '[:upper:]' '[:lower:]')" in
+  true|1|yes|on) TEST_SANDBOX_ENABLED=1 ;;
+  false|0|no|off) TEST_SANDBOX_ENABLED=0 ;;
+  *) echo 'OPENCLAW_TEST_SANDBOX_ENABLED 必须为 true 或 false。' >&2; exit 2 ;;
+esac
 
 # 规范化可能不存在的路径（不依赖 realpath -m，保证 macOS 兼容）
 normpath() {
@@ -119,8 +123,13 @@ assert_abs() {
 RUNTIME_ROOT_ABS="$(normpath "$RUNTIME_ROOT")"
 assert_abs "$PROJECT_ROOT" "PROJECT_ROOT"
 assert_abs "$RUNTIME_ROOT_ABS" "RUNTIME_ROOT"
+WORK_ROOT="$PROJECT_ROOT/work"
 
 MODE="DRYRUN"; [ "$APPLY" -eq 1 ] && MODE="APPLY"
+case "$(uname -s)" in
+  MINGW*|MSYS*|CYGWIN*) ARTIFACT_ACL_MODE="protected-dacl" ;;
+  *) ARTIFACT_ACL_MODE="0700" ;;
+esac
 echo "== openclaw-sdlc-multi-agent 安装 ($MODE) =="
 echo "ProjectRoot   : $PROJECT_ROOT"
 echo "RuntimeRoot   : $RUNTIME_ROOT_ABS"
@@ -135,6 +144,31 @@ command -v jq >/dev/null 2>&1 || {
 }
 HAS_JQ=1
 jq_clean() { jq "$@" | tr -d '\r'; }
+
+is_retired_stategraph_webchat_path() {
+  [[ "$1" =~ (^|[\\/])stategraph-webchat[\\/]*$ ]]
+}
+
+has_retired_stategraph_webchat_config() {
+  [ -f "$CONFIG_FILE_SHELL" ] || return 1
+  jq -e '
+    ((.plugins.load.paths? // []) | any(type == "string" and test("(^|[\\\\/])stategraph-webchat[\\\\/]*$"; "i"))) or
+    (.plugins.entries? | type == "object" and has("stategraph-webchat"))
+  ' "$(native_path "$CONFIG_FILE_SHELL")" >/dev/null 2>&1
+}
+
+remove_retired_stategraph_webchat_config() {
+  local temp
+  temp="${CONFIG_FILE_SHELL}.tmp-$$"
+  jq '
+    if (.plugins? | type) == "object" then
+      (if (.plugins.load? | type) == "object" and (.plugins.load.paths? | type) == "array"
+       then .plugins.load.paths |= map(select((type != "string") or (test("(^|[\\\\/])stategraph-webchat[\\\\/]*$"; "i") | not)))
+       else . end) |
+      (if (.plugins.entries? | type) == "object" then del(.plugins.entries["stategraph-webchat"]) else . end)
+    else . end
+  ' "$(native_path "$CONFIG_FILE_SHELL")" > "$temp" && mv "$temp" "$CONFIG_FILE_SHELL"
+}
 
 mapfile -t PACKAGE_MANIFESTS < <(
   find "$PROJECT_ROOT/agents/packages/builtin" -maxdepth 1 -type f -name '*.json' -print 2>/dev/null
@@ -188,42 +222,12 @@ for mf in "${PACKAGE_MANIFESTS[@]}"; do
 
   MANIFEST[$id]="$mf"; SRC_WS[$id]="$src_ws"; WS[$id]="$runtime_base/workspace"; DIR[$id]="$runtime_base/state"
   OC_WS[$id]="$(native_path "${WS[$id]}")"; OC_DIR[$id]="$(native_path "${DIR[$id]}")"
-  MODEL[$id]="$(jq_clean -r '.model // ""' "$mf_jq")";
-  env_model_key="OPENCLAW_AGENT_${id//-/_}_MODEL"; env_model_key="${env_model_key^^}"
-  if [ -n "${!env_model_key:-}" ]; then
-    MODEL[$id]="${!env_model_key}"
-  elif [ -n "${OPENCLAW_LLM_MODEL:-}" ]; then
-    MODEL[$id]="${OPENCLAW_LLM_MODEL}"
-  fi
-  env_key="OPENCLAW_AGENT_${id//-/_}_PROVIDER"; env_key="${env_key^^}"
-  PROVIDER[$id]="${!env_key:-${OPENCLAW_LLM_PROVIDER:-}}"
-  if [[ "${MODEL[$id]}" == */* ]]; then PROVIDER[$id]="${MODEL[$id]%%/*}"; fi
-  env_key="OPENCLAW_AGENT_${id//-/_}_API"; env_key="${env_key^^}"
-  provider_key="OPENCLAW_PROVIDER_${PROVIDER[$id]//-/_}_API"; provider_key="${provider_key^^}"
-  API[$id]="${!env_key:-${!provider_key:-${OPENCLAW_LLM_API:-openai-completions}}}"
-  env_key="OPENCLAW_AGENT_${id//-/_}_BASE_URL"; env_key="${env_key^^}"
-  provider_key="OPENCLAW_PROVIDER_${PROVIDER[$id]//-/_}_BASE_URL"; provider_key="${provider_key^^}"
-  BASE_URL[$id]="${!env_key:-${!provider_key:-${OPENCLAW_LLM_BASE_URL:-https://api.openai.com/v1}}}"
-  API_EXPLICIT[$id]=0; BASE_URL_EXPLICIT[$id]=0
-  env_key="OPENCLAW_AGENT_${id//-/_}_API"; env_key="${env_key^^}"
-  [[ -n "${!env_key:-}" ]] && API_EXPLICIT[$id]=1
-  provider_key="OPENCLAW_PROVIDER_${PROVIDER[$id]//-/_}_API"; provider_key="${provider_key^^}"
-  [[ -n "${!provider_key:-}" ]] && API_EXPLICIT[$id]=1
-  env_key="OPENCLAW_AGENT_${id//-/_}_BASE_URL"; env_key="${env_key^^}"
-  [[ -n "${!env_key:-}" ]] && BASE_URL_EXPLICIT[$id]=1
-  provider_key="OPENCLAW_PROVIDER_${PROVIDER[$id]//-/_}_BASE_URL"; provider_key="${provider_key^^}"
-  [[ -n "${!provider_key:-}" ]] && BASE_URL_EXPLICIT[$id]=1
-  [[ ( "${MODEL[$id]}" != */* || "${PROVIDER[$id]}" = "openai" ) && -n "${OPENCLAW_LLM_API:-}" ]] && API_EXPLICIT[$id]=1
-  [[ ( "${MODEL[$id]}" != */* || "${PROVIDER[$id]}" = "openai" ) && -n "${OPENCLAW_LLM_BASE_URL:-}" ]] && BASE_URL_EXPLICIT[$id]=1
-  env_key="OPENCLAW_AGENT_${id//-/_}_CONTEXT_WINDOW_TOKENS"; env_key="${env_key^^}"
-  CONTEXT_WINDOW[$id]="${!env_key:-${OPENCLAW_LLM_CONTEXT_WINDOW_TOKENS:-128000}}"
-  env_key="OPENCLAW_AGENT_${id//-/_}_MAX_OUTPUT_TOKENS"; env_key="${env_key^^}"
-  MAX_OUTPUT[$id]="${!env_key:-${OPENCLAW_LLM_MAX_OUTPUT_TOKENS:-49152}}"
-  env_key="OPENCLAW_AGENT_${id//-/_}_MAX_TOKENS_FIELD"; env_key="${env_key^^}"
-  MAX_TOKENS_FIELD[$id]="${!env_key:-${OPENCLAW_LLM_MAX_TOKENS_FIELD:-max_completion_tokens}}"
-  ROLE[$id]="$role"; ORIGIN[$id]="$origin"; PROTECTED[$id]="$protected"
+  MODEL[$id]="$(jq_clean -r '.model // ""' "$mf_jq")"; ROLE[$id]="$role"; ORIGIN[$id]="$origin"; PROTECTED[$id]="$protected"
   REGISTER[$id]="$register"; ACTIVE[$id]="$active"; CALLABLE[$id]="$(jq_clean -r '.delegation.callable_by_manager' "$mf_jq")"
   ALLOW_JSON[$id]="$(jq_clean -c '.delegation.allow_agents // []' "$mf_jq")"; SANDBOX[$id]="$(jq_clean -r '.sandbox_mode // ""' "$mf_jq")"; SANDBOX_JSON[$id]="$(jq_clean -c '.sandbox_config // null' "$mf_jq")"; TOOLS_JSON[$id]="$(jq_clean -c '.tools_config // null' "$mf_jq")"
+  if [ "$id" = 'test-agent' ] && [ "$TEST_SANDBOX_ENABLED" -eq 0 ]; then
+    SANDBOX[$id]='off'; SANDBOX_JSON[$id]='{"mode":"off"}'; TOOLS_JSON[$id]='{"exec":{"host":"gateway"},"elevated":{"enabled":false}}'
+  fi
   INCLUDE_COMMON[$id]="$(jq_clean -r '.assembly.include_common_rules' "$mf_jq")"; INCLUDE_TEMPLATES[$id]="$(jq_clean -r '.assembly.include_templates' "$mf_jq")"
   if [ "$register" = "true" ]; then AGENT_IDS+=("$id"); fi
 done
@@ -248,18 +252,58 @@ if [ -n "$MODEL_CONFIG" ]; then
       [ -n "$m" ] && MODEL[$id]="$m"
     done
   else
-    echo "警告: ModelConfig 不存在，忽略：$MODEL_CONFIG" >&2
+    echo "ModelConfig 不存在：$MODEL_CONFIG" >&2
+    exit 1
   fi
 fi
 
-# .env is the active project source and wins over the legacy JSON override.
 for id in "${AGENT_IDS[@]}"; do
-  env_model_key="OPENCLAW_AGENT_${id//-/_}_MODEL"; env_model_key="${env_model_key^^}"
-  if [ -n "${!env_model_key:-}" ]; then
-    MODEL[$id]="${!env_model_key}"
-  elif [ -n "${OPENCLAW_LLM_MODEL:-}" ]; then
-    MODEL[$id]="${OPENCLAW_LLM_MODEL}"
+  agent_key="OPENCLAW_AGENT_${id//-/_}"; agent_key="${agent_key^^}"
+  provider_key="${agent_key}_PROVIDER"
+  PROVIDER[$id]="${!provider_key:-${OPENCLAW_LLM_PROVIDER:-}}"
+  [[ "${MODEL[$id]}" == */* ]] && PROVIDER[$id]="${MODEL[$id]%%/*}"
+  if [ -n "$MODEL_CONFIG" ]; then
+    configured_provider="$(jq_clean -r --arg id "$id" '.agents[$id].provider // empty' "$(native_path "$MODEL_CONFIG")")"
+    [ -n "$configured_provider" ] && PROVIDER[$id]="$configured_provider"
   fi
+  if [[ "${MODEL[$id]}" == */* ]] && [ "${PROVIDER[$id]}" != "${MODEL[$id]%%/*}" ]; then
+    echo "$id provider ${PROVIDER[$id]} 与模型引用 ${MODEL[$id]} 不一致" >&2
+    exit 1
+  fi
+  provider_env="OPENCLAW_PROVIDER_${PROVIDER[$id]//-/_}"; provider_env="${provider_env^^}"
+  api_key="${agent_key}_API"; provider_api_key="${provider_env}_API"
+  base_key="${agent_key}_BASE_URL"; provider_base_key="${provider_env}_BASE_URL"
+  API[$id]="${!api_key:-${!provider_api_key:-${OPENCLAW_LLM_API:-openai-completions}}}"
+  BASE_URL[$id]="${!base_key:-${!provider_base_key:-${OPENCLAW_LLM_BASE_URL:-https://api.openai.com/v1}}}"
+  context_key="${agent_key}_CONTEXT_WINDOW_TOKENS"
+  output_key="${agent_key}_MAX_OUTPUT_TOKENS"
+  field_key="${agent_key}_MAX_TOKENS_FIELD"
+  CONTEXT_WINDOW[$id]="${!context_key:-${OPENCLAW_LLM_CONTEXT_WINDOW_TOKENS:-200000}}"
+  MAX_OUTPUT[$id]="${!output_key:-${OPENCLAW_LLM_MAX_OUTPUT_TOKENS:-32000}}"
+  MAX_TOKENS_FIELD[$id]="${!field_key:-${OPENCLAW_LLM_MAX_TOKENS_FIELD:-max_output_tokens}}"
+  API_EXPLICIT[$id]=0; BASE_URL_EXPLICIT[$id]=0
+  [[ -n "${!api_key:-}" || -n "${!provider_api_key:-}" ]] && API_EXPLICIT[$id]=1
+  [[ -n "${!base_key:-}" || -n "${!provider_base_key:-}" ]] && BASE_URL_EXPLICIT[$id]=1
+  if [[ "${MODEL[$id]}" != */* || "${PROVIDER[$id]}" = "openai" ]]; then
+    [ -n "${OPENCLAW_LLM_API:-}" ] && API_EXPLICIT[$id]=1
+    [ -n "${OPENCLAW_LLM_BASE_URL:-}" ] && BASE_URL_EXPLICIT[$id]=1
+  fi
+  if [ -n "$MODEL_CONFIG" ]; then
+    model_jq="$(native_path "$MODEL_CONFIG")"
+    configured_api="$(jq_clean -r --arg id "$id" '.agents[$id].api // empty' "$model_jq")"
+    configured_base="$(jq_clean -r --arg id "$id" '.agents[$id].base_url // empty' "$model_jq")"
+    configured_context="$(jq_clean -r --arg id "$id" '.agents[$id].context_window_tokens // empty' "$model_jq")"
+    configured_output="$(jq_clean -r --arg id "$id" '.agents[$id].max_output_tokens // empty' "$model_jq")"
+    configured_field="$(jq_clean -r --arg id "$id" '.agents[$id].max_tokens_field // empty' "$model_jq")"
+    [ -n "$configured_api" ] && { API[$id]="$configured_api"; API_EXPLICIT[$id]=1; }
+    [ -n "$configured_base" ] && { BASE_URL[$id]="$configured_base"; BASE_URL_EXPLICIT[$id]=1; }
+    [ -n "$configured_context" ] && CONTEXT_WINDOW[$id]="$configured_context"
+    [ -n "$configured_output" ] && MAX_OUTPUT[$id]="$configured_output"
+    [ -n "$configured_field" ] && MAX_TOKENS_FIELD[$id]="$configured_field"
+  fi
+  [[ "${CONTEXT_WINDOW[$id]}" =~ ^[0-9]+$ ]] && [ "${CONTEXT_WINDOW[$id]}" -gt 0 ] && [ "${CONTEXT_WINDOW[$id]}" -le 200000 ] || { echo "$id context window 必须是 1..200000 的整数" >&2; exit 1; }
+  [[ "${MAX_OUTPUT[$id]}" =~ ^[0-9]+$ ]] && [ "${MAX_OUTPUT[$id]}" -gt 0 ] && [ "${MAX_OUTPUT[$id]}" -le "${CONTEXT_WINDOW[$id]}" ] || { echo "$id max output 必须是正整数且不超过 context window" >&2; exit 1; }
+  [ -n "${MAX_TOKENS_FIELD[$id]}" ] || { echo "$id max_tokens_field 不能为空" >&2; exit 1; }
 done
 
 # 校验 workspace / agentDir 彼此不同
@@ -281,15 +325,33 @@ command -v openclaw >/dev/null 2>&1 || { echo "未找到 openclaw CLI，请先�
 
 OPENCLAW_VERSION="$(openclaw --version 2>&1 || true)"
 echo "OpenClaw 版本 : $OPENCLAW_VERSION"
-CONFIG_FILE="$(openclaw config file 2>/dev/null | tr -d '\r' | head -1 || true)"
+CONFIG_FILE_RAW="$(openclaw config file 2>&1 || true)"
+CONFIG_FILE="$(printf '%s\n' "$CONFIG_FILE_RAW" | sed -n 's/.*File:[[:space:]]*\([^[:space:]]*\).*/\1/p' | head -1)"
+[ -n "$CONFIG_FILE" ] || CONFIG_FILE="$(printf '%s\n' "$CONFIG_FILE_RAW" | tr -d '\r' | head -1)"
+if [[ "$CONFIG_FILE" == '~/'* ]]; then CONFIG_FILE="$HOME/${CONFIG_FILE#~/}"; fi
+if [[ "$CONFIG_FILE" == '~\\'* ]]; then CONFIG_FILE="$HOME/${CONFIG_FILE#~\\}"; fi
+if [ ! -f "$(shell_path "$CONFIG_FILE")" ]; then
+  fallback_config="$HOME/.openclaw/openclaw.json"
+  [ -f "$fallback_config" ] && CONFIG_FILE="$fallback_config"
+fi
 CONFIG_FILE_SHELL="$(shell_path "$CONFIG_FILE")"
 echo "配置文件      : $CONFIG_FILE"
+RETIRED_STATEGRAPH_WECHAT=0
+if has_retired_stategraph_webchat_config; then
+  RETIRED_STATEGRAPH_WECHAT=1
+  echo "检测到已移除的 StateGraph WebChat 配置。"
+  [ "$APPLY" -eq 1 ] || echo "[DRYRUN] APPLY 时将先备份并移除这些已废弃引用。"
+fi
 
 # 现有 Agent id 列表（需要 jq；无 jq 时 dry-run 仍可继续，apply 则报错）
 EXISTING_IDS=""
 EXISTING_JSON="[]"
 if [ "$HAS_JQ" -eq 1 ]; then
-  EXISTING_JSON="$(openclaw agents list --json 2>/dev/null || printf '[]')"
+  if [ "$RETIRED_STATEGRAPH_WECHAT" -eq 1 ]; then
+    EXISTING_JSON="$(jq -c '.agents.list // []' "$(native_path "$CONFIG_FILE_SHELL")")"
+  else
+    EXISTING_JSON="$(openclaw agents list --json 2>/dev/null || printf '[]')"
+  fi
   EXISTING_IDS="$(printf '%s' "$EXISTING_JSON" | jq -r '.[].id' 2>/dev/null | tr -d '\r' | tr '\n' ' ' || true)"
 fi
 
@@ -303,8 +365,6 @@ RUNTIME_DIRS=(
   "$RUNTIME_ROOT_ABS/control/config-snapshots"
   "$RUNTIME_ROOT_ABS/control/component-requests"
   "$RUNTIME_ROOT_ABS/control/component-builds"
-  "$RUNTIME_ROOT_ABS/worktrees"
-  "$RUNTIME_ROOT_ABS/artifacts"
 )
 for id in "${AGENT_IDS[@]}"; do
   RUNTIME_DIRS+=("${WS[$id]}" "${DIR[$id]}")
@@ -350,7 +410,7 @@ for id in "${AGENT_IDS[@]}"; do
   printf "  %-24s dir=%s  model=%s active=%s\n" "" "${DIR[$id]}" "$mdl" "${ACTIVE[$id]}"
 done
 echo "  $MANAGER_ID subagents.allowAgents = ${WORKER_IDS[*]}"
-echo "  manager subagents.requireAgentId = true ; delegationMode = prefer"
+echo "  manager subagents.allowAgents = [] ; delegationMode = prefer（派发仅允许 Orchestrator 调度）"
 
 GENERATED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
@@ -372,7 +432,7 @@ write_manifest() {
     [ "${TOOLS_JSON[$id]}" != "null" ] && tools="${TOOLS_JSON[$id]}"
     [ $first -eq 0 ] && agents_json="$agents_json,"
     first=0
-    local ews edir emdl emft esrc eorigin
+    local ews edir emdl emft esrc eorigin eprovider eapi ebase efield
     ews="$(json_escape "$(native_path "${OC_WS[$id]}")")"; edir="$(json_escape "$(native_path "${OC_DIR[$id]}")")"; emdl="$(json_escape "${MODEL[$id]}")"
     emft="$(json_escape "$(native_path "${MANIFEST[$id]}")")"; esrc="$(json_escape "$(native_path "${SRC_WS[$id]}")")"; eorigin="$(json_escape "${ORIGIN[$id]}")"
     eprovider="$(json_escape "${PROVIDER[$id]}")"; eapi="$(json_escape "${API[$id]}")"; ebase="$(json_escape "${BASE_URL[$id]}")"; efield="$(json_escape "${MAX_TOKENS_FIELD[$id]}")"
@@ -389,6 +449,7 @@ write_manifest() {
   "config_file": "$ecfg",
   "project_root_abs": "$epr",
   "runtime_root_abs": "$err",
+  "artifact_access_control": {"path_abs":"$(json_escape "$(native_path "$WORK_ROOT")")","applied":$([ "$APPLY" -eq 1 ] && printf true || printf false),"protected":$([ "$APPLY" -eq 1 ] && printf true || printf false),"mode":"$ARTIFACT_ACL_MODE"},
   "config_backup": ${backup},
   "package_catalog_root_abs": "$(json_escape "$(native_path "$PROJECT_ROOT/agents/packages")")",
   "agents": [ $agents_json ]
@@ -405,14 +466,10 @@ if [ "$APPLY" -eq 0 ]; then
   printf '  %s\n' "${RUNTIME_DIRS[@]:0:8}"
   echo "  ... 共 ${#RUNTIME_DIRS[@]} 个目录"
   echo ""
-  echo "[DRYRUN] Agent 保留/创建计划（未执行）："
+  echo "[DRYRUN] 将执行的 openclaw agents add 语义（未执行）："
   for id in "${AGENT_IDS[@]}"; do
-    if contains "$EXISTING_IDS" "$id"; then
-      echo "  KEEP $id -> ${OC_WS[$id]}"
-    else
-      modelarg=""; [ -n "${MODEL[$id]}" ] && modelarg=" --model \"${MODEL[$id]}\""
-      echo "  ADD  openclaw agents add $id --non-interactive --workspace \"${OC_WS[$id]}\" --agent-dir \"${OC_DIR[$id]}\"$modelarg --json"
-    fi
+    modelarg=""; [ -n "${MODEL[$id]}" ] && modelarg=" --model \"${MODEL[$id]}\""
+    echo "  openclaw agents add $id --non-interactive --workspace \"${OC_WS[$id]}\" --agent-dir \"${OC_DIR[$id]}\"$modelarg --json"
   done
   echo ""
   echo "[DRYRUN] 将通过 config set --dry-run 校验 subagents/sandbox 字段（未写入）。"
@@ -437,6 +494,21 @@ fi
 
 # 7.1 创建 runtime 目录
 for d in "${RUNTIME_DIRS[@]}"; do mkdir -p "$d"; done
+mkdir -p "$WORK_ROOT"
+
+ARTIFACT_ROOT="$WORK_ROOT"
+case "$(uname -s)" in
+  MINGW*|MSYS*|CYGWIN*)
+    command -v pwsh >/dev/null 2>&1 || { echo "Windows 上设置 artifact DACL 需要 pwsh" >&2; exit 1; }
+    OPENCLAW_COMPONENT_LIB_PATH="$(native_path "$PROJECT_ROOT/scripts/component-lib.ps1")" OPENCLAW_ARTIFACT_ACL_PATH="$(native_path "$ARTIFACT_ROOT")" \
+      pwsh -NoProfile -Command '. $env:OPENCLAW_COMPONENT_LIB_PATH; Set-RawArtifactAccessControl -Path $env:OPENCLAW_ARTIFACT_ACL_PATH | Out-Null'
+    ;;
+  *)
+    chmod 700 "$ARTIFACT_ROOT"
+    artifact_mode="$(stat -c '%a' "$ARTIFACT_ROOT" 2>/dev/null || stat -f '%Lp' "$ARTIFACT_ROOT")"
+    [ "$artifact_mode" = "700" ] || { echo "artifact 目录权限验证失败：$artifact_mode" >&2; exit 1; }
+    ;;
+esac
 
 # 7.2 备份当前配置
 SNAP_DIR="$RUNTIME_ROOT_ABS/control/config-snapshots"
@@ -465,10 +537,27 @@ restore_on_failure() {
   echo "[恢复] 可能残留的本项目 runtime 目录（不会自动删除）：$RUNTIME_ROOT_ABS" >&2
 }
 
+# This happens after the backup and restore helper are available, but before
+# any OpenClaw CLI mutation.  The retired plugin is the only invalid-config
+# migration this installer is allowed to perform automatically.
+CONFIG_CHANGES=()
+if [ "$RETIRED_STATEGRAPH_WECHAT" -eq 1 ]; then
+  remove_retired_stategraph_webchat_config || { restore_on_failure "移除已废弃 StateGraph WebChat 配置失败"; exit 1; }
+  CONFIG_CHANGES+=("remove retired stategraph-webchat plugin references")
+  echo "已移除已废弃的 StateGraph WebChat 插件配置。"
+fi
+
 # 7.3 复制 workspace prompt + 共享规则 + 模板 到绝对 workspace（自包含）
 SRC_COMMON="$PROJECT_ROOT/agents/common"
 SRC_TEMPLATES="$PROJECT_ROOT/templates"
 SRC_SYSTEM_SKILLS="$PROJECT_ROOT/agents/packages/system/skills"
+mkdir -p "$RUNTIME_ROOT_ABS/manager-control" "$RUNTIME_ROOT_ABS/release-control" "$RUNTIME_ROOT_ABS/runtime-core" "$RUNTIME_ROOT_ABS/control-kernel"
+cp -Rf "$PROJECT_ROOT/scripts/manager-control/." "$RUNTIME_ROOT_ABS/manager-control/"
+cp -f "$PROJECT_ROOT/config/manager-control-policy.json" "$RUNTIME_ROOT_ABS/manager-control/manager-control-policy.json"
+cp -Rf "$PROJECT_ROOT/scripts/release-control/." "$RUNTIME_ROOT_ABS/release-control/"
+cp -f "$PROJECT_ROOT/config/release-control-policy.json" "$RUNTIME_ROOT_ABS/release-control/release-control-policy.json"
+cp -Rf "$PROJECT_ROOT/scripts/runtime-core/." "$RUNTIME_ROOT_ABS/runtime-core/"
+cp -Rf "$PROJECT_ROOT/scripts/control-kernel/." "$RUNTIME_ROOT_ABS/control-kernel/"
 for id in "${AGENT_IDS[@]}"; do
   src_ws="${SRC_WS[$id]}"
   dst_ws="${WS[$id]}"
@@ -494,7 +583,6 @@ done
 echo "已复制 workspace prompt / 共享规则 / 模板到绝对 workspace。"
 
 # 7.4 创建 package 中声明 register=true 的 Agent（幂等）
-CONFIG_CHANGES=()
 for id in "${AGENT_IDS[@]}"; do
   if contains "$EXISTING_IDS" "$id"; then
     echo "跳过已存在且兼容的 Agent：$id"
@@ -528,11 +616,7 @@ set_json() {
   CONFIG_CHANGES+=("set $1")
 }
 
-# Synchronize the limits that the project .env controls into OpenClaw's
-# provider catalog.  Agent model references are qualified as provider/model;
-# API keys and unrelated provider/model rows are never touched.
-declare -A MODEL_SYNC_SEEN
-declare -A PROVIDER_SYNC_SEEN
+declare -A MODEL_SYNC_SEEN PROVIDER_SYNC_SEEN
 for id in "${AGENT_IDS[@]}"; do
   model="${MODEL[$id]}"
   [[ "$model" == */* ]] || continue
@@ -540,22 +624,23 @@ for id in "${AGENT_IDS[@]}"; do
   if [ -z "${PROVIDER_SYNC_SEEN[$provider]:-}" ]; then
     PROVIDER_SYNC_SEEN[$provider]="$id"
     provider_json="$(openclaw config get "models.providers.$provider" --json 2>/dev/null | tr -d '\r')"
+    [ -n "$provider_json" ] || { restore_on_failure "Provider $provider 不存在"; exit 1; }
     current_api="$(printf '%s' "$provider_json" | jq -r '.api // empty')"
     current_base="$(printf '%s' "$provider_json" | jq -r '.baseUrl // empty')"
-    [ "${API_EXPLICIT[$id]}" -eq 1 ] && [ "$current_api" = "${API[$id]}" ] || { [ "${API_EXPLICIT[$id]}" -eq 0 ] || set_json "models.providers.$provider.api" "\"$(json_escape "${API[$id]}")\""; }
-    [ "${BASE_URL_EXPLICIT[$id]}" -eq 1 ] && [ "$current_base" = "${BASE_URL[$id]}" ] || { [ "${BASE_URL_EXPLICIT[$id]}" -eq 0 ] || set_json "models.providers.$provider.baseUrl" "\"$(json_escape "${BASE_URL[$id]}")\""; }
+    if [ "${API_EXPLICIT[$id]}" -eq 1 ] && [ "$current_api" != "${API[$id]}" ]; then set_json "models.providers.$provider.api" "\"$(json_escape "${API[$id]}")\""; fi
+    if [ "${BASE_URL_EXPLICIT[$id]}" -eq 1 ] && [ "$current_base" != "${BASE_URL[$id]}" ]; then set_json "models.providers.$provider.baseUrl" "\"$(json_escape "${BASE_URL[$id]}")\""; fi
   else
     prior_provider_id="${PROVIDER_SYNC_SEEN[$provider]}"
     if [ "${API_EXPLICIT[$prior_provider_id]}" -eq 1 ] || [ "${API_EXPLICIT[$id]}" -eq 1 ]; then
-      [ "${API[$prior_provider_id]}" = "${API[$id]}" ] || { restore_on_failure "Provider $provider 的 .env API 配置不一致"; exit 1; }
+      [ "${API[$prior_provider_id]}" = "${API[$id]}" ] || { restore_on_failure "Provider $provider 的 API 配置不一致"; exit 1; }
     fi
     if [ "${BASE_URL_EXPLICIT[$prior_provider_id]}" -eq 1 ] || [ "${BASE_URL_EXPLICIT[$id]}" -eq 1 ]; then
-      [ "${BASE_URL[$prior_provider_id]}" = "${BASE_URL[$id]}" ] || { restore_on_failure "Provider $provider 的 .env base URL 配置不一致"; exit 1; }
+      [ "${BASE_URL[$prior_provider_id]}" = "${BASE_URL[$id]}" ] || { restore_on_failure "Provider $provider 的 base URL 配置不一致"; exit 1; }
     fi
   fi
   if [ -n "${MODEL_SYNC_SEEN[$sync_key]:-}" ]; then
     prior_id="${MODEL_SYNC_SEEN[$sync_key]}"
-    [ "${CONTEXT_WINDOW[$prior_id]}" = "${CONTEXT_WINDOW[$id]}" ] && [ "${MAX_OUTPUT[$prior_id]}" = "${MAX_OUTPUT[$id]}" ] && [ "${MAX_TOKENS_FIELD[$prior_id]}" = "${MAX_TOKENS_FIELD[$id]}" ] || { restore_on_failure "模型 $sync_key 的 .env 限制不一致"; exit 1; }
+    [ "${CONTEXT_WINDOW[$prior_id]}" = "${CONTEXT_WINDOW[$id]}" ] && [ "${MAX_OUTPUT[$prior_id]}" = "${MAX_OUTPUT[$id]}" ] && [ "${MAX_TOKENS_FIELD[$prior_id]}" = "${MAX_TOKENS_FIELD[$id]}" ] || { restore_on_failure "模型 $sync_key 的限制不一致"; exit 1; }
     continue
   fi
   MODEL_SYNC_SEEN[$sync_key]="$id"
@@ -583,7 +668,7 @@ for id in "${AGENT_IDS[@]}"; do
     fi
   fi
   if [ "$id" = "$MANAGER_ID" ]; then
-    set_json "agents.list[$idx].subagents" "{\"delegationMode\":\"prefer\",\"requireAgentId\":true,\"allowAgents\":$WORKER_ALLOW_JSON}"
+    set_json "agents.list[$idx].subagents" "{\"delegationMode\":\"prefer\",\"requireAgentId\":true,\"allowAgents\":[]}"
   else
     set_json "agents.list[$idx].subagents" "{\"allowAgents\":${ALLOW_JSON[$id]}}"
   fi
@@ -596,6 +681,48 @@ for id in "${AGENT_IDS[@]}"; do
     set_json "agents.list[$idx].tools" "${TOOLS_JSON[$id]}"
   fi
 done
+
+MANAGER_EXEC_STATE="$RUNTIME_ROOT_ABS/control/manager-exec-allowlist.json"
+RELEASE_EXEC_STATE="$RUNTIME_ROOT_ABS/control/release-exec-allowlist.json"
+MANAGER_ENTRYPOINT="$RUNTIME_ROOT_ABS/manager-control/manager-control"
+chmod 755 "$MANAGER_ENTRYPOINT"
+[ -f "$MANAGER_ENTRYPOINT" ] || { restore_on_failure "缺少 Manager 受控执行入口"; exit 1; }
+MANAGER_ENTRYPOINT_FILE="${WS[$MANAGER_ID]}/.orchestrator/manager-control-entrypoint.json"
+MANAGER_REQUEST_ROOT="$(dirname "$MANAGER_ENTRYPOINT_FILE")"
+mkdir -p "$MANAGER_REQUEST_ROOT" "$MANAGER_REQUEST_ROOT/drafts" "$MANAGER_REQUEST_ROOT/requests" "$MANAGER_REQUEST_ROOT/receipts"
+manager_entrypoint_tmp="$(mktemp "${MANAGER_ENTRYPOINT_FILE}.tmp.XXXXXX")"
+printf '{"schema_version":1,"entrypoint":"%s"}\n' "$(json_escape "$MANAGER_ENTRYPOINT")" > "$manager_entrypoint_tmp"
+mv -f "$manager_entrypoint_tmp" "$MANAGER_ENTRYPOINT_FILE"
+RELEASE_ENTRYPOINT="$RUNTIME_ROOT_ABS/release-control/release-control"
+chmod 755 "$RELEASE_ENTRYPOINT"
+[ -f "$RELEASE_ENTRYPOINT" ] || { restore_on_failure "缺少 Release 受控执行入口"; exit 1; }
+RELEASE_ENTRYPOINT_FILE="${WS[release-agent]:-}/.orchestrator/release-control-entrypoint.json"
+if [ -n "${WS[release-agent]:-}" ]; then
+  mkdir -p "$(dirname "$RELEASE_ENTRYPOINT_FILE")"
+  release_entrypoint_tmp="$(mktemp "${RELEASE_ENTRYPOINT_FILE}.tmp.XXXXXX")"
+  printf '{"schema_version":1,"entrypoint":"%s"}\n' "$(json_escape "$RELEASE_ENTRYPOINT")" > "$release_entrypoint_tmp"
+  mv -f "$release_entrypoint_tmp" "$RELEASE_ENTRYPOINT_FILE"
+fi
+approval_snapshot="$(openclaw approvals get --json 2>/dev/null)" || { restore_on_failure "读取 Manager exec approvals 失败"; exit 1; }
+approval_tmp="$(mktemp)"
+if ! printf '%s' "$approval_snapshot" | jq --arg agent "$MANAGER_ID" --arg entry "$MANAGER_ENTRYPOINT" --arg release "release-agent" --arg release_entry "$RELEASE_ENTRYPOINT" '
+  .file | .agents = (.agents // {}) | .agents[$agent] = {
+    security: "allowlist", ask: "off", askFallback: "deny", autoAllowSkills: false,
+    allowlist: [{ pattern: $entry }]
+  } | .agents[$release] = {
+    security: "allowlist", ask: "off", askFallback: "deny", autoAllowSkills: false,
+    allowlist: [{ pattern: $release_entry }]
+  }
+' > "$approval_tmp"; then
+  rm -f "$approval_tmp"; restore_on_failure "生成 Manager exec approvals 失败"; exit 1
+fi
+if ! openclaw approvals set --file "$approval_tmp" --json >/dev/null 2>&1; then
+  rm -f "$approval_tmp"; restore_on_failure "配置 Manager exec allowlist 失败"; exit 1
+fi
+rm -f "$approval_tmp"
+printf '{"schema_version":1,"agent_id":"%s","entrypoint":"%s"}\n' "$MANAGER_ID" "$MANAGER_ENTRYPOINT" > "$MANAGER_EXEC_STATE"
+printf '{"schema_version":1,"agent_id":"release-agent","entrypoint":"%s"}\n' "$RELEASE_ENTRYPOINT" > "$RELEASE_EXEC_STATE"
+CONFIG_CHANGES+=("replace $MANAGER_ID exec allowlist with manager-control" "replace release-agent exec allowlist with release-control")
 
 # 7.6 可选：默认 Agent / binding
 if [ "$SET_MANAGER_DEFAULT" -eq 1 ]; then

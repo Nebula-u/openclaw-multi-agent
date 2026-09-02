@@ -1,65 +1,34 @@
-# 模型配置与静态路由
+# model-routing.md — 模型、协议与空输出恢复
 
-## 配置原则
+## 当前路由
 
-- 模型由项目根 `.env` 静态指定；未填写时才回退到受版本控制的 Agent package 默认值。
-- 每个 Agent 可以配置不同的 `provider/model`，但 Agent 不得在运行时自行选模、升级、降级或修改 provider。
-- 本轮保留现有 package 的默认 `model` 字段，避免原地更新意外改变已安装 Agent；旧 `ModelConfig` JSON 只用于兼容回退。
-- Provider 默认按 OpenAI Chat Completions 兼容配置；完整值由项目根 `.env` 提供。模板见 `config/openai-provider.example.json`。
-- 不使用请求级或 provider 级结构化输出模式；JSON/JSONL 权威边界仍是本地确定性清洗、Ajv 校验和 Control Kernel ingestion。
+| Agent | 模型引用 | 协议 | 用途 |
+| --- | --- | --- | --- |
+| manager-agent | `mydeep/deepseek-v4-flash` | Chat Completions API | 用户交互、路线确认、请求提交 |
+| requirement-agent | `mydeep/deepseek-v4-flash` | Chat Completions API | 需求理解与结构化输出 |
+| architect-agent | `mydeep/deepseek-v4-flash` | Chat Completions API | 架构设计与深度推理 |
+| developer-agent | `mydeep/deepseek-v4-flash` | Chat Completions API | 代码执行、工具链、多轮修改 |
+| review-agent | `mydeep/deepseek-v4-flash` | Chat Completions API | 代码审查与深度推理 |
+| test-agent | `mydeep/deepseek-v4-flash` | Chat Completions API | 测试执行与日志分析 |
+| release-agent | `mydeep/deepseek-v4-flash` | Chat Completions API | 运维前验证与工具执行 |
+| hr-agent | `mydeep/deepseek-v4-flash` | Chat Completions API | 只读 Session 与 Git 变更复核 |
 
-## 安装时选择不同模型
+当前所有 8 个 Agent 都从项目 `.env` 中的 `OPENCLAW_AGENT_<ID>_MODEL` 读取 `mydeep/deepseek-v4-flash`。全局 `OPENCLAW_THINKING_LEVEL=off` 会写入 `agents.defaults.thinkingDefault`。模型由 `mydeep` provider 的已配置 Chat Completions 传输提供；不再依赖 Responses API。
 
-Windows（`.env` 已存在时无需复制 JSON）：
+配置样例见 `config/agent-models.deepseek-routing.example.json`。不得把 API Key 写入样例、仓库、prompt、测试报告或运行日志。
 
-```powershell
-# 编辑 .env 中的 OPENCLAW_AGENT_<ID>_MODEL 后先 dry-run
-pwsh -NoProfile -File '.\scripts\install.ps1' `
-  -RuntimeRoot '.\runtime'
-```
+官方依据：<https://api-docs.deepseek.com/zh-cn/guides/responses_api>、<https://api-docs.deepseek.com/zh-cn/api/create-chat-completion>、<https://api-docs.deepseek.com/zh-cn/quick_start/pricing>。
 
-Linux：
+## JSON 契约输出与恢复
 
-```bash
-# 编辑 .env 中的 OPENCLAW_AGENT_<ID>_MODEL 后先 dry-run
-bash scripts/install.sh --runtime-root runtime
-```
+JSON/JSONL 契约回复先保存原文和 SHA-256，只做可证明安全的包装清洗：BOM、唯一 Markdown fence、唯一解释性前后缀中的完整 JSON 值或 JSONL 连续块。绝不自动修改业务字段、ID、日期、数字、类型或 enum；多个 JSON 候选直接失败，交由模型重写。
 
-项目根 `.env` 是实际运行时配置入口；`.env.example` 是无密钥模板。旧 `ModelConfig` JSON 仅作为兼容回退，不覆盖 `.env` 中的非空模型配置。
+空 content、截断、JSON parse error、enum/type 违规和 schema drift 统一使用首次调用之外最多 **2 次** 的同会话重写预算。纯工具调用没有文本是有效中间状态，不触发空输出重试；已通过 Guard 的 artifact 不得因聊天文本为空而重复产生。
 
-修改 `.env` 后必须重新运行安装器的 `dry-run` 和 `apply`，因为 OpenClaw Gateway 不会自动读取项目 `.env`；`apply` 会将模型和限制写入 OpenClaw 持久配置。apply 完成后使用 `openclaw gateway restart --safe` 重新加载 Agent/model 配置。只修改 Manager soft budget 等 Node 控制面参数时不需要 Gateway 重启，但已运行的长期 Monitor 进程若涉及 `MONITOR_*` 变量，仍需单独重启。
+固定模板会逐项报告 Ajv 字段路径、关键字、期望 enum/type 与收到值。最终权威判断始终是 Runtime Guard + Ajv，而非模型自述。
 
-## 通用 Provider 边界
+## DeepSeek JSON Output 边界
 
-`.env` 使用以下统一设置：
+DeepSeek 官方 JSON Output 为 Chat Completions 请求的 `response_format: {"type":"json_object"}`；system 或 user prompt 必须包含 `json` 并给出输出形态示例，且应配置足够 `max_tokens`。它保证合法 JSON 字符串，不提供本项目 JSON Schema strict 校验，也可能返回空 `content`。因此本项目的 prompt、清洗、Ajv 与重试都保留。
 
-- API：`openai-completions`
-- 上下文窗口：128,000 tokens
-- 单次输出上限：49,152 tokens
-- 输出 token 字段：`max_completion_tokens`
-- API Key：只通过 OpenClaw auth/profile 管理，不写入项目配置、日志、报告或备份样例
-
-若某个 Agent 与公共值不同，可使用同名 Agent 前缀覆盖，例如：
-
-```dotenv
-OPENCLAW_AGENT_ARCHITECT_AGENT_CONTEXT_WINDOW_TOKENS=128000
-OPENCLAW_AGENT_ARCHITECT_AGENT_MAX_OUTPUT_TOKENS=49152
-OPENCLAW_AGENT_ARCHITECT_AGENT_MAX_SESSION_TOKENS=200000
-```
-
-当前 `.env` 只维护 7 个原生 Agent；未写 per-Agent 数值时继承公共值。
-
-安装器 apply 时还会把每个已引用模型的 `contextWindow`、`maxTokens` 和
-`compat.maxTokensField` 同步到 OpenClaw 的 `models.providers` 目录，只更新对应模型，不覆盖 API key 或其他模型。若同一个模型被多个 Agent 使用，它们的限制必须一致。
-
-模型不支持模板字段时，应在部署前通过 OpenClaw 配置校验和模型 probe 明确失败，不允许 Agent 在执行中自行换模型兜底。
-
-## 会话预算
-
-模型上下文窗口和持久 session 累计预算是两个不同概念：
-
-- 单次上下文窗口：128k。
-- Manager 上下文软阈值由 `OPENCLAW_MANAGER_SOFT_BUDGET_PERCENT` 计算；模板默认是 60%，即 76,800（128k 的 60%），达到后创建新会话并只恢复紧凑控制上下文。
-- 单个持久 session 累计 token 上限：200k；它不是单次模型请求可用窗口。
-
-输出上限保持 49,152。模型输出被截断、为空或不符合 Schema 时，仍由通用失败链路处理，不做厂商特判。
+当前已安装 OpenClaw `2026.7.1-2`（据 2026-07-23 探测，见 `docs/compatibility-report.md`；若环境已升级需人工复核当前实际版本）的 Gateway `chat.send` 协议不接受/转发请求级 `responseFormat`，不能把该参数可靠地附加到已注册 Agent 的单次 JSON 契约调用；静态写入全部 Agent 的 `params.response_format` 会破坏工具调用和 Markdown 会话，未采用。升级或扩展 Gateway 增加请求级透传后，JSON 单对象调用应传 `response_format: {"type":"json_object"}`；JSONL 继续使用本地 Guard 路径。详见 [llm-json-recovery.md](llm-json-recovery.md)。

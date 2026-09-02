@@ -4,7 +4,6 @@ import { join } from 'node:path';
 import { PROJECT_ROOT, validateLlmResponse } from './runtime-guard-client.mjs';
 import { buildLlmCasePrompt } from './llm-scenarios.mjs';
 import { MAX_REPAIR_RETRIES, buildJsonRepairPrompt, classifyLlmFailure } from './json-repair-prompts.mjs';
-import { MAX_AGENT_TIMEOUT_MS, validateAgentTimeoutMs } from './timeout-policy.mjs';
 
 function sessionKey({ scenario, testCase, runId }) {
   return `agent:${scenario.agentId}:llm-json-${runId}-${scenario.name}-${testCase.id}`;
@@ -33,8 +32,7 @@ function classificationFor(result) {
   });
 }
 
-export async function runLlmCase({ client, scenario, testCase, runId, timeoutMs = MAX_AGENT_TIMEOUT_MS }) {
-  timeoutMs = validateAgentTimeoutMs(timeoutMs);
+export async function runLlmCase({ client, scenario, testCase, runId, timeoutMs = 600000 }) {
   const schemaText = readFileSync(join(PROJECT_ROOT, 'contracts', scenario.schemaFile), 'utf8').trim();
   let prompt = buildLlmCasePrompt(scenario, testCase, schemaText);
   const attempts = [];
@@ -43,6 +41,13 @@ export async function runLlmCase({ client, scenario, testCase, runId, timeoutMs 
   for (let attemptNumber = 1; attemptNumber <= MAX_REPAIR_RETRIES + 1; attemptNumber += 1) {
     const result = await attempt({ client, scenario, testCase, runId, prompt, attemptNumber, timeoutMs });
     attempts.push(result);
+    if (result.error) {
+      return {
+        classification: 'TRANSPORT_FAILURE', repair_classification: 'LLM_INVOCATION_ERROR',
+        scenario, testCase, sessionKey: sessionKey({ scenario, testCase, runId }), attempts,
+        repair_retries: 0,
+      };
+    }
     if (result.validation.ok) {
       return {
         classification: attemptNumber === 1 ? 'PASSED_FIRST' : 'REPAIR_RETRY_SUCCEEDED',

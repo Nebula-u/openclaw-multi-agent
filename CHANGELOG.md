@@ -1,131 +1,94 @@
 # Changelog
 
+## 2026-08-25 - 同 Session JSON 修复与可操作的重试耗尽审批
+
+- result JSON 的解析、必填字段、类型、枚举、格式和身份字段错误改为在原 OpenClaw Session 内最多修复两次；固定代码模板会明确列出缺失字段或错误路径，宿主从 JSON stdout 提取最终回复并原子写回，不重新执行任务。
+- 失败 raw、诊断和提示按 task attempt 隔离保留；首次摄取与归档都拒绝符号链接、硬链接或非普通文件，不可信 actual 值不进入修复 prompt，修复期间继续验证 execution lease 与 worktree 指纹。
+- 完整任务重试耗尽后自动创建 `TASK_RETRY_EXHAUSTED` 审批；用户可在 Monitor 或原 Manager Session 中确认 `RETRY_SAME_AGENT`，也可终止或携带说明返工。Manager 只转交明确用户授权，不能直接派发或重置重试次数。
+- Monitor 人工审批改为高对比度卡片，保留“确认”“拒绝”“其他”三个可见操作区，继续只写本地审批命令队列并显示 Orchestrator 回执。
+- 所有 Worker 规则补充 `artifact_manifest_hash = context_manifest_sha256` 与 JSON 重生成协议。
+
+## 2026-08-22 - 旧 SQLite 迁移与 Orchestrator 存活状态修复
+
+- Kernel 增加 `PRAGMA user_version` 和版本化 schema 检查，事务移除已知旧列 `runs.langgraph_thread_id` 并保留既有事实；未知结构漂移失败关闭。
+- `kernel-status` 报告 schema 版本、迁移需求与结构问题，read-only 检查不修改数据库。
+- foreground Orchestrator 状态结合 PID 与 heartbeat，将死亡或过期实例显示为 `STALE`；停止命令不再接受失活实例。
+- 活动配置和架构文档统一为 Manager request queue → Node Orchestrator → SQLite，并记录 test-agent Docker sandbox 与空 delegation 白名单。
+
+## 2026-08-21 - 单机 SQLite、Git 快照与 HR Session 审查
+
+### 更新内容
+
+- Control Kernel 从 PostgreSQL/StateGraph 改为 Node 22.13+ 内置 SQLite，默认 `runtime/control/kernel.db`，八张事实/索引表启用 WAL、外键、busy timeout 与 `synchronous=FULL`。
+- 删除 `pg` 依赖、旧 pool、StateGraph 历史迁移、revision CAS、事件表/事件哈希链和 artifact CAS 源码副本；新版本从空 SQLite 开始，不迁移历史数据库。
+- 新增宿主验证的 Git snapshot：accepted/no-change/failed-recovery/restore/revert；隐藏 ref 固定 commit，Restore 创建新分支/worktree，Revert 要求精确确认并创建反向 commit。
+- 快照 diff 改从目标 Git 仓库读取，清理原 task worktree 后仍可查看；SQLite 只存 Agent/Session/task/execution 与 commit 的索引和变更摘要。
+- 新增 HR Session dossier：只读取脱敏的 assistant reasoning、最后输出和真实 Git 修改；按 Session 分批、全 Session reasoning 共用 12k 字符预算，并拒绝真实路径逃逸。
+- HR 仅检查 `UNAUTHORIZED_ACTION`、`UNCLEAR_BOUNDARY`、`SPECULATIVE_OR_VAGUE`，默认手动；保留 `off/task/daily/both` 自动调度接口。
+- HR dossier 增加最小任务边界与截断元数据，二进制 patch 不内联；manual/task/daily 跨触发方式按 snapshot + Session 去重，日期按 UTC 严格校验。
+- HR Agent 输出改为解析 OpenClaw JSON envelope 并强校验三类 finding；非法输出只失败 HR job。Monitor 不再读取 HR 原始 Session，只展示校验后的 findings。
+- 所有 Kernel 写入口共用单写者锁；status/kernel-status/snapshot list/show/diff 使用只读连接且不会创建缺失数据库。
+- execution 增加 lease heartbeat，reaper 同一事务回收 execution 与 RUNNING task；重试 attempt 使用独立 worktree。
+- Git/SQLite 增加轻量补偿：索引失败撤销新 hidden ref，Restore 清理新分支/worktree，Revert 要求祖先关系且索引失败保留反向 commit SHA 供对账。
+- Monitor 改用只读 SQLite Kernel，展示 Git snapshot/HR，并提供只读 snapshot list/detail/diff；不负责 workflow、HR、restore 或 revert 写操作。
+- 更新所有受影响 Agent 规则、安装包、README、架构、监控、Git/HR 运维文档和 ADR；旧 PostgreSQL ADR/计划明确标为已取代。
+
+### 部署边界
+
+- 只支持同一台机器上的本地磁盘，不支持多台机器或网络文件系统共享 SQLite。
+- 完整备份必须同时覆盖 Kernel SQLite、目标 Git 仓库和需要保留的 artifacts。
+- 本次修改触发已安装 Agent 更新；普通更新不要求停止 Gateway。
+
+## 2026-08-18 - Control Kernel + PostgreSQL 分层重构
+
+### 更新内容
+
+- 新增 `scripts/control-kernel/`（`schema.sql` / `pool.mjs` / `ids.mjs` / `repository.mjs` / `lease.mjs` / `kernel.mjs` / `apply-schema.mjs`），作为 run/task/execution/artifact/event 五类事实的唯一可信数据源。
+- 存储切换为单 PostgreSQL 实例双 schema：`kernel` 存事实，`langgraph` 存决策投影。删除手写 `sqlite-checkpointer.mjs` 与 `database.mjs`，checkpointer 改用官方 `@langchain/langgraph-checkpoint-postgres` 的 `PostgresSaver`，子类 `KernelPostgresSaver` 只补 `threadIds()`。Monitor telemetry 继续用 SQLite，是可丢弃的观测数据而非权威。
+- 并发闸门用 PostgreSQL 部分唯一索引 `executions(task_id) WHERE state IN ('LEASED','RUNNING')` 实现 lease 仲裁；`acquireLease` 为单条 `INSERT ... ON CONFLICT DO NOTHING`，冲突抛 `LEASE_HELD`。索引建在 `task_id` 而非 `run_id`，串行是并行的退化情形。
+- `graph.mjs` 13 个节点全部保留、路由结构不变，节点内追加 Kernel 写入；`dispatch` 增 lease 争抢失败分支，`reconcile` 增第五种 kind `LEASE_EXPIRED`。Agent 进程静默死掉不再让 workflow 永久卡在 RUNNING。
+- `agent-runner` 周期调用 `kernel.lease.heartbeat()`，返回 `null` 即自杀；Monitor 的 `reconcileCycle()` 接入 `reapExpiredLeases()` 回收过期租约，PG 不可达时只标记降级不中断刷新。
+- `config/stategraph-policy.json` 的 `lease_seconds` / `heartbeat_interval_seconds` / `parallelism` 由 `loadStateGraphPolicy()` 校验并真正流到 kernel 与 agent-runner（此前是死配置，实际只有环境变量 `OPENCLAW_KERNEL_LEASE_SECONDS` 生效）；新增跨字段断言 `lease_seconds > heartbeat_interval_seconds * 2`，违反抛 `POLICY_LEASE_TOO_SHORT`。
+- Agent 产物按 sha256 内容寻址落 CAS（`runtime/artifacts/cas/<前2位>/<sha256>`），索引写入 `kernel.artifacts`；同一产物被多 run 引用天然去重。
+- Monitor 改为双源合并：主源 `kernel.projectRuns()` 提供 execution/artifact 事实，副源 `stateRuntime.list()` 提供决策语义，合并键 `langgraph_thread_id === workflowId`。19 个端点与 3 个 read model 原字段全部冻结，仅追加 `run_id`、`langgraph_thread_id`、`execution`、`artifacts`、`task_group_id`、`parallel_slot`、`kernel_reachable`。Kernel 不可达时降级为 checkpoint 只读，UI 仍可用。
+- 并行接口占位：`split_tasks` / `merge_tasks` 两个直通节点加入图结构（`parallelism.enabled === false` 时纯直通，开启抛 `PARALLEL_NOT_IMPLEMENTED`），`kernel.tasks` 的 `task_group_id` / `parallel_slot` / `depends_on` 字段已在 DDL 中。现在就加是因为 LangGraph 的 `addConditionalEdges` 映射表是静态的，日后改图结构会让已有 checkpoint 失效。
+- `agents/manager-agent/workspace/AGENTS.md` 明确推荐阶段顺序 `REQUIREMENTS → ARCHITECTURE → DESIGN → DEVELOPMENT → TEST → CODE_REVIEW → RELEASE`，即 Reviewer 排在 Tester 之后，让评审能看到测试结果与失败证据。`policy.ORDER` 常量不改，仅用于合法性校验。
+- `package.json` 新增 `kernel:schema` 与 `kernel:status` 脚本；`.env.example` 登记全部 `OPENCLAW_PG_*` / `OPENCLAW_KERNEL_*` / `OPENCLAW_WORKER_ID`。
+- 清理：删除空目录 `scripts/control-core/`、`scripts/monitor-core/`、`scripts/orchestrator/`，移除 `webchat-bridge.mjs`；旧 SQLite（`runtime/control/control.db*`、`runtime/stategraph/checkpoints.db*`）归档到 `runtime/archive/`。
+- 文档：`docs/architecture.md` 重写为 Control Kernel + PostgreSQL 分层架构；新增 `docs/adr/` 四条 ADR（语言选型、双 schema、lease 仲裁、Monitor 降级）；`docs/monitoring.md` 补 `kernel_reachable`、降级行为与新字段。
+
+### 修改原因
+
+重构前状态分散在三处 SQLite，其中 `control.db` 与 `checkpoints.db` 都自称权威，崩溃恢复时无法判断以谁为准；Agent 进程存活性只能靠可回滚的 checkpoint 推断，进程静默死亡会让 workflow 永久卡死。本次把「客观发生过什么」（Kernel 事实）与「LangGraph 认为的世界」（checkpoint 决策）彻底分层，并固定写入顺序为「Kernel 先落库 → Checkpoint 后投影」——前者留下的孤儿可恢复，后者留下的脏状态不可恢复。
+
+### 已知限制
+
+- `test:kernel` 需要可用的 PostgreSQL；未配置 `OPENCLAW_PG_URL` 时整套 SKIP。CI 与接手者必须确认输出是真 PASS 而非 SKIP。
+- `validate-install` 的 1 例失败为中文 GBK mojibake 的历史问题，与本次重构无关。
+- 并行执行只完成接口与数据层预留，`parallelism.enabled` 打开会抛 `PARALLEL_NOT_IMPLEMENTED`。
+
+## 2026-08-14 - StateGraph/checkpointer 单框架重建
+
+### 更新内容
+
+- 以 `ef850ce6e8b71391203460f28670b1d85eb72c72` 为干净基点重建唯一 StateGraph/checkpointer workflow，规避后续已知混淆 JavaScript。
+- 删除旧控制框架、旧 workflow runner、监督/wake 代码和 Java monitor 代理；monitor 后端统一为 Node.js。
+- 固定 task kind 到 Agent 映射，冻结动态路线与审批计划，worker 不再持有状态、审批或派发能力。
+- 加入独立 Git worktree、context manifest、字节级 SHA、证据接收 Gate、candidate history 和双层重试。
+- TEST 强制 Docker sandbox，并补全动态 binds 的并发 lease、陈旧恢复和异常回滚。
+- Manager 上下文统一为 200k，输出保持 32k，软预算 120k，紧凑 prompt 保持 12k 字符。
+- 安装器同步真实 OpenClaw provider/model 目录，并设置 Windows 受保护 DACL 或 Unix 0700。
+- 测试入口更新为 StateGraph 26 项、Node monitor 13 项及安装验证 6 项。
+
+### 修改原因
+
+旧结构存在多套状态与派发权威，且 Java monitor 与项目 Node/Python 技术栈不一致。重建把状态、路线、审批、候选提交和恢复统一到最新 checkpoint，同时让实际模型目录、证据摘要和 sandbox 配置都在代码边界内 fail closed。
+
+### 已知限制
+
+- 当前机器的 Docker Desktop Linux daemon 未启动；真实容器 E2E 尚未执行，现有 sandbox 测试为 command-boundary 自动化验证。
+
 ## [Unreleased] - 2026-08-07
-
-### 强制 test-agent Docker sandbox（Round 4，2026-08-12）
-
-- 将 test-agent 的工具边界、身份、使命、永久规则和本地规则说明统一为强制 `SANDBOXED_DOCKER`；沙箱、动态挂载、配置或 attestation 不可验证时 `BLOCKED`，禁止宿主机回退。
-- 更新 agent contracts、Evidence/Test/Security/Release Gate、OpenClaw 兼容性说明和人工审批边界：历史 `UNSANDBOXED_LOCAL` 仅用于迁移前 artifact，不再支撑新 test-agent 的通过结论。
-- 更新 demo policy/project/request、测试报告、命令记录、上下文与结果模板，要求记录 runtime/container ID、镜像 digest、挂载、资源限制、网络策略和 sandbox attestation。
-- 更新 release-agent、review-agent、developer-agent 的消费/契约说明，以及当前进度和交付报告，明确 Docker Desktop Linux Engine 恢复后仍需执行真实 Docker E2E。
-- 验证：Runtime Guard self-check `35 contracts / 10 templates`；sandbox runtime `6/6`；Orchestrator `10/10`；Node 语法检查与 `git diff --check` 通过。真实 Docker E2E 仍因 Docker Engine 不可用而未执行。
-
-### 强制 test-agent Docker sandbox（Round 1，2026-08-12）
-
-- 新增 fail-closed 的 `config/test-sandbox-policy.json`，固定 `SANDBOXED_DOCKER`、Docker、session scope、`network=none`、只读根文件系统、`capDrop=ALL` 和资源上限。
-- 新增 Node 22 测试镜像定义 `deploy/sandbox/Dockerfile.test-node`；镜像运行用户为非 root，未配置运行时安装命令或 Docker socket。
-- 新增 `scripts/orchestrator/sandbox-runtime.mjs`，实现每次 test run 的 worktree/input/raw-log 精确挂载计划、路径逃逸拒绝、sandbox attestation 和 fail-closed 校验。
-- 新增 sandbox runtime 单元测试；本轮只建立控制核心，尚未接入正式 dispatch，也未宣称测试任务已完成沙箱执行迁移。
-
-### 强制 test-agent Docker sandbox（Round 2，2026-08-12）
-
-- test-agent package 改为 `sandbox_mode=all`，并携带 Docker backend、session scope、`workspaceAccess=none`、`network=none`、只读根文件系统、`capDrop=ALL` 和资源限制。
-- PowerShell/Bash 安装器现在同步完整 sandbox/tools 配置；安装清单也记录该配置，避免只同步 `mode` 造成不完整隔离。
-- `command-record`、`result` 和 `release-decision` 契约新增 `SANDBOXED_DOCKER` 与 sandbox 运行时字段，同时保留 `UNSANDBOXED_LOCAL` 以兼容历史 artifact。
-- 新 test-agent 运行记录后续必须由 attestation 证明 Docker sandbox；本轮尚未接入 dispatch 生命周期。
-
-### 强制 test-agent Docker sandbox（Round 3，2026-08-12）
-
-- 将 OpenClaw 命令解析、Windows 参数传递和进程树终止抽到独立 `process-utils.mjs`，消除 sandbox runtime 与 Agent runner 的循环依赖；Windows 下可直接调用已解析的 OpenClaw Node entry，避免 JSON bind 参数被 `cmd` 破坏。
-- Orchestrator 现在在 test-agent 派发前生成每次运行的 sandbox lease，执行动态 bind 的 dry-run、配置应用、session recreate、`sandbox explain` 和 Docker inspect；任一步失败都阻断派发，不回退到宿主机执行。
-- 每次运行只挂载 worktree、只读 input、staged raw output 和 raw logs；输入 manifest、task 和声明的输入文件会复制到容器可见路径，并在复制前校验 SHA-256。容器内统一使用 `/worktree`、`/input`、`/agent-raw`、`/raw-logs` 和 `/workspace`。
-- test-agent 进程结束时强制验证容器身份、镜像、工作目录、network、只读根、capDrop、资源限制和挂载，再清理 session 并恢复原有 bind；结果缺少 `SANDBOXED_DOCKER` 或 attestation 会被 Orchestrator 拒绝。
-- 新增命令边界 mock 测试、容器路径 staging 测试和 prepare/verify/restore 闭环测试；定向结果为 sandbox runtime 6/6、Orchestrator 10/10、Runtime Guard self-check 35 contracts/10 templates。Windows 上组合测试进程未正常退出，未将其计为通过；Docker Desktop Linux Engine 当前不可用，因此真实 Docker E2E 仍待环境恢复后执行。
-
-### 通用静态模型配置与协议清理（2026-08-12）
-
-- 保留 Agent package 当前默认模型，不触发已安装 Agent 的隐式换模。
-- 将模型覆盖接口收敛为项目根 `.env`，支持每个 Agent 静态配置不同 `provider/model`；旧 `agent-models.json` 仅保留为兼容回退，禁止运行时自主选模。
-- 新增 OpenAI Chat Completions provider 模板：128k context、49,152 输出上限和 `max_completion_tokens` 字段，不含凭据。
-- Manager 上下文软阈值调整为 76,800，单个持久 session 累计 token 上限为 200k；两者不被当作单次请求窗口。
-- 删除厂商专属路由/provider 样例、Responses 协议内容及对应测试锁定；JSON 清洗、Ajv、失败证据链保持 provider 无关。
-
-### `.env` 更新与 Gateway reload 流程（2026-08-12）
-
-- 明确项目根 `.env` 由安装器和 Node 控制面按需读取，OpenClaw Gateway/Monitor 不会自动监视 `.env` 文件变化。
-- 更新 Agent 模型、provider、上下文或输出限制时，流程统一为 `install.ps1` / `install.sh` dry-run → apply → `config validate` / runtime bundle verify → `openclaw gateway restart --safe`；不再要求每次执行 `orchestrator.mjs init`。
-- 明确 dry-run 可在 Gateway 运行时执行；apply 前仍须确认没有活动 workflow/task。仅修改 Manager soft budget 等控制面参数无需 Gateway 重启；修改 `MONITOR_*` 后需单独重启 Monitor 服务。
-- 修复 PowerShell 安装器在完全幂等同步时将空变更列表误判为缺失参数的问题；`install.ps1 -Apply` 现在允许模型目录和 Agent 配置均已一致的无变更路径正常完成。
-
-### 轻量 StateGraph、持久 Supervisor 与 Agent 会话控制台（2026-08-12）
-
-- StateGraph 使用 `control.db` 内的 SQLite checkpointer，Supervisor 可从 checkpoint 恢复并以固定代码续跑，只在有限决策点唤醒 Manager。
-- Agent 执行、dispatch lease、工具宽限和 JSON 契约调用上限统一为 900 秒；Manager wake 与健康检测保持短周期。
-- Monitor 新增全部 Agent、session 索引和安全对话 API；控制台左侧显示所有已创建 Agent，右侧支持 session 切换和完整 user/assistant 历史。
-- 删除旧的任务/Agent 摘要 activity HTTP 路径，保留健康判定和 SSE 所需 session tailer，以及 Control Kernel、回执、审批、投影恢复等兼容边界。
-
-### Orchestrator Windows 派发恢复与 Manager 旁路收敛（2026-08-11）
-
-#### 变更（Changed）
-
-- Windows 下的 OpenClaw 启动改为显式使用 `ComSpec` 调用 `openclaw.cmd`，通过 `/d /s /c` 和 `windowsVerbatimArguments` 传递参数，不再依赖 Node 的 `shell:true`；统一传递 `--thinking off --verbose off`。新增独立 Agent runner，将 stdout、stderr、启动状态和进程结果持久化到当前 dispatch 的 `.orchestrator` 目录。
-- `orchestrator.mjs dispatch` 改为非阻塞启动，立即返回 `STARTED`；新增 `dispatch-reconcile --dispatch-id`，只对账原有 dispatch、摄取结构化产物并写入 completion，避免宿主命令超时后留下无法恢复的 `RUNNING` 状态。
-- launcher locator 在 Control Kernel 准备事务前持久化，缩小“已登记 dispatch 但没有恢复定位信息”的崩溃窗口；移除旧的同步 Agent spawn/ingestion 路径，所有正式 dispatch 统一走 detached runner。
-- 对历史上没有 launcher 证据的 dispatch，`dispatch-reconcile` 返回 `RECOVERY_REQUIRED`，不凭聊天记录、session transcript 或残留文件伪造 completion，也不擅自标记失败；后续必须重新建立受控、可审计的 run。
-- StateGraph 在 task 已 `DISPATCHED/RUNNING` 时返回 `RUNNING`，不再等待长时间 Agent 进程；下一轮只通过原 dispatch 对账，不重复派发。
-- Agent 执行超时、dispatch lease、Agent 工具运行宽限期和 Agent JSON 契约测试统一封顶为 900 秒；外部传入 901 秒以上的配置会 fail-closed。Manager 唤醒与健康检测保持更短的独立上限。
-- Manager 规则增加人工应急恢复边界：即使用户批准恢复，也只能调用 `dispatch-reconcile`，不得直接执行 `openclaw.cmd`、手工写 SQLite、伪造状态或跳过 test/review/release 阶段。
-- Manager 会话策略增加 `summary_only` 用户可见输出约束，禁止逐工具播报、源码探查、session tail 和模型思考过程。
-
-#### 原因（Why）
-
-- 实机对话显示，Windows 下同步 `spawn('openclaw', ..., shell:true)` 被宿主进程终止后，Agent session 可能继续运行，但 Orchestrator 无法完成结果摄取；本次曾在人工批准的应急边界内由 Manager 旁路调用 `openclaw.cmd`，随后手工维护数据库和推进阶段。该批准只解释历史处置，不构成正式运行链路的权限；新链路必须通过 detached runner 和 `dispatch-reconcile` 恢复。
-
-#### 验证（Tests）
-
-- 新增异步 dispatch → launcher result → reconcile → completion 闭环测试。
-- 新增 Windows 显式 `.cmd` 启动器测试、StateGraph 非阻塞 `RUNNING` 测试和 Manager summary-only policy 测试。
-- 新增 launcher 缺失时保持 `RECOVERY_REQUIRED`、不伪造成功/失败的回归测试；实机验证显式 `ComSpec` spawn `openclaw.cmd --version` 返回 0。
-- 完整回归（`npm test`）：128 项通过，0 失败；`git diff --check` 通过；本轮暂未提交 Git commit。
-
-### Manager 紧凑上下文视图（2026-08-11）
-
-#### 变更（Changed）
-
-- `control-kernel snapshot` 新增 `--view manager`，提供面向 Manager 的紧凑 workflow 上下文。
-- 紧凑视图只保留当前状态、活动 task、待审批、待处理 dispatch 和最新事件；历史 task、完整 receipt、completion payload、raw log 与历史事件改为按需读取。
-- 不改变 SQLite Control Kernel 的权威状态、事件链、审计和完整 snapshot 视图。
-
-#### 验证（Tests）
-
-- 新增 Manager 紧凑 snapshot 回归测试，确认历史与大 payload 不进入默认 Manager 上下文。
-
-### 控制面重复读取保护（2026-08-11）
-
-#### 变更（Changed）
-
-- StateGraph adapter 使用紧凑只读 snapshot；不再把完整历史 task/dispatch payload 放入 Graph state。
-- `workflow-run` 新增可选 `--after-revision`：没有新的 Control Kernel revision 时返回 `WAITING_FOR_CHANGE`，不启动本轮 Graph。
-- Local Orchestrator 对结构化输出 Schema validator 做进程内复用，并按 Schema 文件修改时间自动失效；不改变 ingestion 语义。
-
-#### 验证（Tests）
-
-- 新增无新 revision 时不启动 Graph 的回归测试。
-
-### 静态 Flash 模型分级与 Manager 会话预算（2026-08-11）
-
-#### 变更（Changed）
-
-- Requirement、Test、Release 和生成的 Dialogue Agent 使用轻量模型；Manager、Architect、Developer、Review 使用高能力模型。该历史分级现已由通用静态 per-Agent 配置替代。
-- 模型只在 package/安装配置阶段静态确定，本轮不增加按 task、token 或失败状态动态选模。
-- Manager 会话软预算从上下文窗口的 80%/160k 下调到 60%/120k，默认 thinking 从 `high` 下调到 `medium`。
-- Manager 默认只读取 `--view manager` 紧凑 snapshot；完整 Control Kernel snapshot、历史 task、receipt、completion payload 和 raw log 改为按 locator 读取。
-
-#### 验证（Tests）
-
-- 新增静态模型分级和 Manager 会话策略测试，防止 Flash/Pro 分工及上下文排除规则漂移。
-
-### Manager 会话轮换入口（2026-08-11）
-
-#### 新增（Added）
-
-- Local Orchestrator 新增 `manager-context` 命令，将 120k 静态软预算判断与紧凑 Control Kernel snapshot 合并为一次确定性读取。
-- 达到软预算时返回 `START_NEW_MANAGER_SESSION`；新会话只恢复紧凑 `prompt_context`，不复制旧聊天历史。
-- 未提供 token 估算时返回 `MEASURE_CONTEXT`，避免把未知用量误判为预算充足。
-
-#### 验证（Tests）
-
-- 新增预算内继续、达到预算轮换和未知用量三种 Manager 会话回归测试。
 
 ### 轻量 LangGraph StateGraph 编排层（2026-08-10）
 
@@ -482,7 +445,7 @@
 
 #### 改动了什么
 
-- 将当时自定义模型的显式 `maxTokens` 统一设为 `49152`。当前通用 OpenAI Chat Completions 模板继续保持该输出上限。
+- 将 `deepseek` 与 `mydeep` 路由下的 `deepseek-v4-pro`、`deepseek-v4-flash` 的显式 `maxTokens` 统一设为 `49152`，并为每个自定义模型声明 `compat.maxTokensField: "max_tokens"`。
 - 该配置覆盖 OpenClaw 模型目录中 Pro 的 8192 和 Flash 的 16384 隐式输出上限，应用于当前注册的 `manager-agent`、`requirement-agent`、`architect-agent`、`developer-agent`、`review-agent`、`test-agent`、`release-agent`。
 
 #### 为什么要改
@@ -504,7 +467,7 @@
 
 #### 验证
 
-- 2026-08-05 已在当前 OpenClaw 环境预演并执行完整卸载和重建：仅处理 7 个内置项目 Agent，未安装或更改 `dialogue-agent`。本轮改造后改用通用 `config/agent-models.example.json` 进行显式静态覆盖。
+- 2026-08-05 已在当前 OpenClaw 环境预演并执行完整卸载和重建：仅处理 `manager-agent`、`requirement-agent`、`architect-agent`、`developer-agent`、`review-agent`、`test-agent`、`release-agent`；未安装或更改 `dialogue-agent`。随后以 `config/agent-models.deepseek-routing.example.json` 恢复这些 Agent 的原有 DeepSeek V4 Pro 路由。
 - `openclaw config validate --json` 通过；`openclaw agents list --json` 为平台 `main` 加上述 7 个项目 Agent。
 - `runtime-bundle.mjs verify` 通过（105 entries，SHA-256 `da0fa5ddba12449a9077ffed06f4b3514062f18d209c4d3f310131e1826f3a3d`）；Control Kernel audit 为 `CONSISTENT`。
 - `npm run test:runtime-bundle`（3 项）和 `node --test tests/validate-install.test.mjs`（2 项）通过。
@@ -692,20 +655,20 @@
 - `task.json` 新增 `structured_outputs[]`。Manager 必须声明跨 Agent JSON/JSONL 的产出路径、Schema、格式、是否必需和产出 Agent；完成任务由 Guard 再次以 Ajv 校验声明产物。
 - 新增 `config/manager-session-policy.json`，保持 `thinking=high` 和 200k 模型窗口，同时将 Manager 会话软预算设为 80%（160k token），达到预算后从文件化状态创建新会话恢复。
 - 已将运行中的 `WF-ef1c5f87-93c5-4ec7-a074-3dea54831ca1` 正式隔离为 `QUARANTINED`，保留原始控制面、artifact 与 Guard 错误证据，不再参与恢复。
-- 清除了 `manager-agent` 父会话及当时两个 TUI 会话遗留的 `providerOverride`、`modelOverride` 与 `modelOverrideSource`。这些会话级字段曾将 Manager 的实际调用模型固定为旧 provider。
+- 清除了 `manager-agent` 父会话及当时两个 TUI 会话遗留的 `providerOverride`、`modelOverride` 与 `modelOverrideSource`。这些会话级字段曾将 Manager 的实际调用模型固定为 DeepSeek。
 - 保持 OpenClaw Agent 配置的 Manager 默认模型为 `newapi-responses/gpt-5.6-luna`，未改动其余 6 个项目 Agent、平台 `main` Agent、模型凭据或历史工作流会话。
 - 规定后续项目改动须在用户完成检查/验收后，同步更新本文件、`README.md` 与 `docs/current-progress-assessment.md`，记录变更、验证结果、完成状态与遗留风险。
-- 7 个 Agent 的项目配置统一使用 Chat Completions API；当前仅保留通用 OpenAI Chat Completions provider 模板。
+- 7 个 Agent 的项目配置与路由样例统一改为官方 `deepseek/deepseek-v4-pro` + Chat Completions API；不再将任何默认 Agent 路由到 Responses API。
 - JSON/JSONL LLM 回复链路新增保守清洗：去 BOM、去唯一 Markdown fence、或从唯一解释性前后缀中提取完整 JSON/JSONL；多个候选一律拒绝猜测，并记录原始/清洗 SHA-256 与转换元数据。
 - 新增 enum、type、schema drift、输出截断和空 content 的固定重写模板；所有类别共用首次调用之外最多两次的同会话重试预算。核心 `result`、`task` 与 JSON 校验错误契约为身份、状态、枚举、结构化产物和错误字段增加了描述。
-- 新增 `docs/llm-json-recovery.md`，记录厂商无关的清洗边界和两段可复核模板。
+- 新增 `docs/llm-json-recovery.md`，记录清洗边界、两段可复核模板和 DeepSeek JSON Output 的官方要求与当前 Gateway 限制。本项实现与文档为待用户验收状态。
 
 ### 为什么要改
 
 - 历史 workflow 在 manifest、输入哈希、任务事件和 worktree 路径上发生不一致，导致 Guard 正确 fail-closed；此前缺少派发前预检与可审计的隔离出口。
 - 同一 Manager 会话持续携带完整工具日志和失败记录，造成 token 消耗与流中断风险；当前实际使用未触及 200k 上限，因此扩大窗口不能解决问题。
 - 既有 Ajv 校验未把所有任务声明的结构化产物纳入控制面复检。
-- `openclaw models status --agent manager-agent --check` 显示 Agent 默认模型正确，但 TUI 新会话会继承父会话保存的旧模型覆盖，导致界面和实际调用不一致。
+- `openclaw models status --agent manager-agent --check` 显示的 Agent 默认模型已正确配置为 Luna，但 TUI 创建的新会话会继承父会话保存的 DeepSeek 覆盖，导致界面和实际调用与项目模型路由不一致。
 - 仅修正运行时配置不足以防止会话层覆盖重新造成误判；项目状态、用户可见操作说明和变更历史也需要在验收后保持一致。
 
 ### 改后的效果
@@ -714,10 +677,10 @@
 - 无法在不篡改不可变历史的前提下修复的 workflow 可以被隔离并从恢复索引移除；新任务必须从新的 workflow 重建。
 - 已声明 JSON/JSONL 产物在完成时必须通过其受信任 contract；聊天文本和 Markdown 摘要不能单独推动状态。
 - Manager 在 160k token 时换新会话并由 `recovery-check` 从文件恢复，避免用扩大窗口掩盖上下文累积。
-- 重新启动 Manager TUI 后，新会话不再继承旧模型覆盖。
+- 重新启动 Manager TUI 后，新会话会使用 `newapi-responses/gpt-5.6-luna`，不再继承 `deepseek/deepseek-v4-flash`。
 - 已存在的历史会话和工作流产物保留原始记录；本次只移除了会改变后续调用路由的覆盖字段。
 - 后续状态不会在未完成用户检查时提前标记为已验证；验收后将由三份项目文档共同反映实际状态。
-- 配置样例与路由文档已统一到通用 Chat Completions 配置。
+- 配置样例与路由文档已统一到 DeepSeek V4 Pro Chat Completions，避免当前 Gateway 的 Responses 路径限制影响 Agent 调用。
 - 格式错误不再依赖模型自我修复：已知包装问题可确定性清除，enum/type 不合法、schema drift 和截断会获得精确诊断并 fail-closed；两次重写后仍失败保留全链路证据。
 
 ### 验证
@@ -725,8 +688,8 @@
 - `npm test` 通过：82 项 Runtime Guard 测试通过，2 项因当前 Windows 会话无符号链接权限跳过；离线 LLM harness 8 项和安装验证 2 项通过。
 - `check-workflow` 已对被隔离 workflow 返回 `effective_status=QUARANTINED`、`state_revision=9`、`event_count=9`。
 - Manager 父会话及相关 TUI 会话均已确认不存在 provider/model override。
-- `openclaw config validate` 已验证当时 OpenClaw 配置；当前改造不修改 7 个 Agent package 的默认模型字段。
-- 待本次变更完成后运行 `npm test`、`git diff --check` 与安装校验；真实外部模型调用不在本地离线测试中执行。
+- `openclaw config validate` 已验证当前 OpenClaw 配置；7 个 Agent 的有效模型统一为 `deepseek/deepseek-v4-pro`。
+- 待本次变更完成后运行 `npm test`、`git diff --check` 与安装校验；真实 DeepSeek 调用不在本地离线测试中执行。
 
 ## [0.2.2] - 2026-07-30
 

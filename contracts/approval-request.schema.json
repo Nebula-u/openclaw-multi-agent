@@ -22,10 +22,23 @@
         "IRREVERSIBLE_DATA_OP", "NEEDS_INSTALL_OR_NETWORK", "NEEDS_CREDENTIALS",
         "INPUT_NOT_GIT_REPO", "INPUT_DIRTY_WORKTREE", "CHANGE_APPROVED_REQ_OR_ARCH",
         "THIRDPARTY_LICENSE_UNCLEAR", "SECURITY_RISK_ACCEPTANCE", "TEST_OR_SECURITY_EXCEPTION",
-        "RELEASE_HOLD_OVERRIDE", "MAX_REWORK_EXCEEDED", "DESTRUCTIVE_OR_CROSS_PROJECT"
+        "RELEASE_HOLD_OVERRIDE", "RELEASE_DEPLOYMENT", "MAX_REWORK_EXCEEDED", "DESTRUCTIVE_OR_CROSS_PROJECT"
       ]
     },
     "summary": { "type": "string", "minLength": 1 },
+    "deployment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["project_id", "candidate_commit", "base_url", "url_path", "final_url", "deployment_target"],
+      "properties": {
+        "project_id": { "type": "string" },
+        "candidate_commit": { "type": "string", "pattern": "^[a-f0-9]{40}$" },
+        "base_url": { "const": "https://multiagentforge.cloud" },
+        "url_path": { "type": "string" },
+        "final_url": { "type": "string" },
+        "deployment_target": { "type": "string" }
+      }
+    },
     "options": {
       "type": "array",
       "minItems": 1,

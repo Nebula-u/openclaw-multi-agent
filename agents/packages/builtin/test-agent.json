@@ -11,17 +11,20 @@
   "runtime_subdir": "agents/test-agent",
   "role": "worker",
   "capabilities": ["testing.plan", "testing.implementation", "testing.execution"],
-  "model": "deepseek/deepseek-v4-flash",
-  "delegation": { "callable_by_manager": true, "allow_agents": [] },
+  "model": "",
+  "delegation": { "callable_by_manager": false, "allow_agents": [] },
   "sandbox_mode": "all",
   "sandbox_config": {
     "mode": "all",
     "backend": "docker",
     "scope": "session",
-    "workspaceAccess": "none",
+    "workspaceAccess": "rw",
+    "prune": {
+      "idleHours": 1
+    },
     "docker": {
       "image": "openclaw-test-node:22-slim",
-      "workdir": "/workspace",
+      "workdir": "/workspace/.task-sandbox/repo",
       "network": "none",
       "readOnlyRoot": true,
       "capDrop": ["ALL"],

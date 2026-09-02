@@ -93,12 +93,121 @@ function extractUniqueJsonlBlock(text) {
   throw new JsonIngestionError('Response does not contain a complete JSONL block.', 'JSON_PARSE_ERROR');
 }
 
+function repairSyntaxValue(text) {
+  let output = '';
+  let quote = null;
+  let escaped = false;
+  let changedQuotes = false;
+  let changedComments = false;
+  for (let index = 0; index < text.length; index += 1) {
+    const character = text[index];
+    const next = text[index + 1];
+    if (quote === '"') {
+      output += character;
+      if (escaped) escaped = false;
+      else if (character === '\\') escaped = true;
+      else if (character === '"') quote = null;
+      continue;
+    }
+    if (quote === "'") {
+      if (escaped) {
+        output += character === '"' ? '\\"' : character;
+        escaped = false;
+      } else if (character === '\\') {
+        output += character;
+        escaped = true;
+      } else if (character === "'") {
+        output += '"';
+        quote = null;
+      } else {
+        output += character === '"' ? '\\"' : character;
+      }
+      changedQuotes = true;
+      continue;
+    }
+    if (character === '"' || character === "'") {
+      quote = character;
+      output += character === "'" ? '"' : character;
+      if (character === "'") changedQuotes = true;
+      continue;
+    }
+    if (character === '/' && next === '/') {
+      changedComments = true;
+      while (index < text.length && text[index] !== '\n') index += 1;
+      output += '\n';
+      continue;
+    }
+    if (character === '/' && next === '*') {
+      changedComments = true;
+      index += 2;
+      while (index < text.length && !(text[index] === '*' && text[index + 1] === '/')) index += 1;
+      index += 1;
+      continue;
+    }
+    output += character;
+  }
+  if (quote !== null) return null;
+  let changedKeys = false;
+  output = output.replace(/([{,]\s*)([A-Za-z_$][\w$-]*)(\s*:)/gu, (_match, prefix, key, suffix) => {
+    changedKeys = true;
+    return `${prefix}"${key}"${suffix}`;
+  });
+  const withoutTrailingCommas = output.replace(/,\s*([}\]])/gu, '$1');
+  const changedTrailingCommas = withoutTrailingCommas !== output;
+  output = withoutTrailingCommas;
+  const withCommas = output
+    .replace(/([0-9}\]])\s+(?=(?:"[^"\n]*"|[A-Za-z_$][\w$-]*)\s*:)/gu, '$1, ')
+    .replace(/\}\s*(?=\{)/gu, '},')
+    .replace(/\]\s*(?=\[)/gu, '],');
+  const changedCommas = withCommas !== output;
+  output = withCommas;
+  const stack = [];
+  let inString = false;
+  escaped = false;
+  for (const character of output) {
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (character === '\\') escaped = true;
+      else if (character === '"') inString = false;
+      continue;
+    }
+    if (character === '"') { inString = true; continue; }
+    if (character === '{') stack.push('}');
+    else if (character === '[') stack.push(']');
+    else if (character === '}' || character === ']') {
+      if (stack.at(-1) !== character) return null;
+      stack.pop();
+    }
+  }
+  if (inString) return null;
+  const changedBrackets = stack.length > 0;
+  output += stack.reverse().join('');
+  const transformations = [];
+  if (changedQuotes) transformations.push('NORMALIZE_SINGLE_QUOTES');
+  if (changedKeys) transformations.push('QUOTE_UNQUOTED_KEYS');
+  if (changedComments) transformations.push('REMOVE_JSON_COMMENTS');
+  if (changedTrailingCommas) transformations.push('REMOVE_TRAILING_COMMAS');
+  if (changedCommas) transformations.push('ADD_MISSING_COMMAS');
+  if (changedBrackets) transformations.push('ADD_MISSING_CLOSING_BRACKETS');
+  return { text: output, transformations };
+}
+
+function repairSyntax(text, jsonl) {
+  if (!jsonl) return repairSyntaxValue(text);
+  const lines = text.split(/\r?\n/u).filter((line) => line.trim().length > 0);
+  const repaired = lines.map((line) => repairSyntaxValue(line));
+  if (repaired.some((item) => item === null)) return null;
+  return { text: repaired.map((item) => item.text).join('\n'), transformations: [...new Set(repaired.flatMap((item) => item.transformations))] };
+}
+
 function normalizeText(raw, jsonl) {
   const withoutBom = raw.startsWith('\uFEFF') ? raw.slice(1) : raw;
   const transformations = raw === withoutBom ? [] : ['STRIP_UTF8_BOM'];
   const fenced = unwrapSingleFence(withoutBom);
   if (fenced !== null) {
     transformations.push('UNWRAP_SINGLE_JSON_FENCE');
+    const repaired = repairSyntax(fenced.trim(), jsonl);
+    if (repaired) return { text: repaired.text, transformations: transformations.concat(repaired.transformations) };
     return { text: fenced.trim(), transformations };
   }
   const trimmed = withoutBom.trim();
@@ -107,6 +216,14 @@ function normalizeText(raw, jsonl) {
     else JSON.parse(trimmed);
     return { text: trimmed, transformations };
   } catch (error) {
+    const repaired = repairSyntax(trimmed, jsonl);
+    if (repaired) {
+      try {
+        if (jsonl) parseJsonl(repaired.text);
+        else JSON.parse(repaired.text);
+        return { text: repaired.text, transformations: transformations.concat(repaired.transformations) };
+      } catch { /* continue with wrapper extraction */ }
+    }
     const parseMessage = error instanceof Error ? error.message : String(error);
     let text;
     try {
@@ -117,6 +234,8 @@ function normalizeText(raw, jsonl) {
       }
       throw extractionError;
     }
+    const extractedRepair = repairSyntax(text, jsonl);
+    if (extractedRepair) return { text: extractedRepair.text, transformations: transformations.concat(jsonl ? 'EXTRACT_UNIQUE_JSONL_FROM_WRAPPER' : 'EXTRACT_UNIQUE_JSON_FROM_WRAPPER', extractedRepair.transformations) };
     transformations.push(jsonl ? 'EXTRACT_UNIQUE_JSONL_FROM_WRAPPER' : 'EXTRACT_UNIQUE_JSON_FROM_WRAPPER');
     return { text, transformations };
   }

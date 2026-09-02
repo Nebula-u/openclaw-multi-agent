@@ -9,7 +9,7 @@
     "schema_version", "workflow_id", "task_id", "run_id", "agent_id", "role",
     "attempt", "started_at", "finished_at", "result_status",
     "summary_for_user", "summary_for_manager", "worktree_path_abs",
-    "artifact_root_abs", "isolation_mode", "self_validation"
+    "artifact_root_abs", "input_commit", "output_commit", "isolation_mode", "self_validation", "artifact_manifest_hash"
   ],
   "properties": {
     "schema_version": { "type": "integer", "minimum": 1, "description": "所遵循的 result 契约版本。" },
@@ -27,7 +27,7 @@
       "description": "Agent 对本次运行的最终判定；只能使用列出的枚举值，不能自造状态。"
     },
     "summary_for_user": { "type": "string", "description": "面向用户的可审计简要结论，不得虚构执行事实。" },
-    "summary_for_manager": { "type": "string", "description": "供 Manager 复核与下一步调度使用的简要结论。" },
+    "summary_for_manager": { "type": "string", "description": "供 Manager 向用户说明已验证结果的简要结论。" },
     "input_commit": { "type": ["string", "null"] },
     "output_commit": { "type": ["string", "null"] },
     "branch": { "type": ["string", "null"] },
@@ -46,28 +46,8 @@
     "decisions_required": { "type": "array", "items": { "type": "object" } },
     "recommended_next_action": { "type": "string" },
     "git_status_after_completion": { "type": ["string", "null"] },
-    "isolation_mode": { "type": "string", "enum": ["UNSANDBOXED_LOCAL", "SANDBOXED_DOCKER"], "description": "实际执行隔离级别；新 test-agent run 必须使用 SANDBOXED_DOCKER。" },
-    "sandbox_attestation": {
-      "type": ["object", "null"],
-      "additionalProperties": true,
-      "properties": {
-        "schema_version": { "type": "integer", "minimum": 1 },
-        "provider": { "const": "openclaw" },
-        "backend": { "const": "docker" },
-        "mode": { "const": "all" },
-        "scope": { "const": "session" },
-        "runtime_id": { "type": "string", "minLength": 1 },
-        "container_id": { "type": "string", "minLength": 1 },
-        "image": { "type": "string", "minLength": 1 },
-        "image_digest": { "type": "string", "minLength": 1 },
-        "network": { "const": "none" },
-        "workspace_access": { "const": "none" },
-        "read_only_root": { "const": true },
-        "cap_drop": { "type": "array", "contains": { "const": "ALL" } },
-        "host_execution": { "const": false },
-        "verified_at": { "type": "string", "format": "date-time" }
-      }
-    },
+    "isolation_mode": { "type": "string", "enum": ["UNSANDBOXED_LOCAL", "SANDBOXED_DOCKER"], "description": "实际执行隔离级别；当 OPENCLAW_TEST_SANDBOX_ENABLED=true 时 TEST 必须为 SANDBOXED_DOCKER，否则必须为 UNSANDBOXED_LOCAL。" },
+    "sandbox_attestation": { "type": ["object", "null"] },
     "self_validation": {
       "type": "object",
       "additionalProperties": true,
@@ -88,8 +68,27 @@
         }
       }
     },
-    "artifact_manifest_hash": { "type": ["string", "null"] }
+    "artifact_manifest_hash": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "deployment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["project_id", "candidate_commit", "base_url", "url_path", "final_url", "deployment_target"],
+      "properties": {
+        "project_id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,62}$" },
+        "candidate_commit": { "type": "string", "pattern": "^[a-f0-9]{40}$" },
+        "base_url": { "const": "https://multiagentforge.cloud" },
+        "url_path": { "type": "string", "pattern": "^/[a-z0-9][a-z0-9-]{0,80}$" },
+        "final_url": { "type": "string", "pattern": "^https://multiagentforge\\.cloud/[a-z0-9][a-z0-9-]{0,80}$" },
+        "deployment_target": { "type": "string", "minLength": 1, "maxLength": 200 }
+      }
+    }
   },
+  "allOf": [
+    {
+      "if": { "properties": { "isolation_mode": { "const": "SANDBOXED_DOCKER" } } },
+      "then": { "required": ["sandbox_attestation"], "properties": { "sandbox_attestation": { "type": "object" } } }
+    }
+  ],
   "definitions": {
     "claim": {
       "type": "object",

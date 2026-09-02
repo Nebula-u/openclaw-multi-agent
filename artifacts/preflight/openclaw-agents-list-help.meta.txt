@@ -1,9 +1,0 @@
-slug=openclaw-agents-list-help
-command=openclaw agents list --help
-executable=openclaw
-cwd=/d/MicroConnect/project/openclaw-multi-agent
-exit_code=0
-started_at=2026-07-23T08:32:22Z
-finished_at=2026-07-23T08:32:25Z
-stdout_file=/d/MicroConnect/project/openclaw-multi-agent/artifacts/preflight/openclaw-agents-list-help.stdout.txt
-stderr_file=/d/MicroConnect/project/openclaw-multi-agent/artifacts/preflight/openclaw-agents-list-help.stderr.txt

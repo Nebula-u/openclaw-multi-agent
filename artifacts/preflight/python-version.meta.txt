@@ -1,9 +1,0 @@
-slug=python-version
-command=python --version
-executable=python
-cwd=/d/MicroConnect/project/openclaw-multi-agent
-exit_code=0
-started_at=2026-07-23T08:33:35Z
-finished_at=2026-07-23T08:33:35Z
-stdout_file=/d/MicroConnect/project/openclaw-multi-agent/artifacts/preflight/python-version.stdout.txt
-stderr_file=/d/MicroConnect/project/openclaw-multi-agent/artifacts/preflight/python-version.stderr.txt

@@ -1,9 +1,0 @@
-slug=pwsh-version
-command=pwsh --version
-executable=pwsh
-cwd=/d/MicroConnect/project/openclaw-multi-agent
-exit_code=0
-started_at=2026-07-23T08:33:33Z
-finished_at=2026-07-23T08:33:33Z
-stdout_file=/d/MicroConnect/project/openclaw-multi-agent/artifacts/preflight/pwsh-version.stdout.txt
-stderr_file=/d/MicroConnect/project/openclaw-multi-agent/artifacts/preflight/pwsh-version.stderr.txt
