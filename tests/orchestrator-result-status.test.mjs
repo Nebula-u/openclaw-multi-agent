@@ -384,7 +384,14 @@ test('TEST workflow dispatches only staged paths, collects staged output, and re
   t.after(() => rmSync(stageRoot, { recursive: true, force: true }));
   const testSandboxStager = {
     prepare(task) { calls.prepare += 1; stagedTask = task; mkdirSync(dirname(staging.executionRawOutputPath), { recursive: true }); staging.attestation = hostSandboxAttestation(task); return staging; },
-    collect(task, value) { calls.collect += 1; assert.equal(value, staging); mkdirSync(dirname(task.rawOutputPath), { recursive: true }); copyFileSync(value.executionRawOutputPath, task.rawOutputPath); return { referencePathMappings: [] }; },
+    collect(task, value) {
+      calls.collect += 1;
+      assert.equal(value, staging);
+      assert.equal(readFileSync(value.executionRawOutputPath, 'utf8'), `${JSON.stringify(blockedTestResult(stagedTask))}\n`);
+      mkdirSync(dirname(task.rawOutputPath), { recursive: true });
+      copyFileSync(value.executionRawOutputPath, task.rawOutputPath);
+      return { referencePathMappings: [] };
+    },
     cleanup(value) { calls.cleanup += 1; assert.equal(value, staging); rmSync(stageRoot, { recursive: true, force: true }); },
   };
   const { workflowId, orchestrator } = await createTestWorkflow(t, {
@@ -394,10 +401,11 @@ test('TEST workflow dispatches only staged paths, collects staged output, and re
       const message = readFileSync(messagePath, 'utf8');
       assert.match(message, /execution_worktree_path_abs: \/workspace\/.task-sandbox\/repo/u);
       assert.match(message, /execution_context_manifest_path_abs: \/workspace\/.task-sandbox\/input\/execution-context-manifest\.json/u);
-      assert.match(message, /Write exactly one result\.schema\.json object only to:[\s\S]*\/workspace\/.task-sandbox\/output\/result\.json\.raw/u);
+      assert.match(message, /return exactly one complete result\.schema\.json object as your final reply/u);
+      assert.doesNotMatch(message, /result\.json\.raw/u);
       assert.doesNotMatch(message, /host_worktree_path_abs|host_artifact_root_abs/u);
-      writeFileSync(staging.executionRawOutputPath, `${JSON.stringify(blockedTestResult(stagedTask))}\n`);
-      return { exitCode: 0, stdout: '', stderr: '' };
+      const result = JSON.stringify(blockedTestResult(stagedTask));
+      return { exitCode: 0, stdout: JSON.stringify({ status: 'ok', result: { finalAssistantVisibleText: result } }), stderr: '' };
     },
   });
 

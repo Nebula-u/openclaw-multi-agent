@@ -24,7 +24,9 @@ test('TEST task messages use staged sandbox paths without host command paths', (
   });
   assert.match(message, /execution_worktree_path_abs: \/workspace\/.task-sandbox\/repo/u);
   assert.match(message, /execution_context_manifest_path_abs: \/workspace\/.task-sandbox\/input\/execution-context-manifest\.json/u);
-  assert.match(message, /\/workspace\/.task-sandbox\/output\/result\.json\.raw/u);
+  assert.match(message, /return exactly one complete result\.schema\.json object as your final reply/u);
+  assert.match(message, /Do not write result files yourself; the Orchestrator will atomically stage and publish that reply/u);
+  assert.doesNotMatch(message, /result\.json\.raw/u);
   assert.doesNotMatch(message, /\/host\/runtime\//u);
 });
 
