@@ -20,6 +20,20 @@ export class TestSandboxStagingError extends Error {
 }
 
 function fail(code, message, details = {}) { throw new TestSandboxStagingError(code, message, details); }
+function preparationError(error, phase, paths, task) {
+  const details = {
+    ...(error?.details ?? {}),
+    preparation_phase: phase,
+    workspace_root_abs: paths.workspaceRoot,
+    staging_root_abs: paths.stagingRoot,
+    task_id: task.taskId,
+    attempt: task.attempt,
+  };
+  for (const key of ['syscall', 'path', 'dest', 'errno']) if (error?.[key] !== undefined) details[key] = error[key];
+  const wrapped = new TestSandboxStagingError(error?.code ?? 'TEST_SANDBOX_PREPARE_FAILED', error?.message ?? 'TEST sandbox preparation failed', details);
+  wrapped.cause = error;
+  return wrapped;
+}
 function inside(root, path) {
   const value = nodePath.relative(nodePath.resolve(root), nodePath.resolve(path));
   return value === '' || (!value.startsWith(`..${nodePath.sep}`) && value !== '..' && !nodePath.isAbsolute(value));
@@ -267,23 +281,31 @@ export function createTestSandboxStager({ workspaceRoot: workspaceRootInput, run
     }
     await acquire();
     let cleanupImage = null;
+    let phase = 'CONFIGURATION';
     try {
       const configuredSandbox = verifiedSandboxProfile(inspectSandbox);
       cleanupImage = configuredSandbox.docker.image;
+      phase = 'WORKSPACE_TRAVERSAL';
       ensureContainerWorkspaceTraversal(paths.workspaceRoot);
+      phase = 'STAGING_CLEANUP';
       cleanRoot(cleanupImage);
+      phase = 'INPUT_VALIDATION';
       const inputRoot = inputRootForAttempt(task);
       if (!existsSync(inputRoot)) fail('TEST_SANDBOX_INPUT_MISSING', `task input root is missing: ${inputRoot}`);
       safeTree(inputRoot, 'TEST_SANDBOX_INPUT_UNSAFE');
       if (!existsSync(task.worktreePathAbs)) fail('TEST_SANDBOX_WORKTREE_MISSING', `task worktree is missing: ${task.worktreePathAbs}`);
       safeTree(task.worktreePathAbs, 'TEST_SANDBOX_WORKTREE_UNSAFE');
+      phase = 'STAGING_LAYOUT';
       mkdirSync(paths.stagingRoot, { recursive: true, mode: 0o755 });
+      phase = 'COPY_INPUT';
       cpSync(inputRoot, paths.executionInputRootAbs, { recursive: true, dereference: false, errorOnExist: true });
       mkdirSync(paths.executionOutputRootAbs, { recursive: true });
       mkdirSync(paths.executionRawLogsRootAbs, { recursive: true });
+      phase = 'CLONE_WORKTREE';
       runGit(paths.workspaceRoot, ['clone', '--no-local', task.worktreePathAbs, paths.executionWorktreeAbs]);
       const stagedCommit = runGit(paths.executionWorktreeAbs, ['rev-parse', 'HEAD']);
       if (stagedCommit !== task.inputCommit) fail('TEST_SANDBOX_INPUT_COMMIT_MISMATCH', 'staged repository does not match the assigned input commit', { expected: task.inputCommit, actual: stagedCommit });
+      phase = 'BUILD_EXECUTION_CONTEXT';
       const sourceManifest = JSON.parse(readFileSync(nodePath.join(paths.executionInputRootAbs, 'context-manifest.json'), 'utf8'));
       const sourceTask = JSON.parse(readFileSync(nodePath.join(paths.executionInputRootAbs, 'task.json'), 'utf8'));
       const priorArtifacts = stagePriorArtifacts({ source: sourceTask, executionInputRootAbs: paths.executionInputRootAbs, containerInputRootAbs: paths.containerInputRootAbs });
@@ -291,10 +313,13 @@ export function createTestSandboxStager({ workspaceRoot: workspaceRootInput, run
       writeFileSync(nodePath.join(paths.executionInputRootAbs, 'task.json'), `${JSON.stringify(executionTask, null, 2)}\n`, 'utf8');
       const executionManifest = buildExecutionManifest({ source: sourceManifest, task, inputRoot, paths });
       writeFileSync(paths.executionContextManifestPathAbs, `${JSON.stringify(executionManifest, null, 2)}\n`, 'utf8');
+      phase = 'SET_CONTAINER_PERMISSIONS';
       chmodContainerWritable(paths.executionWorktreeAbs);
       chmodContainerWritable(paths.executionOutputRootAbs);
       chmodContainerWritable(paths.executionRawLogsRootAbs);
+      phase = 'LOCK_INPUT';
       chmodReadOnly(paths.executionInputRootAbs);
+      phase = 'WRITE_ATTESTATION';
       const receiptPathAbs = nodePath.join(task.artifactRootAbs, '.orchestrator', 'test-sandbox-attestation.receipt.json');
       atomicWriteJson(receiptPathAbs, {
         schema_version: 1, kind: 'test-sandbox-attestation', authority: 'orchestrator-host',
@@ -322,8 +347,14 @@ export function createTestSandboxStager({ workspaceRoot: workspaceRootInput, run
       };
       return active;
     } catch (error) {
-      let pendingError = error;
-      try { cleanRoot(cleanupImage); } catch (cleanupError) { pendingError = cleanupError; }
+      const pendingError = preparationError(error, phase, paths, task);
+      try { cleanRoot(cleanupImage); }
+      catch (cleanupError) {
+        pendingError.details.cleanup_error = {
+          code: cleanupError?.code ?? 'TEST_SANDBOX_CLEANUP_FAILED', message: cleanupError?.message ?? 'cleanup failed',
+          syscall: cleanupError?.syscall ?? null, path: cleanupError?.path ?? null,
+        };
+      }
       finally { await release(); }
       throw pendingError;
     }

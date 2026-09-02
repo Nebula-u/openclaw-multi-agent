@@ -24,6 +24,42 @@ function now(clock) { const value = clock(); return value instanceof Date ? valu
 function taskSession(task) { return `orc-${task.runId.toLowerCase()}-${task.taskId.toLowerCase()}-a${task.attempt}`.slice(0, 120); }
 function processLog(task, name, content) { const path = join(task.artifactRootAbs, 'logs', name); mkdirSync(join(task.artifactRootAbs, 'logs'), { recursive: true }); atomicWriteFile(path, String(content ?? '')); return path; }
 function inside(root, path) { const value = relative(resolve(root), resolve(path)); return value === '' || (value !== '..' && !value.startsWith(`..${sep}`) && !isAbsolute(value)); }
+function boundedText(value, limit = 8192) { return typeof value === 'string' ? value.slice(0, limit) : null; }
+function preparationErrorValue(error) {
+  const details = error?.details ?? {};
+  return {
+    name: boundedText(error?.name, 256), code: boundedText(error?.code, 256) ?? 'TEST_SANDBOX_PREPARE_FAILED',
+    message: boundedText(error?.message),
+    syscall: boundedText(error?.syscall, 256) ?? boundedText(details.syscall, 256),
+    path: boundedText(error?.path) ?? boundedText(details.path), dest: boundedText(error?.dest) ?? boundedText(details.dest),
+    stack: boundedText(error?.cause?.stack) ?? boundedText(error?.stack),
+  };
+}
+export function writeTestSandboxPreparationDiagnostic(task, error, occurredAt) {
+  const pathAbs = join(task.artifactRootAbs, '.orchestrator', 'test-sandbox-preparation', `attempt-${task.attempt}.diagnostic.json`);
+  const details = error?.details ?? {};
+  const value = {
+    schema_version: 1, kind: 'test-sandbox-preparation-diagnostic', authority: 'orchestrator-host', occurred_at: occurredAt,
+    workflow_id: task.workflowId, task_id: task.taskId, run_id: task.runId, agent_id: task.agentId, attempt: task.attempt,
+    preparation_phase: boundedText(details.preparation_phase, 128) ?? 'UNKNOWN',
+    workspace_root_abs: boundedText(details.workspace_root_abs), staging_root_abs: boundedText(details.staging_root_abs),
+    error: preparationErrorValue(error), cleanup_error: details.cleanup_error ?? null,
+  };
+  atomicWriteJson(pathAbs, value);
+  return { path_abs: pathAbs, sha256: sha256File(pathAbs), value };
+}
+export function tryWriteTestSandboxPreparationDiagnostic(task, error, occurredAt, { writeDiagnostic = writeTestSandboxPreparationDiagnostic } = {}) {
+  try { return { diagnostic: writeDiagnostic(task, error, occurredAt), write_error: null }; }
+  catch (writeError) {
+    return {
+      diagnostic: null,
+      write_error: {
+        code: boundedText(writeError?.code, 256) ?? 'TEST_SANDBOX_DIAGNOSTIC_WRITE_FAILED',
+        syscall: boundedText(writeError?.syscall, 256), path: boundedText(writeError?.path),
+      },
+    };
+  }
+}
 function publishedResult(task) {
   if (!task) return null;
   const payload = task.payload ?? {};
@@ -87,16 +123,17 @@ export function taskMessage(task) {
   return `# Orchestrator task\n\n- workflow_id: ${task.workflowId}\n- task_id: ${task.taskId}\n- run_id: ${task.runId}\n- step_id: ${task.stepId}\n- assigned_agent: ${task.agentId}\n- attempt: ${task.attempt}\n${executionFields}- context_manifest_sha256: ${task.contextManifestSha256}\n\nComplete only this assigned step. Read the immutable context manifest. Do not communicate with other Agents, alter route or approval records, write to the Control Kernel, or call Monitor controls. ${staging ? 'Use only execution_* paths for file and command access; copy result_identity values from the execution manifest verbatim into the result object.' : ''}${isolationRequirement} Write exactly one result.schema.json object only to:\n\n${executionOutput}\n\nAfter completing file operations, return exactly one complete result.schema.json object as your final reply. The Orchestrator will atomically stage that reply and publish it; do not write result files yourself.\n`;
 }
 
-function stagingPreparationBlockedResult(task, error, occurredAt) {
+function stagingPreparationBlockedResult(task, error, occurredAt, diagnostic = null) {
   return {
     schema_version: 1, workflow_id: task.workflowId, task_id: task.taskId, run_id: task.runId, agent_id: task.agentId,
     role: 'orchestrator', attempt: task.attempt, started_at: occurredAt, finished_at: occurredAt,
     result_status: 'BLOCKED', summary_for_user: 'The isolated TEST workspace could not be prepared.',
-    summary_for_manager: `TEST sandbox preparation failed: ${error.code ?? 'TEST_SANDBOX_PREPARE_FAILED'}.`,
+    summary_for_manager: `TEST sandbox preparation failed during ${error.details?.preparation_phase ?? 'UNKNOWN'}: ${error.code ?? 'TEST_SANDBOX_PREPARE_FAILED'}.`,
     worktree_path_abs: task.worktreePathAbs, artifact_root_abs: task.artifactRootAbs,
     input_commit: task.inputCommit, output_commit: task.inputCommit, isolation_mode: 'UNSANDBOXED_LOCAL',
     self_validation: { preflight_passed: false, checks: [{ name: 'test_sandbox_preparation', status: 'FAIL', detail: error.code ?? 'TEST_SANDBOX_PREPARE_FAILED' }] },
     artifact_manifest_hash: task.contextManifestSha256,
+    test_sandbox_preparation_diagnostic: diagnostic ? { path_abs: diagnostic.path_abs, sha256: diagnostic.sha256, preparation_phase: diagnostic.value.preparation_phase } : null,
     known_limitations: ['The TEST Agent was not dispatched because staging failed.'],
   };
 }
@@ -455,7 +492,9 @@ export function createOrchestrator({ projectRoot: projectRootInput, database = n
           task.testSandbox = testSandbox;
         } catch (error) {
           const occurredAt = now(clock);
-          atomicWriteFile(task.rawOutputPath, `${JSON.stringify(stagingPreparationBlockedResult(task, error, occurredAt))}\n`);
+          const recorded = tryWriteTestSandboxPreparationDiagnostic(task, error, occurredAt);
+          if (recorded.write_error) error.details = { ...(error.details ?? {}), diagnostic_write_error: recorded.write_error };
+          atomicWriteFile(task.rawOutputPath, `${JSON.stringify(stagingPreparationBlockedResult(task, error, occurredAt, recorded.diagnostic))}\n`);
           executionOutcome = { result: { exitCode: 1, stdout: '', stderr: error.message, failureCode: error.code ?? 'TEST_SANDBOX_PREPARE_FAILED' },
             ingested: ingestTaskOutput({ projectRoot, task, occurredAt, testSandboxPreparationFailure: true }) };
         }
