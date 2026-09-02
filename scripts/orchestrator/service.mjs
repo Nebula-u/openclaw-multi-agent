@@ -15,7 +15,7 @@ import { createApprovalCommandQueue } from './approval-command-queue.mjs';
 import { createWorkflowControlCommandQueue } from './workflow-control-command-queue.mjs';
 import { ingestTaskOutput, writeFailureReceipt } from './output-ingestion.mjs';
 import { archiveJsonRegeneration, archiveOutputBoundaryFailure, isJsonRegenerable, isOutputBoundaryFailure, MAX_JSON_REGENERATIONS } from './json-regeneration.mjs';
-import { extractFinalAssistantText, runOpenClawAgent } from './openclaw-runner.mjs';
+import { extractFinalAssistantText, extractFinalAssistantVisibleText, runOpenClawAgent } from './openclaw-runner.mjs';
 import { compileRoutePlan, GATE_CHECKS_BY_KIND } from './route-policy.mjs';
 import { createTestSandboxStager } from './test-sandbox-staging.mjs';
 
@@ -83,7 +83,7 @@ export function taskMessage(task) {
   const isolationRequirement = task.kind === 'TEST' && !sandboxRequired
     ? ' This is an unsandboxed local TEST task. The result must contain exactly `"isolation_mode": "UNSANDBOXED_LOCAL"` and `"sandbox_attestation": null`; `sandbox_attestation` must not be omitted or replaced with an object.'
     : '';
-  return `# Orchestrator task\n\n- workflow_id: ${task.workflowId}\n- task_id: ${task.taskId}\n- run_id: ${task.runId}\n- step_id: ${task.stepId}\n- assigned_agent: ${task.agentId}\n- attempt: ${task.attempt}\n${executionFields}- context_manifest_sha256: ${task.contextManifestSha256}\n\nComplete only this assigned step. Read the immutable context manifest. Do not communicate with other Agents, alter route or approval records, write to the Control Kernel, or call Monitor controls. ${staging ? 'Use only execution_* paths for file and command access; copy result_identity values from the execution manifest verbatim into the result object.' : ''}${isolationRequirement} Write exactly one result.schema.json object only to:\n\n${executionOutput}\n\nThe Orchestrator will validate and publish it. Do not write final outputs directly.\n`;
+  return `# Orchestrator task\n\n- workflow_id: ${task.workflowId}\n- task_id: ${task.taskId}\n- run_id: ${task.runId}\n- step_id: ${task.stepId}\n- assigned_agent: ${task.agentId}\n- attempt: ${task.attempt}\n${executionFields}- context_manifest_sha256: ${task.contextManifestSha256}\n\nComplete only this assigned step. Read the immutable context manifest. Do not communicate with other Agents, alter route or approval records, write to the Control Kernel, or call Monitor controls. ${staging ? 'Use only execution_* paths for file and command access; copy result_identity values from the execution manifest verbatim into the result object.' : ''}${isolationRequirement} Write exactly one result.schema.json object only to:\n\n${executionOutput}\n\nAfter completing file operations, return exactly one complete result.schema.json object as your final reply. The Orchestrator will atomically stage that reply and publish it; do not write result files yourself.\n`;
 }
 
 function stagingPreparationBlockedResult(task, error, occurredAt) {
@@ -472,6 +472,20 @@ export function createOrchestrator({ projectRoot: projectRootInput, database = n
             processLog(task, `attempt-${task.attempt}${logSuffix}.stderr.log`, result.stderr);
             if (result.exitCode !== 0) throw openClawAgentExitError(result);
             if (!regeneration && testSandbox) testSandboxCollection = selectedTestSandboxStager.collect(task, testSandbox);
+            if (!regeneration) {
+              try {
+                const finalText = extractFinalAssistantVisibleText(result.stdout);
+                // The host owns the delivery channel. A non-empty final reply is
+                // staged atomically so normal executions use the same path as
+                // JSON regeneration; legacy file writers remain readable when
+                // the model returned no visible text.
+                atomicWriteFile(task.rawOutputPath, `${finalText}\n`);
+              } catch (error) {
+                // Preserve compatibility with workers that staged a raw file
+                // but returned no machine-visible final text.
+                if (error.code !== 'OPENCLAW_ASSISTANT_OUTPUT_MISSING' && !existsSync(task.rawOutputPath)) throw error;
+              }
+            }
             if (regeneration) {
               if (heartbeatSignal.aborted) throw Object.assign(new Error('execution lease was lost before JSON repair could be accepted'), { code: 'EXECUTION_LEASE_LOST' });
               const held = await selectedKernel.lease.heartbeat({ executionId: execution.executionId, phase: 'JSON_REGENERATION_VALIDATION' });
