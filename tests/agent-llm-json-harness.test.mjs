@@ -119,6 +119,26 @@ test('JSONL ingestion 可移除唯一 Markdown 包装并拒绝猜测多个块', 
   assert.throws(() => ingestJsonText('{"id":"A"}\n说明\n{"id":"B"}', { jsonl: true }), /more than one/i);
 });
 
+test('JSON ingestion 仅修复可审计的语法错误，不猜测业务字段', () => {
+  const repaired = ingestJsonText("{name: 'Ada', items: [1, 2,], /* note */ ok: true");
+  assert.deepEqual(repaired.value, { name: 'Ada', items: [1, 2], ok: true });
+  assert.deepEqual(repaired.transformations, [
+    'NORMALIZE_SINGLE_QUOTES', 'QUOTE_UNQUOTED_KEYS', 'REMOVE_JSON_COMMENTS',
+    'REMOVE_TRAILING_COMMAS', 'ADD_MISSING_CLOSING_BRACKETS',
+  ]);
+  const comma = ingestJsonText('{"a": 1 "b": 2}');
+  assert.deepEqual(comma.value, { a: 1, b: 2 });
+  assert.ok(comma.transformations.includes('ADD_MISSING_COMMAS'));
+  assert.throws(() => ingestJsonText('{"status":"UNKNOWN}'), (error) => error.diagnostic === 'OUTPUT_TRUNCATED');
+});
+
+test('JSONL ingestion 可逐行修复安全语法错误', () => {
+  const repaired = ingestJsonText("{id: 'A', ok: true,}\n{ id: 'B', ok: false, }", { jsonl: true });
+  assert.deepEqual(repaired.value, [{ id: 'A', ok: true }, { id: 'B', ok: false }]);
+  assert.ok(repaired.transformations.includes('NORMALIZE_SINGLE_QUOTES'));
+  assert.ok(repaired.transformations.includes('REMOVE_TRAILING_COMMAS'));
+});
+
 test('错误分类和模板区分截断、enum/type 与 schema drift', () => {
   assert.throws(() => ingestJsonText('{"a":'), (error) => error.diagnostic === 'OUTPUT_TRUNCATED');
   assert.equal(classifyLlmFailure({ response: '{"a":', validation: { errors: [] }, ingestionError: { diagnostic: 'OUTPUT_TRUNCATED' } }), 'OUTPUT_TRUNCATED');
