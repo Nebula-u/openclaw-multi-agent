@@ -119,6 +119,23 @@ test('结果缺少字段时在同一 Session 内只重生成 JSON', async (t) =>
   assert.equal(existsSync(join(task.payload.result.artifact_root_abs, '.orchestrator', 'json-regenerations', 'attempt-1', 'regeneration-1', 'rejected-result.json.raw')), true);
 });
 
+test('正常执行从最终 assistant 回复原子生成 raw 结果文件', async (t) => {
+  const workflowId = `WF-final-reply-delivery-${Date.now()}`;
+  const runner = async ({ messagePath }) => {
+    const message = readFileSync(messagePath, 'utf8');
+    const value = resultFrom(message, join(dirname(dirname(messagePath)), '.agent-raw', 'result.json.raw'));
+    return { exitCode: 0, stdout: JSON.stringify({ status: 'ok', result: { finalAssistantVisibleText: JSON.stringify(value) } }), stderr: '' };
+  };
+  const orchestrator = fixture(t, workflowId, runner);
+  await createRun(orchestrator, workflowId);
+  const outcome = await orchestrator.tick(workflowId);
+  const run = await orchestrator.repository.getRun(workflowId);
+  const [task] = await orchestrator.repository.listTasks({ runId: run.runId });
+  assert.equal(outcome.state, 'TERMINAL');
+  assert.equal(task.state, 'SUCCEEDED');
+  assert.equal(existsSync(join(task.payload.result.artifact_root_abs, '.agent-raw', 'result.json.raw')), true);
+});
+
 test('raw 硬链接不会被读取或归档，并在原 Session 请求安全重生成', async (t) => {
   const workflowId = `WF-json-hardlink-${Date.now()}`;
   const calls = [];

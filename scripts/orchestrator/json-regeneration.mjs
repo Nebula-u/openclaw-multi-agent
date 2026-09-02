@@ -6,7 +6,7 @@ import { buildJsonRepairPrompt } from '../agent-json-harness/json-repair-prompts
 export const MAX_JSON_REGENERATIONS = 2;
 
 const REGENERABLE_CODES = new Set([
-  'AGENT_OUTPUT_MISSING',
+  'OUTPUT_FILE_MISSING',
   'AGENT_OUTPUT_JSON_INVALID',
   'AGENT_OUTPUT_SCHEMA_INVALID',
   'AGENT_OUTPUT_IDENTITY_MISMATCH',
@@ -35,7 +35,7 @@ export function readRegularFileNoFollow(path) {
 }
 
 function promptClassification(error) {
-  if (error?.code === 'AGENT_OUTPUT_MISSING') return 'EMPTY_RESPONSE';
+  if (error?.code === 'OUTPUT_FILE_MISSING') return 'OUTPUT_FILE_MISSING';
   if (error?.code === 'AGENT_OUTPUT_JSON_INVALID') return error.details?.diagnostic ?? 'JSON_PARSE_ERROR';
   const keywords = (error?.details?.errors ?? []).map((item) => item.keyword ?? item.schema_keyword);
   if (keywords.includes('enum')) return 'ENUM_VIOLATION';

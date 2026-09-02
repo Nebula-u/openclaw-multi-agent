@@ -35,16 +35,30 @@ export function buildOpenClawAgentArgs({ agentId, sessionId, messagePath, timeou
   return args;
 }
 
-export function extractFinalAssistantText(stdout) {
+export function extractFinalAssistantVisibleText(stdout) {
+  if (!String(stdout ?? '').trim()) {
+    throw Object.assign(new Error('OpenClaw turn returned no final assistant text'), { code: 'OPENCLAW_ASSISTANT_OUTPUT_MISSING' });
+  }
   let envelope;
   try { envelope = JSON.parse(String(stdout ?? '')); }
   catch { throw Object.assign(new Error('OpenClaw JSON stdout could not be parsed during JSON repair'), { code: 'OPENCLAW_REPAIR_OUTPUT_INVALID' }); }
   const text = envelope?.result?.finalAssistantVisibleText
     ?? envelope?.result?.payloads?.find((item) => typeof item?.text === 'string' && item.text.trim())?.text;
   if (typeof text !== 'string' || !text.trim()) {
-    throw Object.assign(new Error('OpenClaw repair turn returned no final assistant JSON text'), { code: 'OPENCLAW_REPAIR_OUTPUT_MISSING' });
+    throw Object.assign(new Error('OpenClaw turn returned no final assistant text'), { code: 'OPENCLAW_ASSISTANT_OUTPUT_MISSING' });
   }
-  const trimmed = text.trim();
+  return text.trim();
+}
+
+export function extractFinalAssistantText(stdout) {
+  let trimmed;
+  try { trimmed = extractFinalAssistantVisibleText(stdout); }
+  catch (error) {
+    if (error.code === 'OPENCLAW_ASSISTANT_OUTPUT_MISSING') {
+      throw Object.assign(new Error('OpenClaw repair turn returned no final assistant JSON text'), { code: 'OPENCLAW_REPAIR_OUTPUT_MISSING' });
+    }
+    throw error;
+  }
   let value;
   try { value = JSON.parse(trimmed); }
   catch { throw Object.assign(new Error('OpenClaw repair turn must return only one complete JSON object'), { code: 'OPENCLAW_REPAIR_OUTPUT_INVALID' }); }

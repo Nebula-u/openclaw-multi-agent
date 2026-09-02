@@ -8,7 +8,7 @@ Agent 必须核对身份、路径和 manifest SHA，只完成被分配步骤；�
 
 ## 结构化结果
 
-worker 只向 `<artifact_root>/.agent-raw/result.json.raw` 写一个符合 `contracts/result.schema.json` 的对象。Orchestrator 校验 schema、workflow/task/run/Agent/attempt、worktree、artifact root、input commit 与 context manifest SHA，再发布到 `output/result.json`。
+worker 完成任务后最终回复只能是一个符合 `contracts/result.schema.json` 的对象。Orchestrator 从最终回复提取 JSON，原子写入 `<artifact_root>/.agent-raw/result.json.raw`，再校验 schema、workflow/task/run/Agent/attempt、worktree、artifact root、input commit 与 context manifest SHA，最后发布到 `output/result.json`。
 
 `result_status`：`COMPLETED`、`NEEDS_REWORK`、`BLOCKED`、`HUMAN_DECISION_REQUIRED`、`FAILED`。非完成结果仍会捕获 recovery snapshot，但不会作为成功候选推进。
 

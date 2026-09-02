@@ -89,6 +89,11 @@ export function buildJsonRepairPrompt({ classification, errors = [], retryNumber
       '上一轮 content 为空。请基于当前会话中的 schema 和需求补回完整 JSON；不要只回复确认文本。',
     ).join('\n');
   }
+  if (classification === 'OUTPUT_FILE_MISSING') {
+    return base(input).concat(
+      '上一轮模型有或可能有文本回复，但没有生成要求的结果文件。这不是空回复。请仅返回完整 JSON；宿主会负责写入结果文件。',
+    ).join('\n');
+  }
   if (classification === 'OUTPUT_TRUNCATED') {
     return base(input).concat(
       '上一轮 JSON 在结束前截断。请从头输出一个更精简但完整、闭合的 JSON；不要续写片段，确保不超过输出预算。',

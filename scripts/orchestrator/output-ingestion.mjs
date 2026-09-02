@@ -139,7 +139,7 @@ function attachHostSandboxAttestation(task, value, sandboxContext, testSandboxPr
 
 export function ingestTaskOutput({ projectRoot, task, occurredAt = new Date().toISOString(), sandboxContext = null, testSandboxPreparationFailure = false, testSandboxEnabled = true }) {
   const rawPath = rawOutputPath(task); const rawResult = readRegularFileNoFollow(rawPath);
-  if (!rawResult.available) throw new OutputBoundaryError('AGENT_OUTPUT_MISSING', `required file must be a single-link regular file: ${rawPath}`);
+  if (!rawResult.available) throw new OutputBoundaryError('OUTPUT_FILE_MISSING', `required result file was not produced: ${rawPath}`);
   const raw = rawResult.text;
   let ingestion;
   try { ingestion = ingestJsonText(raw); }
